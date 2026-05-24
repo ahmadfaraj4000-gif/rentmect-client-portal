@@ -1,0 +1,19 @@
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  base: '/rentmect-admin-portal/',
+  server: {
+    port: 5173,
+    host: true,
+  },
+  preview: {
+    port: 4173,
+    host: true,
+  },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+  },
+});
