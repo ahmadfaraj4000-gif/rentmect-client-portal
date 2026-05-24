@@ -19,13 +19,13 @@ import { supabase } from './supabaseClient';
 import './styles.css';
 
 const VEHICLE_IMAGE_MODULES = import.meta.glob([
-  '../../assets/Audi*.png',
-  '../../assets/Benz*.png',
-  '../../assets/BMW*.png',
-  '../../assets/Cadillac*.png',
-  '../../assets/Dodge*.png',
-  '../../assets/Ford*.png',
-  '../../assets/Mercedes*.png',
+  './assets/Audi*.png',
+  './assets/Benz*.png',
+  './assets/BMW*.png',
+  './assets/Cadillac*.png',
+  './assets/Dodge*.png',
+  './assets/Ford*.png',
+  './assets/Mercedes*.png',
 ], { eager: true, query: '?url', import: 'default' });
 
 const RENTMECT_ADDRESS =
