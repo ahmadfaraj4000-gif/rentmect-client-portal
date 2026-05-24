@@ -23,7 +23,6 @@ jobs:
       VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
       VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
       VITE_RENTMECT_ADDRESS: ${{ secrets.VITE_RENTMECT_ADDRESS }}
-      VITE_CLIENT_PORTAL_URL: ${{ secrets.VITE_CLIENT_PORTAL_URL }}
 
     steps:
       - name: Checkout
