@@ -22,9 +22,11 @@ const VEHICLE_IMAGE_MODULES = import.meta.glob([
   './assets/Audi*.png',
   './assets/Benz*.png',
   './assets/BMW*.png',
+  './assets/Buick*.png',
   './assets/Cadillac*.png',
   './assets/Dodge*.png',
   './assets/Ford*.png',
+  './assets/Kia*.png',
   './assets/Mercedes*.png',
 ], { eager: true, query: '?url', import: 'default' });
 
