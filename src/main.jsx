@@ -38,7 +38,7 @@ const AGREEMENT_VERSION = 'rentmect-master-v2026-05-20';
 const MILEAGE_POLICY = '200 miles/day included; excess mileage $0.35/mile';
 const CANCELLATION_TERMS = 'Contact Rent Me CT before pickup for cancellation or schedule changes.';
 const BLOCKING_RENTAL_STATUSES = ['pending', 'documents_needed', 'document_review', 'ready_for_pickup', 'approved', 'active', 'overdue', 'return_initiated'];
-const BLOCKING_VEHICLE_STATUSES = ['reserved', 'rented', 'maintenance', 'unavailable', 'inactive'];
+const BLOCKING_VEHICLE_STATUSES = ['maintenance', 'unavailable', 'inactive'];
 const TURNAROUND_BUFFER_MINUTES = 180;
 
 const AGREEMENT_TEXT = `
@@ -3218,7 +3218,7 @@ function timeOptions() {
 
 function isVehicleBookable(vehicle) {
   const status = String(vehicle?.status || 'available').toLowerCase();
-  return !['reserved', 'rented', 'maintenance', 'unavailable'].includes(status);
+  return !BLOCKING_VEHICLE_STATUSES.includes(status);
 }
 
 function prettyVehicleStatus(status) {
@@ -3233,7 +3233,7 @@ function prettyVehicleStatus(status) {
 
 function vehicleAvailabilityLabel(vehicle, reservation, rentals = [], currentRentalId = '') {
   const status = String(vehicle?.status || 'available').toLowerCase();
-  if (BLOCKING_VEHICLE_STATUSES.includes(status) || ['reserved', 'rented'].includes(status)) {
+  if (BLOCKING_VEHICLE_STATUSES.includes(status)) {
     return prettyVehicleStatus(status);
   }
 
@@ -3271,7 +3271,7 @@ function isVehicleAvailableForDates(vehicle, reservation, rentals = [], currentR
   if (BLOCKING_VEHICLE_STATUSES.includes(status)) return false;
 
   if (!reservation?.pickupDate || !reservation?.returnDate) {
-    return !['reserved', 'rented'].includes(status);
+    return true;
   }
 
   return !rentals.some((rental) =>
