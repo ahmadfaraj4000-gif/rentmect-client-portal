@@ -1,24 +1,24 @@
 :root {
   --red: #e50914;
   --red2: #ff3038;
-  --deep: #05070c;
-  --panel: rgba(255,255,255,.08);
-  --line: rgba(255,255,255,.12);
-  --text: #f7f7f8;
-  --muted: #aeb5c5;
+  --deep: #fff7f8;
+  --panel: #ffffff;
+  --line: rgba(12,18,32,.12);
+  --text: #10131b;
+  --muted: #5d6677;
   --darkText: #080b12;
-  --shadow: 0 22px 70px rgba(0,0,0,.28);
+  --shadow: 0 22px 70px rgba(20,24,35,.13);
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; font-family: Inter, Arial, sans-serif; background: #05070c; color: var(--text); }
+body { margin: 0; font-family: Inter, Arial, sans-serif; background: #fff; color: var(--text); }
 button, input, select { font: inherit; }
 button { cursor: pointer; }
 select {
   appearance: none;
   background-image:
-    linear-gradient(45deg, transparent 50%, rgba(255,255,255,.76) 50%),
-    linear-gradient(135deg, rgba(255,255,255,.76) 50%, transparent 50%);
+    linear-gradient(45deg, transparent 50%, rgba(8,11,18,.72) 50%),
+    linear-gradient(135deg, rgba(8,11,18,.72) 50%, transparent 50%);
   background-position:
     calc(100% - 20px) 50%,
     calc(100% - 14px) 50%;
@@ -1075,5 +1075,190 @@ select option {
   .document-actions {
     justify-content: flex-start;
     width: 100%;
+  }
+}
+
+/* Light customer theme aligned with the public booking pages. */
+.loading-screen,
+.auth-screen,
+.portal-shell {
+  background:
+    radial-gradient(circle at 82% 8%, rgba(229,9,20,.12), transparent 24%),
+    linear-gradient(135deg, #ffffff 0%, #fff6f7 46%, #f7f8fb 100%);
+}
+
+.auth-card,
+.panel,
+.metric-card,
+.hero-panel {
+  background: rgba(255,255,255,.94);
+  border-color: var(--line);
+  box-shadow: var(--shadow);
+  backdrop-filter: none;
+}
+
+.sidebar {
+  background: rgba(255,255,255,.92);
+  border-right-color: var(--line);
+  box-shadow: 16px 0 50px rgba(20,24,35,.05);
+}
+
+.side-nav a,
+.tab-nav button,
+.secondary-btn,
+.logout-btn,
+.check-item button,
+.notice-banner button {
+  background: rgba(12,18,32,.045);
+  color: var(--text);
+  border-color: var(--line);
+}
+
+.side-nav a:hover,
+.tab-nav button:hover,
+.secondary-btn:hover,
+.logout-btn:hover,
+.check-item button:hover {
+  background: rgba(229,9,20,.08);
+}
+
+.tab-nav button.active {
+  background: linear-gradient(145deg, #be0011, #860008);
+  color: #fff;
+  border-color: rgba(134,0,8,.28);
+}
+
+.auth-card input,
+.support-form input,
+.portal-form input,
+.portal-form select,
+.signature-input {
+  background-color: #fff;
+  color: var(--text);
+  border-color: rgba(12,18,32,.14);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.95), 0 12px 30px rgba(20,24,35,.08);
+}
+
+.auth-card input::placeholder,
+.support-form input::placeholder,
+.portal-form input::placeholder,
+.signature-input::placeholder {
+  color: rgba(93,102,119,.76);
+}
+
+.portal-form input[type="date"] {
+  color-scheme: light;
+}
+
+.link-btn {
+  color: var(--red);
+}
+
+.hero-panel,
+.return-action-block,
+.extension-form,
+.reservation-summary div,
+.uploaded-document-row,
+.selected-vehicle-media {
+  background: #fff;
+  border-color: var(--line);
+  box-shadow: 0 12px 36px rgba(20,24,35,.08);
+}
+
+.metric-card,
+.check-item,
+.invoice-row,
+.doc-row,
+.history-row,
+.message-row,
+.vehicle-card {
+  background: rgba(255,255,255,.88);
+  border-color: var(--line);
+}
+
+.check-item.complete {
+  background: rgba(38,161,82,.1);
+  border-color: rgba(38,161,82,.26);
+}
+
+.return-confirmation-box {
+  background: rgba(38,161,82,.1);
+  color: #174524;
+  border-color: rgba(38,161,82,.24);
+}
+
+.next-vehicle-card,
+.extension-payment-note {
+  background: #fff8e5;
+  color: #503900;
+  border-color: rgba(184,134,11,.26);
+}
+
+.extension-payment-note.paid {
+  background: rgba(38,161,82,.1);
+  color: #174524;
+}
+
+.notice-banner {
+  background: #fff;
+  border-color: var(--line);
+  border-left-color: var(--red);
+  color: var(--text);
+  box-shadow: 0 14px 36px rgba(20,24,35,.08);
+}
+
+.return-review-notice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+  margin-bottom: 16px;
+  padding: 18px;
+  border: 1px solid rgba(229,9,20,.22);
+  border-left: 5px solid var(--red);
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 18px 50px rgba(229,9,20,.1);
+}
+
+.return-review-notice svg {
+  color: var(--red);
+  margin-top: 3px;
+}
+
+.return-review-notice h3,
+.return-review-notice p {
+  margin: 0;
+}
+
+.return-review-notice p {
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.return-review-notice span {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.return-review-notice > strong {
+  padding: 8px 11px;
+  border-radius: 999px;
+  background: rgba(229,9,20,.1);
+  color: #8a0009;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+@media (max-width: 650px) {
+  .return-review-notice {
+    grid-template-columns: auto 1fr;
+  }
+
+  .return-review-notice > strong {
+    grid-column: 1 / -1;
+    justify-self: start;
   }
 }

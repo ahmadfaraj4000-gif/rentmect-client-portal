@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
+  AlertTriangle,
   CalendarDays,
   Car,
   CheckCircle2,
@@ -311,6 +312,7 @@ function App() {
   const [fleetRentals, setFleetRentals] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [messages, setMessages] = useState([]);
+  const [reports, setReports] = useState([]);
   const [extensionRequests, setExtensionRequests] = useState([]);
   const [supportText, setSupportText] = useState('');
   const [activeTab, setActiveTab] = useState('overview');
@@ -563,6 +565,20 @@ function App() {
     if (!currentRental?.id) return [];
     return extensionRequests.filter((request) => request.rental_id === currentRental.id);
   }, [extensionRequests, currentRental?.id]);
+  const currentRentalReports = useMemo(() => {
+    if (!currentRental?.id) return [];
+    return reports.filter((report) => report.rental_id === currentRental.id);
+  }, [reports, currentRental?.id]);
+  const latestOpenReturnReport = useMemo(() => {
+    const activeReport = currentRentalReports.find((report) =>
+      !['resolved', 'closed', 'completed'].includes(String(report.status || 'open').toLowerCase())
+    );
+    if (activeReport) return activeReport;
+
+    return reports.find((report) =>
+      !['resolved', 'closed', 'completed'].includes(String(report.status || 'open').toLowerCase())
+    );
+  }, [currentRentalReports, reports]);
   const pendingExtension = currentRentalExtensions.find((request) => request.status === 'pending');
   const pendingSameVehicleExtension = pendingExtension?.request_kind !== 'switch_car_continuation' ? pendingExtension : null;
   const approvedUnpaidExtension = currentRentalExtensions.find((request) => request.status === 'approved_pending_payment');
@@ -785,6 +801,7 @@ function loadSavedBookingFromWebsite() {
       rentalsResult,
       documentsResult,
       messagesResult,
+      reportsResult,
       extensionsResult,
       fleetRentalsResult,
     ] = await Promise.all([
@@ -805,6 +822,11 @@ function loadSavedBookingFromWebsite() {
         .select('*')
         .eq('user_id', userId)
         .order('created_at', { ascending: true }),
+      supabase
+        .from('vehicle_reports')
+        .select('*, rentals(*, vehicles(*))')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false }),
       supabase
         .from('rental_extension_requests')
         .select('*')
@@ -827,6 +849,7 @@ function loadSavedBookingFromWebsite() {
     if (rentalsResult.data) setRentals(rentalsResult.data);
     if (documentsResult.data) setDocuments(documentsResult.data);
     if (messagesResult.data) setMessages(messagesResult.data);
+    if (reportsResult.data) setReports(reportsResult.data);
     if (extensionsResult.data) setExtensionRequests(extensionsResult.data);
     if (fleetRentalsResult.data) setFleetRentals(fleetRentalsResult.data);
 
@@ -1767,6 +1790,7 @@ async function verifyPhoneCode() {
         </header>
 
         <MobileFlowStatus items={mobileStatusItems} />
+        <ReturnReviewNotice report={latestOpenReturnReport} />
 
         {activeTab === 'overview' && (
           <>
@@ -2725,6 +2749,28 @@ function MobileFlowStatus({ items }) {
           <span>{item.text}</span>
         </div>
       ))}
+    </section>
+  );
+}
+
+function ReturnReviewNotice({ report }) {
+  if (!report) return null;
+
+  const depositHeld = Number(report.deposit_held_amount || 0);
+  const issueLabel = prettyStatus(report.issue_type || 'return review');
+
+  return (
+    <section className="return-review-notice" aria-label="Return review status">
+      <AlertTriangle size={22} />
+      <div>
+        <p className="eyebrow">Return Review</p>
+        <h3>{issueLabel} case open</h3>
+        <p>
+          Rent Me CT is reviewing this return. {depositHeld > 0 ? `Your ${money(depositHeld)} security deposit is on hold while the case is reviewed.` : 'We will update you before anything changes with your deposit.'}
+        </p>
+        {report.description && <span>{report.description}</span>}
+      </div>
+      <strong>{prettyStatus(report.status || 'open')}</strong>
     </section>
   );
 }
