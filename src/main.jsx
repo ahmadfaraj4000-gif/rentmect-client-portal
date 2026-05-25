@@ -566,7 +566,14 @@ function App() {
   const pendingExtension = currentRentalExtensions.find((request) => request.status === 'pending');
   const pendingSameVehicleExtension = pendingExtension?.request_kind !== 'switch_car_continuation' ? pendingExtension : null;
   const approvedUnpaidExtension = currentRentalExtensions.find((request) => request.status === 'approved_pending_payment');
+  const approvedSwitchExtension = currentRentalExtensions.find((request) =>
+    request.status === 'approved_pending_payment' &&
+    request.request_kind === 'switch_car_continuation'
+  );
+  const approvedSwitchVehicle = vehicles.find((vehicle) => vehicle.id === approvedSwitchExtension?.replacement_vehicle_id);
   const activatedExtension = currentRentalExtensions.find((request) => request.status === 'activated');
+  const latestExtensionStatus = [...currentRentalExtensions]
+    .sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0))[0];
   const paidSwitchContinuation = extensionRequests.find((request) =>
     request.status === 'activated' &&
     request.request_kind === 'switch_car_continuation' &&
@@ -585,6 +592,56 @@ function App() {
   const agreementSigned = Boolean(currentRental?.agreement_signed);
   const paymentPaid = currentRental?.payment_status === 'paid';
   const returnCountdown = getReturnCountdown(currentRental?.return_date, currentRental?.return_time, now);
+  const returnConfirmationSent = Boolean(
+    currentRental?.status === 'return_initiated' ||
+    messages.some((message) =>
+      message.rental_id === currentRental?.id &&
+      message.sender_role === 'client' &&
+      String(message.message || '').includes('RETURN CONFIRMATION')
+    )
+  );
+  const showApprovedSwitchVehicle = Boolean(returnConfirmationSent && approvedSwitchExtension && approvedSwitchVehicle);
+  const mobileStatusItems = [
+    currentRental
+      ? {
+        key: 'rental',
+        tone: currentRental.status === 'return_initiated' ? 'success' : 'info',
+        title: currentRental.status === 'return_initiated' ? 'Return confirmation sent' : prettyStatus(currentRental.status),
+        text: currentRental.status === 'return_initiated'
+          ? 'Rent Me CT has been notified. We will inspect the vehicle and close this rental.'
+          : `Current vehicle: ${currentRental.vehicles?.name || 'Selected vehicle'}. Return ${formatRentalDate(currentRental.return_date, currentRental.return_time)}.`,
+      }
+      : {
+        key: 'setup',
+        tone: hasCompletedRental ? 'success' : 'info',
+        title: hasCompletedRental ? 'Ready for your next rental' : 'Finish your reservation',
+        text: hasCompletedRental
+          ? 'Your license and phone can stay on file. Choose new dates and upload insurance for the next rental.'
+          : 'Complete the next guided step. We will keep each action clear as you go.',
+      },
+    latestExtensionStatus
+      ? {
+        key: 'extension',
+        tone: latestExtensionStatus.status === 'activated'
+          ? 'success'
+          : latestExtensionStatus.status === 'rejected'
+            ? 'danger'
+            : latestExtensionStatus.status === 'approved_pending_payment'
+              ? 'warning'
+              : 'info',
+        title: extensionStatusTitle(latestExtensionStatus),
+        text: extensionStatusText(latestExtensionStatus),
+      }
+      : null,
+    showApprovedSwitchVehicle
+      ? {
+        key: 'replacement',
+        tone: 'warning',
+        title: `${approvedSwitchVehicle.name} approved next`,
+        text: 'Return confirmation is in. Payment is still required before this replacement activates.',
+      }
+      : null,
+  ].filter(Boolean);
   const extensionWindow = getExtensionRequestWindow(currentRental, now);
   const vehicleStepCompleted = Boolean(currentRental?.vehicles || (!currentRental && selectedVehicle));
   const allGuidedStepsComplete = Boolean(phoneVerified && vehicleStepCompleted && licenseUploaded && insuranceUploaded && agreementSigned && paymentPaid);
@@ -1408,7 +1465,6 @@ async function verifyPhoneCode() {
     setMessages([...messages, messageData]);
     setRentals((prev) => prev.map((item) => (item.id === updatedRental.id ? updatedRental : item)));
     setFleetRentals((prev) => prev.map((item) => (item.id === updatedRental.id ? { ...item, status: updatedRental.status } : item)));
-    window.alert('Admin has been notified that you returned the vehicle.');
     notify('Return initiated. Rent Me CT will inspect and close out your rental.', 'success');
   }
 
@@ -1710,6 +1766,8 @@ async function verifyPhoneCode() {
           </div>
         </header>
 
+        <MobileFlowStatus items={mobileStatusItems} />
+
         {activeTab === 'overview' && (
           <>
             <section className="hero-panel compact-hero" id="reservation">
@@ -1762,13 +1820,37 @@ async function verifyPhoneCode() {
                     <p className="muted">
                       Send return confirmation after dropoff. Rent Me CT inspects mileage, fuel, and condition before closing the rental and deposit.
                     </p>
-                    <button className="primary-btn" onClick={confirmReturn} disabled={returnSaving || Boolean(pendingSameVehicleExtension) || !returnCountdown.canConfirm}>
-                      <CheckCircle2 size={18} /> {returnSaving ? 'Sending Return Confirmation...' : pendingSameVehicleExtension ? 'Extension Decision Pending' : returnCountdown.canConfirm ? 'Confirm Vehicle Returned' : 'Return Confirmation Locked'}
+                    {returnConfirmationSent && (
+                      <div className="return-confirmation-box">
+                        <CheckCircle2 size={20} />
+                        <div>
+                          <strong>Return confirmation sent</strong>
+                          <span>Rent Me CT has been notified. We will inspect the vehicle and close out your rental.</span>
+                        </div>
+                      </div>
+                    )}
+                    {showApprovedSwitchVehicle && (
+                      <div className="next-vehicle-card">
+                        <span className="next-vehicle-image">
+                          <img src={getVehicleImage(approvedSwitchVehicle)} alt={`${approvedSwitchVehicle.name} replacement rental vehicle`} loading="lazy" />
+                        </span>
+                        <div>
+                          <strong>{approvedSwitchVehicle.name}</strong>
+                          <span>Approved replacement vehicle</span>
+                          <small>
+                            Starts after this return. Payment is required before the replacement rental activates.
+                          </small>
+                        </div>
+                      </div>
+                    )}
+                    <button className="primary-btn" onClick={confirmReturn} disabled={returnSaving || returnConfirmationSent || Boolean(pendingSameVehicleExtension) || !returnCountdown.canConfirm}>
+                      <CheckCircle2 size={18} /> {returnSaving ? 'Sending Return Confirmation...' : returnConfirmationSent ? 'Return Confirmation Sent' : pendingSameVehicleExtension ? 'Extension Decision Pending' : returnCountdown.canConfirm ? 'Confirm Vehicle Returned' : 'Return Confirmation Locked'}
                     </button>
                     {approvedUnpaidExtension && (
                       <p className="extension-payment-note">
-                        Extension approved through {formatRentalDate(approvedUnpaidExtension.requested_return_date, approvedUnpaidExtension.requested_return_time)}.
-                        Payment is required before the longer return window activates.
+                        {approvedUnpaidExtension.request_kind === 'switch_car_continuation'
+                          ? `Switch approved through ${formatRentalDate(approvedUnpaidExtension.requested_return_date, approvedUnpaidExtension.requested_return_time)}. Payment is required before the replacement vehicle activates.`
+                          : `Extension approved through ${formatRentalDate(approvedUnpaidExtension.requested_return_date, approvedUnpaidExtension.requested_return_time)}. Payment is required before the longer return window activates.`}
                       </p>
                     )}
                     {activatedExtension && (
@@ -1786,6 +1868,12 @@ async function verifyPhoneCode() {
                           : 'Check this vehicle before asking for admin approval.'
                         : extensionWindow.message}</span>
                     </div>
+                  {latestExtensionStatus && (
+                    <div className={`mobile-extension-status ${latestExtensionStatus.status}`}>
+                      <strong>{extensionStatusTitle(latestExtensionStatus)}</strong>
+                      <span>{extensionStatusText(latestExtensionStatus)}</span>
+                    </div>
+                  )}
                   {(extensionWindow.open || pendingExtension || approvedUnpaidExtension) && <>
                   <div className="extension-mode" role="group" aria-label="Continuation type">
                     <button
@@ -2626,6 +2714,21 @@ function Notice({ notice, onDismiss }) {
   );
 }
 
+function MobileFlowStatus({ items }) {
+  if (!items?.length) return null;
+
+  return (
+    <section className="mobile-flow-status" aria-label="Rental status">
+      {items.map((item) => (
+        <div className={`mobile-flow-card ${item.tone || 'info'}`} key={item.key}>
+          <strong>{item.title}</strong>
+          <span>{item.text}</span>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function AuthScreen({
   authMode,
   setAuthMode,
@@ -3057,6 +3160,49 @@ function documentTypeLabel(type) {
   };
 
   return map[type] || type;
+}
+
+function extensionStatusTitle(request) {
+  if (!request) return 'No extension request';
+  const kind = request.request_kind === 'switch_car_continuation' ? 'Switch request' : 'Extension request';
+
+  if (request.status === 'pending') return `${kind} pending`;
+  if (request.status === 'approved_pending_payment') return `${kind} approved`;
+  if (request.status === 'activated') return `${kind} active`;
+  if (request.status === 'rejected') return `${kind} declined`;
+  if (request.status === 'cancelled') return `${kind} cancelled`;
+  return prettyStatus(request.status);
+}
+
+function extensionStatusText(request) {
+  if (!request) return '';
+  const requestedReturn = formatRentalDate(request.requested_return_date, request.requested_return_time);
+
+  if (request.status === 'pending') {
+    return `Rent Me CT is reviewing your request through ${requestedReturn}.`;
+  }
+
+  if (request.status === 'approved_pending_payment') {
+    return request.request_kind === 'switch_car_continuation'
+      ? `Approved through ${requestedReturn}. Payment is required before the replacement vehicle activates.`
+      : `Approved through ${requestedReturn}. Payment is required before the new return time activates.`;
+  }
+
+  if (request.status === 'activated') {
+    return request.request_kind === 'switch_car_continuation'
+      ? 'Payment is recorded. Your replacement rental is available in this portal.'
+      : `Payment is recorded. Your active return window is now ${requestedReturn}.`;
+  }
+
+  if (request.status === 'rejected') {
+    return request.admin_note || 'Rent Me CT could not approve this request. Choose another option or message us.';
+  }
+
+  if (request.status === 'cancelled') {
+    return 'This request was cancelled. You can submit a new request when the extension window is open.';
+  }
+
+  return prettyStatus(request.status);
 }
 
 function timeOptions() {

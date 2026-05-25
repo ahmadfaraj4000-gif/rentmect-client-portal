@@ -247,6 +247,70 @@ select option {
 .return-action-block .primary-btn {
   width: 100%;
 }
+.return-confirmation-box {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin: 0 0 14px;
+  padding: 14px;
+  border: 1px solid rgba(81,217,81,.32);
+  border-radius: 16px;
+  background: rgba(81,217,81,.1);
+  color: #d9ffe0;
+}
+.return-confirmation-box svg {
+  flex: none;
+  color: #9cffad;
+}
+.return-confirmation-box strong,
+.return-confirmation-box span {
+  display: block;
+}
+.return-confirmation-box span {
+  margin-top: 4px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.next-vehicle-card {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  margin: 0 0 14px;
+  padding: 12px;
+  border: 1px solid rgba(255,220,120,.36);
+  border-radius: 16px;
+  background: rgba(255,220,120,.09);
+}
+.next-vehicle-image {
+  display: block;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border-radius: 12px;
+  background: rgba(255,255,255,.08);
+}
+.next-vehicle-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.next-vehicle-card strong,
+.next-vehicle-card span,
+.next-vehicle-card small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.next-vehicle-card span {
+  margin-top: 3px;
+  color: #fff;
+  font-weight: 900;
+}
+.next-vehicle-card small {
+  margin-top: 4px;
+  color: var(--muted);
+  line-height: 1.4;
+}
 .extension-heading {
   display: grid;
   gap: 4px;
@@ -707,14 +771,63 @@ select option {
   .header-actions {
     width: 100%;
     display: grid;
-    grid-template-columns: 1fr 1.25fr;
+    grid-template-columns: 1fr;
     gap: 8px;
+  }
+  .header-actions .primary-btn {
+    order: -1;
   }
   .header-actions .return-btn,
   .header-actions .primary-btn {
     width: 100%;
-    min-height: 48px;
-    padding: 12px 10px;
+    min-height: 52px;
+    padding: 13px 12px;
+  }
+  .mobile-flow-status {
+    display: grid;
+    gap: 10px;
+    margin: 0 0 14px;
+  }
+  .mobile-flow-card,
+  .mobile-extension-status {
+    display: grid;
+    gap: 5px;
+    padding: 13px 14px;
+    border: 1px solid rgba(255,255,255,.14);
+    border-left: 4px solid #e50914;
+    border-radius: 16px;
+    background: rgba(255,255,255,.08);
+  }
+  .mobile-flow-card strong,
+  .mobile-flow-card span,
+  .mobile-extension-status strong,
+  .mobile-extension-status span {
+    display: block;
+    overflow-wrap: anywhere;
+  }
+  .mobile-flow-card span,
+  .mobile-extension-status span {
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .mobile-flow-card.success,
+  .mobile-extension-status.activated {
+    border-left-color: #51d951;
+    background: rgba(81,217,81,.1);
+  }
+  .mobile-flow-card.warning,
+  .mobile-extension-status.approved_pending_payment {
+    border-left-color: #ffdc78;
+    background: rgba(255,220,120,.09);
+  }
+  .mobile-flow-card.danger,
+  .mobile-extension-status.rejected {
+    border-left-color: #ff565e;
+    background: rgba(229,9,20,.14);
+  }
+  .mobile-extension-status {
+    margin-bottom: 2px;
   }
   .hero-panel,
   .panel,
@@ -763,6 +876,34 @@ select option {
   }
   .check-item {
     min-height: 66px;
+  }
+  .return-action-block,
+  .extension-form {
+    border-radius: 16px;
+    padding: 14px;
+  }
+  .return-action-block .primary-btn,
+  .extension-form .secondary-btn,
+  .extension-form input,
+  .extension-form select {
+    width: 100%;
+    min-height: 52px;
+  }
+  .extension-mode {
+    grid-template-columns: 1fr;
+  }
+  .extension-mode button {
+    min-height: 48px;
+  }
+  .extension-pending-actions {
+    gap: 10px;
+  }
+  .extension-pending-actions .secondary-btn {
+    width: 100%;
+    min-height: 52px;
+  }
+  .next-vehicle-card {
+    grid-template-columns: 82px minmax(0, 1fr);
   }
   .invoice-row,
   .history-row {
@@ -881,6 +1022,10 @@ select option {
   border-radius: 999px;
   padding: 7px 10px;
   font-weight: 900;
+}
+.mobile-flow-status,
+.mobile-extension-status {
+  display: none;
 }
 .invoice-row strong {
   text-align: right;
