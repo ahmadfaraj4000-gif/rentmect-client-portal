@@ -1636,7 +1636,7 @@ async function verifyPhoneCode() {
       return;
     }
 
-    const { data, error } = await supabase.functions.invoke('stripe', {
+    const { data, error } = await supabase.functions.invoke('stripe-web-hook', {
       body: targetExtension
         ? {
             action: 'create_checkout',
