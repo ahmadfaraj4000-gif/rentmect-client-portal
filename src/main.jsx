@@ -1620,8 +1620,53 @@ async function verifyPhoneCode() {
     setWizardOpen(true);
   }
 
-  async function showLocalPaymentStatus() {
-    notify('Local payment recording is handled in the admin portal until Stripe checkout is connected.');
+  async function startStripeCheckout() {
+    if (paymentSaving) return;
+
+    setPaymentSaving(true);
+    const targetExtension = approvedUnpaidExtension;
+    let rental = currentRental;
+
+    if (!targetExtension && !rental) {
+      rental = await createReservationIfNeeded();
+    }
+
+    if (!targetExtension && !rental?.id) {
+      setPaymentSaving(false);
+      return;
+    }
+
+    const { data, error } = await supabase.functions.invoke('stripe', {
+      body: targetExtension
+        ? {
+            action: 'create_checkout',
+            targetType: 'extension',
+            extensionRequestId: targetExtension.id,
+            successUrl: `${window.location.origin}${window.location.pathname}?payment=stripe_success`,
+            cancelUrl: `${window.location.origin}${window.location.pathname}?payment=stripe_cancelled`,
+          }
+        : {
+            action: 'create_checkout',
+            targetType: 'rental',
+            rentalId: rental.id,
+            successUrl: `${window.location.origin}${window.location.pathname}?payment=stripe_success`,
+            cancelUrl: `${window.location.origin}${window.location.pathname}?payment=stripe_cancelled`,
+          },
+    });
+
+    setPaymentSaving(false);
+
+    if (error || data?.error) {
+      notify(error?.message || data.error || 'Stripe checkout could not be started.');
+      return;
+    }
+
+    if (!data?.url) {
+      notify('Stripe checkout did not return a payment link.');
+      return;
+    }
+
+    window.location.assign(data.url);
   }
 
   async function nextWizardStep() {
@@ -1687,7 +1732,7 @@ async function verifyPhoneCode() {
     {
       title: 'Pay Deposit & Rental Payment',
       icon: CreditCard,
-      status: paymentPaid ? 'Completed' : 'Local Payment Pending',
+      status: paymentPaid ? 'Completed' : 'Payment Pending',
       completed: paymentPaid,
     },
     {
@@ -2024,7 +2069,7 @@ async function verifyPhoneCode() {
                 <ChecklistItem icon={ShieldCheck} title="Phone Verification" status={phoneVerified ? 'Verified' : 'Required'} completed={phoneVerified} onOpen={() => openWizardAtStep(0)} />
                 <ChecklistItem icon={Car} title="Dates & Vehicle" status={vehicleStepCompleted ? 'Selected' : 'Required'} completed={vehicleStepCompleted} onOpen={() => openWizardAtStep(1)} />
                 <ChecklistItem icon={FileSignature} title="Rental Agreement" status={agreementSigned ? 'Signed' : 'Required'} completed={agreementSigned} onOpen={() => openWizardAtStep(2)} />
-                <ChecklistItem icon={CreditCard} title="Deposit & Rental Payment" status={paymentPaid ? 'Paid' : 'Local Payment Pending'} completed={paymentPaid} onOpen={() => openWizardAtStep(3)} />
+                <ChecklistItem icon={CreditCard} title="Deposit & Rental Payment" status={paymentPaid ? 'Paid' : 'Payment Pending'} completed={paymentPaid} onOpen={() => openWizardAtStep(3)} />
                 <ChecklistItem icon={Upload} title="Driver License Upload" status={licenseUploaded ? 'Uploaded' : 'Required Before Pickup'} completed={licenseUploaded} onOpen={() => openWizardAtStep(4)} />
                 <ChecklistItem icon={FileText} title="Insurance Upload" status={insuranceUploaded ? 'Uploaded' : 'Required Before Pickup'} completed={insuranceUploaded} onOpen={() => openWizardAtStep(5)} />
               </div>
@@ -2184,11 +2229,13 @@ async function verifyPhoneCode() {
                 <strong>Extension Payment Required</strong>
                 <span>Approved return: {formatRentalDate(approvedUnpaidExtension.requested_return_date, approvedUnpaidExtension.requested_return_time)}</span>
                 <span>Extension due: {money(approvedUnpaidExtension.extension_total_amount)}</span>
-                <small>Local testing payment is recorded by the admin portal now. Stripe will replace this payment handoff later.</small>
+                <small>Pay securely with Stripe before the longer return window activates.</small>
               </div>
             )}
-            <button className="primary-btn big-action" onClick={showLocalPaymentStatus} disabled={paymentSaving || paymentPaid}>
-              <CreditCard size={18} /> {paymentPaid ? 'Payment Complete' : paymentSaving ? 'Preparing Payment...' : 'Local Payment Pending'}
+            <button className="primary-btn big-action" onClick={startStripeCheckout} disabled={paymentSaving || (paymentPaid && !approvedUnpaidExtension)}>
+              <CreditCard size={18} /> {approvedUnpaidExtension
+                ? paymentSaving ? 'Opening Stripe...' : 'Pay Approved Extension'
+                : paymentPaid ? 'Payment Complete' : paymentSaving ? 'Opening Stripe...' : 'Pay With Stripe'}
             </button>
           </section>
         )}
@@ -2278,7 +2325,7 @@ async function verifyPhoneCode() {
           estimate={estimate}
           createReservationIfNeeded={createReservationIfNeeded}
           reservationSaving={reservationSaving}
-          runTestStripePayment={showLocalPaymentStatus}
+          runTestStripePayment={startStripeCheckout}
           paymentSaving={paymentSaving}
           paymentPaid={paymentPaid}
           uploadDocument={uploadDocument}
@@ -2574,7 +2621,7 @@ function WizardModal({
                 </div>
               )}
               <button className="primary-btn" onClick={runTestStripePayment} disabled={paymentSaving || paymentPaid}>
-                {paymentPaid ? 'Payment Complete' : paymentSaving ? 'Checking Payment...' : 'Waiting For Admin Test Payment'}
+                {paymentPaid ? 'Payment Complete' : paymentSaving ? 'Opening Stripe...' : 'Pay With Stripe'}
               </button>
             </div>
           )}
