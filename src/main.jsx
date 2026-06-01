@@ -345,6 +345,7 @@ function App() {
 
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardStep, setWizardStep] = useState(0);
+  const [wizardReminder, setWizardReminder] = useState(null);
   const [phoneVerified, setPhoneVerified] = useState(false);
   const [phoneCode, setPhoneCode] = useState('');
   const [sendingCode, setSendingCode] = useState(false);
@@ -1636,28 +1637,43 @@ async function verifyPhoneCode() {
       return;
     }
 
-    const { data, error } = await supabase.functions.invoke('stripe-web-hook', {
-      body: targetExtension
-        ? {
-            action: 'create_checkout',
-            targetType: 'extension',
-            extensionRequestId: targetExtension.id,
-            successUrl: `${window.location.origin}${window.location.pathname}?payment=stripe_success`,
-            cancelUrl: `${window.location.origin}${window.location.pathname}?payment=stripe_cancelled`,
-          }
-        : {
-            action: 'create_checkout',
-            targetType: 'rental',
-            rentalId: rental.id,
-            successUrl: `${window.location.origin}${window.location.pathname}?payment=stripe_success`,
-            cancelUrl: `${window.location.origin}${window.location.pathname}?payment=stripe_cancelled`,
-          },
+    const checkoutPayload = targetExtension
+      ? {
+          action: 'create_checkout',
+          targetType: 'extension',
+          extensionRequestId: targetExtension.id,
+          successUrl: `${window.location.origin}${window.location.pathname}?payment=stripe_success`,
+          cancelUrl: `${window.location.origin}${window.location.pathname}?payment=stripe_cancelled`,
+        }
+      : {
+          action: 'create_checkout',
+          targetType: 'rental',
+          rentalId: rental.id,
+          successUrl: `${window.location.origin}${window.location.pathname}?payment=stripe_success`,
+          cancelUrl: `${window.location.origin}${window.location.pathname}?payment=stripe_cancelled`,
+        };
+
+    const checkoutResponse = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stripe-web-hook`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify(checkoutPayload),
     });
+    const data = await checkoutResponse.json().catch(() => null);
+    const error = checkoutResponse.ok ? null : new Error(data?.error || `Stripe checkout failed with ${checkoutResponse.status}.`);
 
     setPaymentSaving(false);
 
     if (error || data?.error) {
-      notify(error?.message || data.error || 'Stripe checkout could not be started.');
+      console.error('Stripe checkout failed', {
+        status: checkoutResponse.status,
+        response: data,
+        message: error?.message || data?.error,
+      });
+      notify(data?.error || error?.message || 'Stripe checkout could not be started.');
       return;
     }
 
@@ -1700,8 +1716,13 @@ async function verifyPhoneCode() {
     setWizardStep((step) => step + 1);
   }
 
-  function skipWizardStep() {
+  function previousWizardStep() {
+    setWizardReminder(null);
+    setWizardStep((step) => Math.max(1, step - 1));
+  }
 
+  function skipWizardStep() {
+    setWizardReminder(null);
     if (wizardStep === wizardSteps.length - 1) {
       setWizardOpen(false);
       return;
@@ -2293,6 +2314,7 @@ async function verifyPhoneCode() {
         <AgreementModal
           agreementText={agreementTextWithDetails}
           agreementChecked={agreementChecked}
+          agreementSigned={agreementSigned}
           setAgreementChecked={setAgreementChecked}
           signatureName={signatureName}
           setSignatureName={setSignatureName}
@@ -2307,6 +2329,9 @@ async function verifyPhoneCode() {
           wizardSteps={wizardSteps}
           wizardStep={wizardStep}
           setWizardOpen={setWizardOpen}
+          wizardReminder={wizardReminder}
+          setWizardReminder={setWizardReminder}
+          previousWizardStep={previousWizardStep}
           nextWizardStep={nextWizardStep}
           skipWizardStep={skipWizardStep}
           profileForm={profileForm}
@@ -2350,6 +2375,9 @@ function WizardModal({
   wizardSteps,
   wizardStep,
   setWizardOpen,
+  wizardReminder,
+  setWizardReminder,
+  previousWizardStep,
   nextWizardStep,
   skipWizardStep,
   profileForm,
@@ -2375,6 +2403,7 @@ function WizardModal({
   licenseUploaded,
   insuranceUploaded,
   agreementChecked,
+  agreementSigned,
   setAgreementChecked,
   signatureName,
   setSignatureName,
@@ -2416,6 +2445,19 @@ function WizardModal({
           ))}
         </div>
 
+        {wizardReminder && (
+          <div className="wizard-reminder" role="alert">
+            <AlertTriangle size={19} />
+            <div>
+              <strong>{wizardReminder.title}</strong>
+              <span>{wizardReminder.text}</span>
+            </div>
+            <button type="button" onClick={() => setWizardReminder(null)} aria-label="Dismiss reminder">
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
         <div className="wizard-body">
           {wizardStep === 0 && (
             <div className="portal-form">
@@ -2426,7 +2468,10 @@ function WizardModal({
               <input
                 placeholder="Phone number, example 8605551234"
                 value={profileForm.phone}
-                onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value })}
+                onChange={(e) => {
+                  setWizardReminder(null);
+                  setProfileForm({ ...profileForm, phone: e.target.value });
+                }}
               />
 
               <button className="primary-btn" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>
@@ -2438,7 +2483,10 @@ function WizardModal({
                   <input
                     placeholder="Enter verification code"
                     value={phoneCode}
-                    onChange={(e) => setPhoneCode(e.target.value)}
+                    onChange={(e) => {
+                      setWizardReminder(null);
+                      setPhoneCode(e.target.value);
+                    }}
                   />
 
                   <button className="secondary-btn" onClick={verifyPhoneCode} disabled={verifyingCode}>
@@ -2459,6 +2507,7 @@ function WizardModal({
                   min={getTodayDateInputValue()}
                   value={reservationForm.pickupDate}
                   onChange={(e) => {
+                    setWizardReminder(null);
                     const pickupDate = e.target.value || getTodayDateInputValue();
                     const minReturnDate = getNextDateInputValue(pickupDate);
                     setReservationForm({
@@ -2475,19 +2524,28 @@ function WizardModal({
                   type="date"
                   min={getNextDateInputValue(reservationForm.pickupDate || getTodayDateInputValue())}
                   value={reservationForm.returnDate}
-                  onChange={(e) => setReservationForm({ ...reservationForm, returnDate: e.target.value })}
+                  onChange={(e) => {
+                    setWizardReminder(null);
+                    setReservationForm({ ...reservationForm, returnDate: e.target.value });
+                  }}
                 />
 
                 <select
                   value={reservationForm.pickupTime}
-                  onChange={(e) => setReservationForm({ ...reservationForm, pickupTime: e.target.value })}
+                  onChange={(e) => {
+                    setWizardReminder(null);
+                    setReservationForm({ ...reservationForm, pickupTime: e.target.value });
+                  }}
                 >
                   {timeOptions().map((t) => <option key={t}>{t}</option>)}
                 </select>
 
                 <select
                   value={reservationForm.returnTime}
-                  onChange={(e) => setReservationForm({ ...reservationForm, returnTime: e.target.value })}
+                  onChange={(e) => {
+                    setWizardReminder(null);
+                    setReservationForm({ ...reservationForm, returnTime: e.target.value });
+                  }}
                 >
                   {timeOptions().map((t) => <option key={t}>{t}</option>)}
                 </select>
@@ -2510,6 +2568,7 @@ function WizardModal({
                       ].filter(Boolean).join(' ')}
                       onClick={() => {
                         if (!bookable) return;
+                        setWizardReminder(null);
                         setReservationForm({ ...reservationForm, vehicleId: vehicle.id });
                       }}
                       disabled={!bookable}
@@ -2524,12 +2583,14 @@ function WizardModal({
                           onClick={(event) => {
                             event.preventDefault();
                             event.stopPropagation();
+                            setWizardReminder(null);
                             setReservationForm({ ...reservationForm, vehicleId: '' });
                           }}
                           onKeyDown={(event) => {
                             if (event.key !== 'Enter' && event.key !== ' ') return;
                             event.preventDefault();
                             event.stopPropagation();
+                            setWizardReminder(null);
                             setReservationForm({ ...reservationForm, vehicleId: '' });
                           }}
                         >
@@ -2577,7 +2638,10 @@ function WizardModal({
                 <input
                   type="checkbox"
                   checked={agreementChecked}
-                  onChange={(e) => setAgreementChecked(e.target.checked)}
+                  onChange={(e) => {
+                    setWizardReminder(null);
+                    setAgreementChecked(e.target.checked);
+                  }}
                 />
                 I have read and agree to the rental agreement.
               </label>
@@ -2586,11 +2650,17 @@ function WizardModal({
                 className="signature-input"
                 placeholder="Type full legal name as signature"
                 value={signatureName}
-                onChange={(e) => setSignatureName(e.target.value)}
+                onChange={(e) => {
+                  setWizardReminder(null);
+                  setSignatureName(e.target.value);
+                }}
               />
 
-              <button className="primary-btn" onClick={signAgreement} disabled={agreementSaving}>
-                {agreementSaving ? 'Signing...' : 'Sign Agreement'}
+              <button className="primary-btn" onClick={() => {
+                setWizardReminder(null);
+                signAgreement();
+              }} disabled={agreementSaving || agreementSigned}>
+                {agreementSigned ? 'Agreement Signed' : agreementSaving ? 'Signing...' : 'Sign Agreement'}
               </button>
             </div>
           )}
@@ -2647,7 +2717,10 @@ function WizardModal({
                   <input
                     type="file"
                     accept="image/*,.pdf"
-                    onChange={(e) => uploadDocument(e, 'license')}
+                    onChange={(e) => {
+                      setWizardReminder(null);
+                      uploadDocument(e, 'license');
+                    }}
                     style={{ display: 'none' }}
                   />
                 </label>
@@ -2676,7 +2749,10 @@ function WizardModal({
                   <input
                     type="file"
                     accept="image/*,.pdf"
-                    onChange={(e) => uploadDocument(e, 'insurance')}
+                    onChange={(e) => {
+                      setWizardReminder(null);
+                      uploadDocument(e, 'insurance');
+                    }}
                     style={{ display: 'none' }}
                   />
                 </label>
@@ -2688,20 +2764,25 @@ function WizardModal({
         <div className="wizard-actions">
           <button
             className="secondary-btn"
+            type="button"
+            onClick={previousWizardStep}
+            disabled={wizardStep <= 1}
+          >
+            Back
+          </button>
+          <button
+            className="secondary-btn"
+            type="button"
             onClick={skipWizardStep}
-            disabled={wizardStep === 0 && !phoneVerified}
           >
             Skip For Now
           </button>
-          <button className="secondary-btn" onClick={() => setWizardOpen(false)}>Cancel</button>
           <button
             className="primary-btn"
+            type="button"
             onClick={nextWizardStep}
-            disabled={wizardStep === 0 && !phoneVerified}
           >
-            {wizardStep === 0 && !phoneVerified
-              ? 'Verify Phone First'
-              : wizardStep === wizardSteps.length - 1
+            {wizardStep === wizardSteps.length - 1
                 ? 'Finish'
                 : 'Next'}
           </button>

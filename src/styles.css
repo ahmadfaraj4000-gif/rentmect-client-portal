@@ -680,6 +680,254 @@ select option {
 .agreement-sign-box { padding: 18px 22px 22px; border-top: 1px solid var(--line); margin-top: 18px; }
 .signature-input { margin-bottom: 14px; }
 
+/* Client portal light theme */
+.portal-shell {
+  --deep: #f6f7fb;
+  --panel: #ffffff;
+  --line: rgba(18,24,38,.12);
+  --text: #10131b;
+  --muted: #626c7d;
+  --shadow: 0 18px 50px rgba(20,24,35,.09);
+  background:
+    linear-gradient(180deg, rgba(229,9,20,.055), transparent 260px),
+    #f6f7fb;
+  color: var(--text);
+}
+.portal-shell .sidebar {
+  background: rgba(255,255,255,.9);
+  border-right-color: rgba(18,24,38,.1);
+  box-shadow: 8px 0 30px rgba(20,24,35,.04);
+}
+.portal-shell .brand-mark {
+  color: #fff;
+  border-radius: 14px;
+}
+.portal-shell .side-nav a,
+.portal-shell .tab-nav button {
+  color: #202636;
+  background: transparent;
+  border-color: transparent;
+}
+.portal-shell .tab-nav button:hover {
+  background: #f0f2f6;
+}
+.portal-shell .tab-nav button.active {
+  color: #b40009;
+  border-color: rgba(229,9,20,.16);
+  background: #fff0f1;
+}
+.portal-shell .auth-card,
+.portal-shell .panel,
+.portal-shell .metric-card,
+.portal-shell .hero-panel {
+  background: var(--panel);
+  border-color: var(--line);
+  box-shadow: var(--shadow);
+  backdrop-filter: none;
+  border-radius: 16px;
+}
+.portal-shell .secondary-btn,
+.portal-shell .logout-btn,
+.portal-shell .check-item button,
+.portal-shell label.secondary-btn {
+  background: #ffffff;
+  color: #202636;
+  border: 1px solid rgba(18,24,38,.14);
+  box-shadow: 0 8px 20px rgba(20,24,35,.06);
+}
+.portal-shell .secondary-btn:hover,
+.portal-shell .logout-btn:hover,
+.portal-shell .check-item button:hover {
+  background: #f6f7fb;
+  border-color: rgba(229,9,20,.22);
+}
+.portal-shell .link-btn {
+  color: #b40009;
+}
+.portal-shell .auth-message {
+  color: #7f0b12;
+  background: #fff0f1;
+  border-color: rgba(229,9,20,.22);
+}
+.portal-shell .support-form input,
+.portal-shell .portal-form input,
+.portal-shell .portal-form select,
+.portal-shell .signature-input {
+  border: 1px solid rgba(18,24,38,.14);
+  background-color: #fff;
+  color: var(--text);
+  box-shadow: 0 1px 0 rgba(255,255,255,.75), 0 8px 18px rgba(20,24,35,.05);
+}
+.portal-shell .support-form input::placeholder,
+.portal-shell .portal-form input::placeholder,
+.portal-shell .signature-input::placeholder {
+  color: #8b93a2;
+}
+.portal-shell .portal-form input[type="date"] {
+  color-scheme: light;
+}
+.portal-shell select option {
+  background: #fff;
+  color: #10131b;
+}
+.portal-shell .hero-panel,
+.portal-shell .return-action-block,
+.portal-shell .extension-form,
+.portal-shell .agreement-status-box,
+.portal-shell .reservation-summary div,
+.portal-shell .check-item,
+.portal-shell .vehicle-picker-card,
+.portal-shell .extension-alternative,
+.portal-shell .message {
+  background: #f9fafc;
+  border-color: rgba(18,24,38,.1);
+}
+.portal-shell .selected-vehicle-media,
+.portal-shell .vehicle-picker-image,
+.portal-shell .next-vehicle-image {
+  background: #eef1f6;
+  border-color: rgba(18,24,38,.1);
+  box-shadow: 0 12px 32px rgba(20,24,35,.08);
+}
+.portal-shell .vehicle-picker-card:hover,
+.portal-shell .extension-alternative:hover {
+  background: #fff;
+  border-color: rgba(229,9,20,.3);
+}
+.portal-shell .vehicle-picker-card.selected {
+  background: #fff6f6;
+  border-color: rgba(229,9,20,.55);
+  box-shadow: 0 16px 34px rgba(229,9,20,.11);
+}
+.portal-shell .vehicle-picker-info span,
+.portal-shell .vehicle-picker-action,
+.portal-shell .extension-alternative span,
+.portal-shell .next-vehicle-card span {
+  color: #10131b;
+}
+.portal-shell .vehicle-picker-action {
+  background: #fff;
+  border-color: rgba(18,24,38,.12);
+}
+.portal-shell .vehicle-clear-button {
+  background: rgba(255,255,255,.92);
+  border-color: rgba(18,24,38,.16);
+  color: #202636;
+}
+.portal-shell .check-item.complete,
+.portal-shell .wizard-upload-complete,
+.portal-shell .return-confirmation-box,
+.portal-shell .document-on-file-note,
+.portal-shell .extension-payment-note.paid {
+  color: #176c3a;
+  background: #eefbf1;
+  border-color: rgba(23,108,58,.22);
+}
+.portal-shell .check-item.complete svg,
+.portal-shell .wizard-upload-complete svg,
+.portal-shell .return-confirmation-box svg {
+  color: #208a48;
+}
+.portal-shell .pickup-reminder-box,
+.portal-shell .next-vehicle-card,
+.portal-shell .extension-payment-card,
+.portal-shell .extension-payment-note {
+  color: #6f4c00;
+  background: #fff8e8;
+  border-color: rgba(163,112,0,.22);
+}
+.portal-shell .pickup-reminder-box svg {
+  color: #b47a00;
+}
+.portal-shell .pickup-reminder-box.rejected {
+  color: #7f0b12;
+  background: #fff0f1;
+  border-color: rgba(229,9,20,.25);
+}
+.portal-shell .message.own {
+  background: #fff0f1;
+  border-color: rgba(229,9,20,.2);
+}
+.portal-shell .history-row em {
+  color: #208a48;
+}
+.portal-shell .modal-backdrop,
+.portal-shell .wizard-backdrop {
+  background: rgba(16,19,27,.48);
+  backdrop-filter: blur(8px);
+}
+.portal-shell .wizard-modal,
+.portal-shell .agreement-modal {
+  background: #ffffff;
+  border-color: rgba(18,24,38,.12);
+  box-shadow: 0 30px 90px rgba(20,24,35,.22);
+}
+.portal-shell .wizard-close {
+  background: #f6f7fb;
+  color: #202636;
+  border-color: rgba(18,24,38,.12);
+}
+.portal-shell .wizard-dot {
+  background: #f1f3f7;
+  border-color: rgba(18,24,38,.12);
+}
+.portal-shell .wizard-dot.active {
+  background: #fff0f1;
+  border-color: rgba(229,9,20,.35);
+  color: #b40009;
+}
+.portal-shell .wizard-dot.complete {
+  background: #eefbf1;
+  border-color: rgba(23,108,58,.22);
+  color: #208a48;
+}
+.portal-shell .agreement-scroll-box,
+.portal-shell .agreement-preview,
+.portal-shell .wizard-agreement {
+  background: #fbfcfe;
+  border-color: rgba(18,24,38,.12);
+}
+.portal-shell .agreement-scroll-box pre,
+.portal-shell .agreement-preview pre {
+  color: #1c2433;
+}
+.wizard-reminder {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  margin: 14px 22px 0;
+  padding: 14px;
+  border: 1px solid rgba(229,9,20,.24);
+  border-radius: 16px;
+  background: #fff0f1;
+  color: #7f0b12;
+}
+.wizard-reminder svg {
+  color: #e50914;
+  margin-top: 2px;
+}
+.wizard-reminder strong,
+.wizard-reminder span {
+  display: block;
+}
+.wizard-reminder span {
+  margin-top: 3px;
+  color: #6d3440;
+  line-height: 1.45;
+}
+.wizard-reminder button {
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(229,9,20,.18);
+  border-radius: 999px;
+  background: rgba(255,255,255,.72);
+  color: #7f0b12;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
 @media (max-width: 1050px) {
   .auth-screen,
   .portal-shell,
