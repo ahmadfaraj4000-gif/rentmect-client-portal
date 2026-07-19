@@ -39,6 +39,7 @@ const RENTMECT_ADDRESS =
 
 const CT_TAX_RATE = 0.0635;
 const STANDARD_SECURITY_DEPOSIT = 300;
+const BOOKING_FLOW_TEST_VEHICLE_ID = '00000000-0000-4000-8000-000000000015';
 const AGREEMENT_VERSION = 'rentmect-master-v2026-05-20';
 const MILEAGE_POLICY = '200 miles/day included; excess mileage $0.35/mile';
 const CANCELLATION_TERMS = 'Contact Rent Me CT before pickup for cancellation or schedule changes.';
@@ -581,6 +582,14 @@ function App() {
   }, [vehicles, reservationForm.vehicleId]);
 
   const displayedVehicle = currentRental?.vehicles || selectedVehicle;
+  const bookingFlowTestMode = Boolean(
+    pendingVehicleId === BOOKING_FLOW_TEST_VEHICLE_ID ||
+    reservationForm.vehicleId === BOOKING_FLOW_TEST_VEHICLE_ID ||
+    currentRental?.vehicle_id === BOOKING_FLOW_TEST_VEHICLE_ID
+  );
+  const checkoutVehicleChoices = bookingFlowTestMode
+    ? vehicles.filter((vehicle) => vehicle.id === BOOKING_FLOW_TEST_VEHICLE_ID)
+    : vehicles.filter((vehicle) => vehicle.id !== BOOKING_FLOW_TEST_VEHICLE_ID);
   const overviewPickupDate = currentRental?.pickup_date || reservationForm.pickupDate;
   const overviewPickupTime = currentRental?.pickup_time || reservationForm.pickupTime;
   const overviewReturnDate = currentRental?.return_date || reservationForm.returnDate;
@@ -2178,7 +2187,7 @@ async function verifyPhoneCode() {
             <section className="hero-panel compact-hero" id="reservation">
               <div>
                 <p className="eyebrow">Reservation Setup</p>
-                {displayedVehicle && (
+                {displayedVehicle && !isBookingFlowTestVehicle(displayedVehicle) && (
                   <div className="selected-vehicle-media">
                     <img src={getVehicleImage(displayedVehicle)} alt={`${displayedVehicle.name} rental vehicle`} loading="lazy" />
                   </div>
@@ -2879,7 +2888,9 @@ function WizardModal({
 
           {wizardStep === 1 && (
             <div className="portal-form">
-              <p className="muted">Choose your rental dates first, then select an available vehicle.</p>
+              <p className="muted">{bookingFlowTestMode
+                ? 'Your Booking Preview test vehicle and selected schedule have been carried into checkout automatically.'
+                : 'Choose your rental dates first, then select an available vehicle.'}</p>
 
               <div className="vehicle-date-grid">
                 <input
@@ -2932,7 +2943,7 @@ function WizardModal({
               </div>
 
               <div className="vehicle-picker-grid">
-                {vehicles.map((vehicle) => {
+                {checkoutVehicleChoices.map((vehicle) => {
                   const selected = reservationForm.vehicleId === vehicle.id;
                   const bookable = isVehicleAvailableForDates(vehicle, reservationForm, fleetRentals, currentRental?.id);
                   const statusLabel = bookable ? 'Available' : vehicleAvailabilityLabel(vehicle, reservationForm, fleetRentals, currentRental?.id);
@@ -2979,7 +2990,9 @@ function WizardModal({
                         </span>
                       )}
                       <span className="vehicle-picker-image">
-                        <img src={getVehicleImage(vehicle)} alt={`${vehicle.name} rental vehicle`} loading="lazy" />
+                        {isBookingFlowTestVehicle(vehicle)
+                          ? <span className="test-vehicle-placeholder"><Car size={28} /><small>No photo — test only</small></span>
+                          : <img src={getVehicleImage(vehicle)} alt={`${vehicle.name} rental vehicle`} loading="lazy" />}
                       </span>
                       <span className="vehicle-picker-info">
                         <strong>{vehicle.name}</strong>
@@ -3766,6 +3779,10 @@ function vehicleImageKey(value) {
     .replace(/benz/g, 'mercedes')
     .replace(/[^a-z0-9]+/g, '')
     .trim();
+}
+
+function isBookingFlowTestVehicle(vehicle) {
+  return vehicle?.id === BOOKING_FLOW_TEST_VEHICLE_ID;
 }
 
 const VEHICLE_IMAGES_BY_KEY = Object.fromEntries(
