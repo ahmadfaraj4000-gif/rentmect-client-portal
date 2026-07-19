@@ -30,6 +30,9 @@ const DEFAULT_VEHICLE_IMAGE_NAMES = [
   'Dodge-Van-451', 'Dodge-Van-452', 'Ford-Escape-650', 'Ford-F350-4X4-191',
   'Kia-Soul-656', 'Mercedes-Benz-C300-677', 'Mercedes-C300-321',
 ];
+const PUBLIC_FLEET_ASSET_BASE_URL = (
+  import.meta.env.VITE_PUBLIC_FLEET_ASSET_BASE_URL || 'https://rentmect.com/assets'
+).replace(/\/$/, '');
 
 const RENTMECT_ADDRESS =
   import.meta.env.VITE_RENTMECT_ADDRESS || '12 Holmes Circle, Farmington, CT';
@@ -3635,7 +3638,7 @@ function vehicleImageKey(value) {
 }
 
 const VEHICLE_IMAGES_BY_KEY = Object.fromEntries(
-  DEFAULT_VEHICLE_IMAGE_NAMES.map((name) => [vehicleImageKey(name), `/assets/${name}.webp`])
+  DEFAULT_VEHICLE_IMAGE_NAMES.map((name) => [vehicleImageKey(name), `${PUBLIC_FLEET_ASSET_BASE_URL}/${name}.webp`])
 );
 
 function getVehicleImage(vehicle) {
