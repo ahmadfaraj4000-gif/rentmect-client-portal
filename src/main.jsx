@@ -42,7 +42,7 @@ const STANDARD_SECURITY_DEPOSIT = 300;
 const AGREEMENT_VERSION = 'rentmect-master-v2026-05-20';
 const MILEAGE_POLICY = '200 miles/day included; excess mileage $0.35/mile';
 const CANCELLATION_TERMS = 'Contact Rent Me CT before pickup for cancellation or schedule changes.';
-const BLOCKING_RENTAL_STATUSES = ['pending', 'documents_needed', 'document_review', 'ready_for_pickup', 'approved', 'active', 'overdue', 'return_initiated'];
+const BLOCKING_RENTAL_STATUSES = ['pending', 'documents_needed', 'document_review', 'ready_for_pickup', 'approved', 'active', 'overdue', 'return_initiated', 'calendar_block'];
 const BLOCKING_VEHICLE_STATUSES = ['maintenance', 'unavailable', 'inactive'];
 const TURNAROUND_BUFFER_MINUTES = 180;
 
@@ -287,9 +287,11 @@ Company Representative: ____________________ Date: __________
 
 function App() {
   const [session, setSession] = useState(null);
-  const [authMode, setAuthMode] = useState('sign-in');
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
+  const [emailOtpSent, setEmailOtpSent] = useState(false);
+  const [emailOtp, setEmailOtp] = useState('');
+  const [emailAuthBusy, setEmailAuthBusy] = useState(false);
   const [notice, setNotice] = useState(null);
   const [reservationSaving, setReservationSaving] = useState(false);
   const [agreementSaving, setAgreementSaving] = useState(false);
@@ -301,12 +303,12 @@ function App() {
   const [extensionMode, setExtensionMode] = useState('extend');
   const [portalDataReady, setPortalDataReady] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [checkoutNow, setCheckoutNow] = useState(() => Date.now());
 
   const [authForm, setAuthForm] = useState({
     fullName: '',
     dateOfBirth: '',
     email: '',
-    password: '',
     phone: '',
     address: '',
     billingSame: true,
@@ -342,8 +344,10 @@ function App() {
   const [pendingVehicleName, setPendingVehicleName] = useState('');
   const [pendingVehicleId, setPendingVehicleId] = useState('');
   const [pendingBookingId, setPendingBookingId] = useState('');
+  const [checkoutExpiresAt, setCheckoutExpiresAt] = useState('');
   const [checkoutIntent, setCheckoutIntent] = useState(false);
   const [checkoutWizardStarted, setCheckoutWizardStarted] = useState(false);
+  const checkoutExpiryHandledRef = useRef('');
 
   const [profileForm, setProfileForm] = useState({
     full_name: '',
@@ -351,11 +355,18 @@ function App() {
     phone: '',
     address: '',
   });
+  const profileComplete = Boolean(
+    profileForm.full_name.trim() &&
+    profileForm.phone.trim() &&
+    profileForm.address.trim() &&
+    isValidBirthDate(profileForm.date_of_birth)
+  );
 
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardStep, setWizardStep] = useState(0);
   const [wizardReminder, setWizardReminder] = useState(null);
   const [phoneVerified, setPhoneVerified] = useState(false);
+  const contactStepCompleted = Boolean(profileComplete && phoneVerified);
   const [phoneCode, setPhoneCode] = useState('');
   const [sendingCode, setSendingCode] = useState(false);
   const [verifyingCode, setVerifyingCode] = useState(false);
@@ -427,6 +438,7 @@ function App() {
   useEffect(() => {
     if (!session?.user?.id) return undefined;
     let refreshTimer;
+    let calendarPoll;
     const refreshFleetCalendar = () => {
       window.clearTimeout(refreshTimer);
       refreshTimer = window.setTimeout(async () => {
@@ -434,12 +446,18 @@ function App() {
         if (data) setFleetRentals(data);
       }, 150);
     };
+    const refreshOnFocus = () => refreshFleetCalendar();
     const fleetChannel = supabase
       .channel('client-fleet-source-of-truth')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rentals' }, refreshFleetCalendar)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_availability_blocks' }, refreshFleetCalendar)
       .subscribe();
+    calendarPoll = window.setInterval(refreshFleetCalendar, 15 * 1000);
+    window.addEventListener('focus', refreshOnFocus);
     return () => {
       window.clearTimeout(refreshTimer);
+      window.clearInterval(calendarPoll);
+      window.removeEventListener('focus', refreshOnFocus);
       supabase.removeChannel(fleetChannel);
     };
   }, [session?.user?.id]);
@@ -472,6 +490,13 @@ function App() {
     const timer = window.setInterval(() => setNow(Date.now()), 60 * 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!checkoutExpiresAt) return undefined;
+    setCheckoutNow(Date.now());
+    const timer = window.setInterval(() => setCheckoutNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [checkoutExpiresAt]);
 
   useEffect(() => {
     if (pendingVehicleId && vehicles.some((vehicle) => vehicle.id === pendingVehicleId) && reservationForm.vehicleId !== pendingVehicleId) {
@@ -510,6 +535,10 @@ function App() {
   useEffect(() => {
     if (!currentRental?.id) return;
 
+    if (currentRental.checkout_expires_at) {
+      setCheckoutExpiresAt(currentRental.checkout_expires_at);
+    }
+
     setReservationForm((prev) => ({
       ...prev,
       vehicleId: currentRental.vehicle_id || prev.vehicleId,
@@ -525,6 +554,7 @@ function App() {
     currentRental?.return_date,
     currentRental?.pickup_time,
     currentRental?.return_time,
+    currentRental?.checkout_expires_at,
   ]);
 
   useEffect(() => {
@@ -537,10 +567,10 @@ function App() {
     // If the originally selected website vehicle is no longer available, still open the wizard so the customer can choose another car.
 
     setActiveTab('overview');
-    setWizardStep(phoneVerified ? 1 : 0);
+    setWizardStep(contactStepCompleted ? 1 : 0);
     setWizardOpen(true);
     setCheckoutWizardStarted(true);
-  }, [session, portalDataReady, checkoutIntent, checkoutWizardStarted, pendingVehicleName, vehicles.length, reservationForm.vehicleId, currentRental, phoneVerified]);
+  }, [session, portalDataReady, checkoutIntent, checkoutWizardStarted, pendingVehicleName, vehicles.length, reservationForm.vehicleId, currentRental, contactStepCompleted]);
 
   const previousRentals = useMemo(() => {
     return rentals.filter((r) => ['completed', 'cancelled'].includes(r.status));
@@ -653,6 +683,14 @@ function App() {
   const emailVerified = Boolean(session?.user?.email_confirmed_at);
   const agreementSigned = Boolean(currentRental?.agreement_signed);
   const paymentPaid = currentRental?.payment_status === 'paid';
+  const checkoutDeadline = checkoutExpiresAt ? new Date(checkoutExpiresAt).getTime() : 0;
+  const checkoutSecondsRemaining = checkoutDeadline
+    ? Math.max(0, Math.ceil((checkoutDeadline - checkoutNow) / 1000))
+    : null;
+  const checkoutExpired = checkoutSecondsRemaining === 0 && !paymentPaid;
+  const checkoutHoldActive = Boolean(
+    checkoutIntent && checkoutDeadline && !paymentPaid && !currentRental?.stripe_checkout_session_id
+  );
   const identityStatus = profile?.identity_verification_status || 'unverified';
   const identityVerified = identityStatus === 'verified';
   const returnCountdown = getReturnCountdown(currentRental?.return_date, currentRental?.return_time, now);
@@ -708,7 +746,34 @@ function App() {
   ].filter(Boolean);
   const extensionWindow = getExtensionRequestWindow(currentRental, now);
   const vehicleStepCompleted = Boolean(currentRental?.vehicles || (!currentRental && selectedVehicle));
-  const allGuidedStepsComplete = Boolean(phoneVerified && vehicleStepCompleted && identityVerified && licenseUploaded && insuranceUploaded && agreementSigned && paymentPaid);
+  const allGuidedStepsComplete = Boolean(contactStepCompleted && vehicleStepCompleted && identityVerified && licenseUploaded && insuranceUploaded && agreementSigned && paymentPaid);
+
+  useEffect(() => {
+    if (!checkoutExpired || !session?.user?.id) return;
+    const bookingId = pendingBookingId || getBookingIdFromUrl();
+    if (!bookingId || currentRental?.stripe_checkout_session_id) return;
+    const expiryKey = `${bookingId}:${currentRental?.id || 'pending'}`;
+    if (checkoutExpiryHandledRef.current === expiryKey) return;
+    checkoutExpiryHandledRef.current = expiryKey;
+
+    supabase.rpc('expire_customer_checkout_hold', {
+      p_booking_id: bookingId,
+      p_rental_id: currentRental?.id || null,
+    }).then(({ error }) => {
+      if (error) {
+        console.warn('Could not release expired checkout hold', error.message);
+        return;
+      }
+      if (currentRental?.id) {
+        setRentals((current) => current.map((rental) =>
+          rental.id === currentRental.id ? { ...rental, status: 'cancelled' } : rental
+        ));
+        setFleetRentals((current) => current.filter((rental) => rental.id !== currentRental.id));
+      }
+      setWizardOpen(false);
+      notify('Your 15-minute vehicle hold expired. Return to the fleet page to start a new booking.');
+    });
+  }, [checkoutExpired, session?.user?.id, pendingBookingId, currentRental?.id, currentRental?.stripe_checkout_session_id]);
 function getBookingIdFromUrl() {
     return new URLSearchParams(window.location.search).get('booking') || '';
   }
@@ -738,6 +803,8 @@ function getBookingIdFromUrl() {
         bookingData.vehicleId ||
         bookingData.vehicle_id ||
         '',
+      expiresAt: bookingData.expiresAt || bookingData.expires_at || '',
+      status: bookingData.status || 'pending',
     };
 
     const hasBookingData =
@@ -749,8 +816,7 @@ function getBookingIdFromUrl() {
     if (!hasBookingData) return;
 
     setCheckoutIntent(true);
-    setAuthMode('sign-up');
-
+    if (normalizedBooking.expiresAt) setCheckoutExpiresAt(normalizedBooking.expiresAt);
     setReservationForm((prev) => ({
       ...prev,
       pickupDate: normalizedBooking.pickupDate || prev.pickupDate,
@@ -916,68 +982,56 @@ function loadSavedBookingFromWebsite() {
   async function handleAuth(event) {
     event.preventDefault();
     setMessage('');
-
-    if (authMode === 'sign-up') {
-      const { error } = await supabase.auth.signUp({
-        email: authForm.email,
-        password: authForm.password,
-        options: {
-          data: {
-            full_name: authForm.fullName,
-            date_of_birth: authForm.dateOfBirth,
-            phone: authForm.phone,
-            address: authForm.address,
-            billing_same_as_home: authForm.billingSame,
-            pending_booking: JSON.parse(localStorage.getItem('rentmect_pending_booking') || '{}'),
-            pending_booking_id: pendingBookingId || getBookingIdFromUrl() || ''
-          }
-        },
-      });
-
-      if (error) {
-        setMessage(error.message);
-        return;
-      }
-
-      setMessage('Account created. Check your email if verification is enabled.');
-      return;
-    }
-
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: authForm.email,
-      password: authForm.password,
-    });
-
-    if (error) {
-      setMessage(error.message);
-      return;
-    }
-
-    const bookingId = pendingBookingId || getBookingIdFromUrl();
-    if (bookingId && data.session?.user?.id) {
-      await supabase.rpc('claim_customer_pending_booking', {
-        p_booking_id: bookingId,
-        p_vehicle_id: pendingVehicleId || reservationForm.vehicleId || null,
-      });
-    }
-  }
-  async function handleForgotPassword() {
-    const email = authForm.email.trim();
-
+    const email = authForm.email.trim().toLowerCase();
     if (!email) {
-      setMessage('Enter your email first, then click Forgot Password.');
+      setMessage('Enter your email to continue.');
       return;
     }
 
-    const redirectTo = import.meta.env.VITE_CLIENT_PORTAL_URL || window.location.origin;
-    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+    setEmailAuthBusy(true);
+    const redirectUrl = new URL(window.location.href);
+    redirectUrl.hash = '';
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: true,
+        emailRedirectTo: redirectUrl.toString(),
+        data: {
+          pending_booking: JSON.parse(localStorage.getItem('rentmect_pending_booking') || '{}'),
+          pending_booking_id: pendingBookingId || getBookingIdFromUrl() || '',
+        },
+      },
+    });
+    setEmailAuthBusy(false);
 
     if (error) {
       setMessage(error.message);
       return;
     }
 
-    setMessage('Password reset link sent. Check your email.');
+    setEmailOtpSent(true);
+    setMessage('Check your email for a secure sign-in link or one-time code. First-time customers get an account automatically.');
+  }
+
+  async function verifyEmailOtp(event) {
+    event.preventDefault();
+    const email = authForm.email.trim().toLowerCase();
+    const token = emailOtp.trim();
+    if (!email || !token) {
+      setMessage('Enter the one-time code from your email.');
+      return;
+    }
+
+    setEmailAuthBusy(true);
+    const { error } = await supabase.auth.verifyOtp({ email, token, type: 'email' });
+    setEmailAuthBusy(false);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setMessage('Email verified. Opening your booking checklist…');
   }
 
   async function signOut() {
@@ -985,13 +1039,17 @@ function loadSavedBookingFromWebsite() {
     setSession(null);
   }
 
-  async function saveProfile(event) {
-    if (event) event.preventDefault();
+  async function saveProfileDetails(showSuccess = true) {
     if (!session?.user?.id) return;
+
+    if (!profileForm.full_name.trim() || !profileForm.address.trim()) {
+      notify('Add your full legal name and home address before continuing.');
+      return null;
+    }
 
     if (!isValidBirthDate(profileForm.date_of_birth)) {
       notify('Enter a valid date of birth before saving your profile.');
-      return;
+      return null;
     }
     const { data, error } = await supabase.rpc('save_customer_profile_contact_details', {
       p_full_name: profileForm.full_name,
@@ -1002,17 +1060,23 @@ function loadSavedBookingFromWebsite() {
 
     if (error) {
       notify(error.message);
-      return;
+      return null;
     }
 
     if (!data) {
       notify('Profile saved, but the updated profile was not returned.');
-      return;
+      return null;
     }
 
     setProfile(data);
     setPhoneVerified(Boolean(data.phone_verified));
-    notify('Profile saved.');
+    if (showSuccess) notify('Profile saved.');
+    return data;
+  }
+
+  async function saveProfile(event) {
+    if (event) event.preventDefault();
+    return saveProfileDetails(true);
   }
 
   async function sendPhoneCode() {
@@ -1020,6 +1084,9 @@ function loadSavedBookingFromWebsite() {
     notify('Add your phone number first.');
     return;
   }
+
+  const savedProfile = await saveProfileDetails(false);
+  if (!savedProfile) return;
 
   setSendingCode(true);
 
@@ -1086,6 +1153,11 @@ async function verifyPhoneCode() {
 }
 
   async function createReservationIfNeeded() {
+    if (checkoutExpired) {
+      notify('Your 15-minute vehicle hold expired. Return to the fleet page to start a new booking.');
+      return null;
+    }
+
     if (!session?.user?.id) return null;
 
     if (currentRental) return currentRental;
@@ -1146,18 +1218,41 @@ async function verifyPhoneCode() {
       return null;
     }
 
-    setRentals([data, ...rentals]);
+    let rentalData = data;
+    const bookingId = pendingBookingId || getBookingIdFromUrl();
+    if (bookingId) {
+      const { data: attachedRental, error: holdError } = await supabase.rpc('attach_customer_checkout_hold', {
+        p_booking_id: bookingId,
+        p_rental_id: data.id,
+      });
+
+      if (holdError) {
+        notify(holdError.message || 'Could not attach the checkout hold.');
+        return null;
+      }
+
+      if (attachedRental) {
+        rentalData = { ...data, ...attachedRental, vehicles: data.vehicles };
+        if (attachedRental.checkout_expires_at) setCheckoutExpiresAt(attachedRental.checkout_expires_at);
+      }
+
+      if (String(rentalData.status || '').toLowerCase() === 'cancelled') {
+        notify('Your 15-minute vehicle hold expired. Return to the fleet page to start a new booking.');
+        return null;
+      }
+    }
+
+    setRentals([rentalData, ...rentals]);
     setFleetRentals((prev) => [{
-      id: data.id,
-      vehicle_id: data.vehicle_id,
-      pickup_date: data.pickup_date,
-      return_date: data.return_date,
-      pickup_time: data.pickup_time,
-      return_time: data.return_time,
-      status: data.status,
+      id: rentalData.id,
+      vehicle_id: rentalData.vehicle_id,
+      pickup_date: rentalData.pickup_date,
+      return_date: rentalData.return_date,
+      pickup_time: rentalData.pickup_time,
+      return_time: rentalData.return_time,
+      status: rentalData.status,
     }, ...prev]);
 
-    const bookingId = pendingBookingId || getBookingIdFromUrl();
     if (bookingId) {
       const { error: pendingUpdateError } = await supabase.rpc('convert_customer_pending_booking', {
         p_booking_id: bookingId,
@@ -1178,7 +1273,7 @@ async function verifyPhoneCode() {
       // ignore localStorage cleanup issue
     }
 
-    return data;
+    return rentalData;
   }
 
   function startNewReservation() {
@@ -1245,8 +1340,8 @@ async function verifyPhoneCode() {
       await maybeMarkReadyForPickup(rental, nextDocuments);
       notify(`${documentTypeLabel(documentType)} replaced.`);
       if (event.target) event.target.value = '';
-      if (wizardOpen && documentType === 'license' && wizardStep === 5) {
-        setWizardStep(5);
+      if (wizardOpen && documentType === 'license' && wizardStep === 3) {
+        setWizardStep(3);
       }
       return;
     }
@@ -1274,8 +1369,8 @@ async function verifyPhoneCode() {
     await maybeMarkReadyForPickup(rental, nextDocuments);
     notify(`${documentTypeLabel(documentType)} uploaded.`);
 
-    if (wizardOpen && documentType === 'license' && wizardStep === 5) {
-      setWizardStep(5);
+    if (wizardOpen && documentType === 'license' && wizardStep === 3) {
+      setWizardStep(3);
     }
     if (event.target) event.target.value = '';
   }
@@ -1710,13 +1805,13 @@ async function verifyPhoneCode() {
   }
 
   function getNextGuidedStep() {
-    if (!phoneVerified) return 0;
+    if (!contactStepCompleted) return 0;
     if (!vehicleStepCompleted) return 1;
-    if (!agreementSigned) return 2;
-    if (!paymentPaid) return 3;
-    if (!identityVerified) return 4;
-    if (!licenseUploaded) return 5;
-    if (!insuranceUploaded) return 6;
+    if (!identityVerified) return 2;
+    if (!licenseUploaded) return 3;
+    if (!insuranceUploaded) return 4;
+    if (!agreementSigned) return 5;
+    if (!paymentPaid) return 6;
     return 0;
   }
 
@@ -1778,6 +1873,20 @@ async function verifyPhoneCode() {
     const targetExtension = approvedUnpaidExtension;
     let rental = currentRental;
 
+    if (!targetExtension && checkoutExpired) {
+      setPaymentSaving(false);
+      notify('Your 15-minute vehicle hold expired. Return to the fleet page to start a new booking.');
+      return;
+    }
+
+    if (!targetExtension && (!contactStepCompleted || !identityVerified || !licenseUploaded || !insuranceUploaded || !agreementSigned)) {
+      setPaymentSaving(false);
+      notify('Complete phone verification, Stripe Identity, license, insurance, and the rental agreement before payment.');
+      setWizardStep(getNextGuidedStep());
+      setWizardOpen(true);
+      return;
+    }
+
     if (!targetExtension && !rental) {
       rental = await createReservationIfNeeded();
     }
@@ -1787,20 +1896,26 @@ async function verifyPhoneCode() {
       return;
     }
 
+    const bookingId = pendingBookingId || getBookingIdFromUrl();
+    const returnUrl = new URL(window.location.href);
+    returnUrl.hash = '';
+    returnUrl.search = '';
+    if (bookingId) returnUrl.searchParams.set('booking', bookingId);
+
     const checkoutPayload = targetExtension
       ? {
           action: 'create_checkout',
           targetType: 'extension',
           extensionRequestId: targetExtension.id,
-          successUrl: `${window.location.origin}${window.location.pathname}?payment=stripe_success`,
-          cancelUrl: `${window.location.origin}${window.location.pathname}?payment=stripe_cancelled`,
+          successUrl: `${returnUrl.toString()}${returnUrl.search ? '&' : '?'}payment=stripe_success`,
+          cancelUrl: `${returnUrl.toString()}${returnUrl.search ? '&' : '?'}payment=stripe_cancelled`,
         }
       : {
           action: 'create_checkout',
           targetType: 'rental',
           rentalId: rental.id,
-          successUrl: `${window.location.origin}${window.location.pathname}?payment=stripe_success`,
-          cancelUrl: `${window.location.origin}${window.location.pathname}?payment=stripe_cancelled`,
+          successUrl: `${returnUrl.toString()}${returnUrl.search ? '&' : '?'}payment=stripe_success`,
+          cancelUrl: `${returnUrl.toString()}${returnUrl.search ? '&' : '?'}payment=stripe_cancelled`,
         };
 
     const checkoutResponse = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stripe-web-hook`, {
@@ -1836,19 +1951,27 @@ async function verifyPhoneCode() {
   }
 
   async function nextWizardStep() {
-    if (wizardStep === 0 && !phoneVerified) {
-      notify('Please verify your phone number before continuing.');
+    if (wizardStep === 0 && !contactStepCompleted) {
+      notify('Save your renter details and verify your phone number before continuing.');
       return;
     }
 
-    if (wizardStep === 0 && phoneVerified && selectedVehicle && !currentRental) {
+    if (wizardStep === 0) {
+      const savedProfile = await saveProfileDetails(false);
+      if (!savedProfile?.phone_verified) {
+        notify('Verify the saved phone number before continuing.');
+        return;
+      }
+    }
+
+    if (wizardStep === 0 && contactStepCompleted && selectedVehicle && !currentRental) {
       const rental = await createReservationIfNeeded();
       if (!rental) return;
       setWizardStep(2);
       return;
     }
 
-    if (wizardStep === 0 && phoneVerified && selectedVehicle && currentRental) {
+    if (wizardStep === 0 && contactStepCompleted && selectedVehicle && currentRental) {
       setWizardStep(2);
       return;
     }
@@ -1858,8 +1981,33 @@ async function verifyPhoneCode() {
       if (!rental) return;
     }
 
-    if (wizardStep === 4 && !identityVerified) {
+    if (wizardStep === 1 && !selectedVehicle && !currentRental) {
+      notify('Choose an available vehicle before continuing.');
+      return;
+    }
+
+    if (wizardStep === 2 && !identityVerified) {
       notify('Complete Stripe Identity verification before continuing.');
+      return;
+    }
+
+    if (wizardStep === 3 && !licenseUploaded) {
+      notify('Upload your driver license before continuing.');
+      return;
+    }
+
+    if (wizardStep === 4 && !insuranceUploaded) {
+      notify('Upload your insurance paperwork before continuing.');
+      return;
+    }
+
+    if (wizardStep === 5 && !agreementSigned) {
+      notify('Review and sign the rental agreement before continuing.');
+      return;
+    }
+
+    if (wizardStep === 6 && !paymentPaid) {
+      notify('Complete Stripe payment to finish the booking checklist.');
       return;
     }
 
@@ -1873,31 +2021,39 @@ async function verifyPhoneCode() {
 
   function previousWizardStep() {
     setWizardReminder(null);
-    setWizardStep((step) => Math.max(1, step - 1));
-  }
-
-  function skipWizardStep() {
-    setWizardReminder(null);
-    if (wizardStep === wizardSteps.length - 1) {
-      setWizardOpen(false);
-      return;
-    }
-
-    setWizardStep((step) => step + 1);
+    setWizardStep((step) => Math.max(0, step - 1));
   }
 
   const wizardSteps = [
     {
-      title: 'Verify Your Phone Number',
+      title: 'Renter Details & Phone Verification',
       icon: ShieldCheck,
-      status: phoneVerified ? 'Completed' : 'Required',
-      completed: phoneVerified,
+      status: contactStepCompleted ? 'Completed' : 'Required',
+      completed: contactStepCompleted,
     },
     {
       title: 'Choose Dates & Vehicle',
       icon: Car,
       status: vehicleStepCompleted ? 'Completed' : 'Required',
       completed: vehicleStepCompleted,
+    },
+    {
+      title: 'Verify Government ID & Selfie',
+      icon: ShieldCheck,
+      status: identityVerified ? 'Verified' : identityStatus === 'processing' ? 'Processing' : 'Required',
+      completed: identityVerified,
+    },
+    {
+      title: 'Upload Driver License',
+      icon: Upload,
+      status: licenseUploaded ? 'Completed' : 'Required',
+      completed: licenseUploaded,
+    },
+    {
+      title: 'Upload Insurance Paperwork',
+      icon: FileText,
+      status: insuranceUploaded ? 'Completed' : 'Required',
+      completed: insuranceUploaded,
     },
     {
       title: 'Review & Sign Rental Agreement',
@@ -1908,26 +2064,8 @@ async function verifyPhoneCode() {
     {
       title: 'Pay Deposit & Rental Payment',
       icon: CreditCard,
-      status: paymentPaid ? 'Completed' : 'Payment Pending',
+      status: paymentPaid ? 'Completed' : 'Final Step',
       completed: paymentPaid,
-    },
-    {
-      title: 'Verify Government ID & Selfie',
-      icon: ShieldCheck,
-      status: identityVerified ? 'Verified' : identityStatus === 'processing' ? 'Processing' : 'Required Before Pickup',
-      completed: identityVerified,
-    },
-    {
-      title: 'Upload Driver License',
-      icon: Upload,
-      status: licenseUploaded ? 'Completed' : 'Required Before Pickup',
-      completed: licenseUploaded,
-    },
-    {
-      title: 'Upload Insurance Paperwork',
-      icon: FileText,
-      status: insuranceUploaded ? 'Completed' : 'Required Before Pickup',
-      completed: insuranceUploaded,
     },
   ];
 
@@ -1957,16 +2095,21 @@ async function verifyPhoneCode() {
   if (!session) {
     return (
         <AuthScreen
-          authMode={authMode}
-          setAuthMode={setAuthMode}
           authForm={authForm}
           setAuthForm={setAuthForm}
           handleAuth={handleAuth}
-          handleForgotPassword={handleForgotPassword}
+          verifyEmailOtp={verifyEmailOtp}
+          emailOtp={emailOtp}
+          setEmailOtp={setEmailOtp}
+          emailOtpSent={emailOtpSent}
+          setEmailOtpSent={setEmailOtpSent}
+          emailAuthBusy={emailAuthBusy}
           message={message}
           checkoutIntent={checkoutIntent}
           pendingVehicleName={pendingVehicleName}
           reservationForm={reservationForm}
+          checkoutSecondsRemaining={checkoutSecondsRemaining}
+          checkoutExpired={checkoutExpired}
         />
     );
   }
@@ -2019,6 +2162,13 @@ async function verifyPhoneCode() {
             </button>
           </div>
         </header>
+
+        {checkoutHoldActive && (
+          <CheckoutHoldTimer
+            secondsRemaining={checkoutSecondsRemaining}
+            expired={checkoutExpired}
+          />
+        )}
 
         <MobileFlowStatus items={mobileStatusItems} />
         <ReturnReviewNotice report={latestOpenReturnReport} />
@@ -2252,13 +2402,13 @@ async function verifyPhoneCode() {
 
               <div className="checklist compact-checklist">
                 <ChecklistItem icon={ShieldCheck} title="Email Verification" status={emailVerified ? 'Verified' : 'Check email'} completed={emailVerified} onOpen={() => notify('Check your inbox for the Supabase verification email.')} />
-                <ChecklistItem icon={ShieldCheck} title="Phone Verification" status={phoneVerified ? 'Verified' : 'Required'} completed={phoneVerified} onOpen={() => openWizardAtStep(0)} />
+                <ChecklistItem icon={ShieldCheck} title="Renter Details & Phone" status={contactStepCompleted ? 'Completed' : 'Required'} completed={contactStepCompleted} onOpen={() => openWizardAtStep(0)} />
                 <ChecklistItem icon={Car} title="Dates & Vehicle" status={vehicleStepCompleted ? 'Selected' : 'Required'} completed={vehicleStepCompleted} onOpen={() => openWizardAtStep(1)} />
-                <ChecklistItem icon={FileSignature} title="Rental Agreement" status={agreementSigned ? 'Signed' : 'Required'} completed={agreementSigned} onOpen={() => openWizardAtStep(2)} />
-                <ChecklistItem icon={CreditCard} title="Deposit & Rental Payment" status={paymentPaid ? 'Paid' : 'Payment Pending'} completed={paymentPaid} onOpen={() => openWizardAtStep(3)} />
-                <ChecklistItem icon={ShieldCheck} title="Stripe Identity" status={identityVerified ? 'Verified' : identityStatus === 'processing' ? 'Processing' : 'Required Before Pickup'} completed={identityVerified} onOpen={() => openWizardAtStep(4)} />
-                <ChecklistItem icon={Upload} title="Driver License Upload" status={licenseUploaded ? 'Uploaded' : 'Required Before Pickup'} completed={licenseUploaded} onOpen={() => openWizardAtStep(5)} />
-                <ChecklistItem icon={FileText} title="Insurance Upload" status={insuranceUploaded ? 'Uploaded' : 'Required Before Pickup'} completed={insuranceUploaded} onOpen={() => openWizardAtStep(6)} />
+                <ChecklistItem icon={ShieldCheck} title="Stripe Identity" status={identityVerified ? 'Verified' : identityStatus === 'processing' ? 'Processing' : 'Required'} completed={identityVerified} onOpen={() => openWizardAtStep(2)} />
+                <ChecklistItem icon={Upload} title="Driver License Upload" status={licenseUploaded ? 'Uploaded' : 'Required'} completed={licenseUploaded} onOpen={() => openWizardAtStep(3)} />
+                <ChecklistItem icon={FileText} title="Insurance Upload" status={insuranceUploaded ? 'Uploaded' : 'Required'} completed={insuranceUploaded} onOpen={() => openWizardAtStep(4)} />
+                <ChecklistItem icon={FileSignature} title="Rental Agreement" status={agreementSigned ? 'Signed' : 'Required'} completed={agreementSigned} onOpen={() => openWizardAtStep(5)} />
+                <ChecklistItem icon={CreditCard} title="Deposit & Rental Payment" status={paymentPaid ? 'Paid' : 'Final Step'} completed={paymentPaid} onOpen={() => openWizardAtStep(6)} />
               </div>
               {(missingRequiredDocuments || documentsRejected) && (
                 <DocumentRequirementNotice
@@ -2439,7 +2589,7 @@ async function verifyPhoneCode() {
                 <small>Pay securely with Stripe before the longer return window activates.</small>
               </div>
             )}
-            <button className="primary-btn big-action" onClick={startStripeCheckout} disabled={paymentSaving || (paymentPaid && !approvedUnpaidExtension)}>
+            <button className="primary-btn big-action" onClick={startStripeCheckout} disabled={paymentSaving || checkoutExpired || (paymentPaid && !approvedUnpaidExtension)}>
               <CreditCard size={18} /> {approvedUnpaidExtension
                 ? paymentSaving ? 'Opening Stripe...' : 'Pay Approved Extension'
                 : paymentPaid ? 'Payment Complete' : paymentSaving ? 'Opening Stripe...' : 'Pay With Stripe'}
@@ -2522,7 +2672,6 @@ async function verifyPhoneCode() {
           setWizardReminder={setWizardReminder}
           previousWizardStep={previousWizardStep}
           nextWizardStep={nextWizardStep}
-          skipWizardStep={skipWizardStep}
           profileForm={profileForm}
           setProfileForm={setProfileForm}
           phoneCode={phoneCode}
@@ -2578,7 +2727,6 @@ function WizardModal({
   setWizardReminder,
   previousWizardStep,
   nextWizardStep,
-  skipWizardStep,
   profileForm,
   setProfileForm,
   phoneCode,
@@ -2672,8 +2820,30 @@ function WizardModal({
           {wizardStep === 0 && (
             <div className="portal-form">
               <p className="muted">
-                Add your phone number, send a verification code, then enter the code to verify your account.
+                Add your renter details once, then verify your phone. Your passwordless account is already connected to this booking.
               </p>
+
+              <input
+                placeholder="Full legal name"
+                value={profileForm.full_name}
+                onChange={(e) => setProfileForm({ ...profileForm, full_name: e.target.value })}
+              />
+
+              <label className="auth-date-field">
+                <span>Date of birth</span>
+                <input
+                  type="date"
+                  max={getTodayDateInputValue()}
+                  value={profileForm.date_of_birth}
+                  onChange={(e) => setProfileForm({ ...profileForm, date_of_birth: e.target.value })}
+                />
+              </label>
+
+              <input
+                placeholder="Home address"
+                value={profileForm.address}
+                onChange={(e) => setProfileForm({ ...profileForm, address: e.target.value })}
+              />
 
               <input
                 placeholder="Phone number, example 8605551234"
@@ -2836,7 +3006,7 @@ function WizardModal({
             </div>
           )}
 
-          {wizardStep === 2 && (
+          {wizardStep === 5 && (
             <div>
               <p className="muted">
                 Read the full agreement, check the box, and type your legal name to sign.
@@ -2879,7 +3049,7 @@ function WizardModal({
             </div>
           )}
 
-          {wizardStep === 3 && (
+          {wizardStep === 6 && (
             <div>
               <p className="muted">
                 Confirm the totals, refundable deposit rules, mileage, pickup address, and required items before continuing to payment.
@@ -2892,16 +3062,15 @@ function WizardModal({
               <ServiceFeesSummary serviceFees={serviceFees} />
               <div className="invoice-row"><span>Mileage</span><strong>{MILEAGE_POLICY}</strong></div>
               <div className="invoice-row"><span>Pickup</span><strong>{RENTMECT_ADDRESS}</strong></div>
-              <div className="invoice-row"><span>Required Before Pickup</span><strong>Stripe Identity verification, a saved driver license, and insurance are required before vehicle release.</strong></div>
-              <div className="invoice-row"><span>After payment</span><strong>Complete identity verification and upload documents so Rent Me CT can confirm pickup.</strong></div>
+              <div className="invoice-row"><span>Booking checklist</span><strong>Phone, Identity, license, insurance, and agreement are complete before payment unlocks.</strong></div>
 
               {paymentPaid && <p className="auth-message">Payment recorded. Deposit is marked as held.</p>}
               {(!identityVerified || !licenseUploaded || !insuranceUploaded) && (
                 <div className="pickup-reminder-box compact-reminder">
                   <ShieldCheck size={22} />
                   <div>
-                    <strong>Verification still required</strong>
-                    <span>Payment does not complete pickup approval. Finish Stripe Identity and keep license and insurance documents on file.</span>
+                  <strong>Verification still required</strong>
+                  <span>Return to the required checklist step before opening Stripe.</span>
                   </div>
                 </div>
               )}
@@ -2911,7 +3080,7 @@ function WizardModal({
             </div>
           )}
 
-          {wizardStep === 4 && (
+          {wizardStep === 2 && (
             <IdentityVerificationPanel
               status={identityStatus}
               verified={identityVerified}
@@ -2921,7 +3090,7 @@ function WizardModal({
             />
           )}
 
-          {wizardStep === 5 && (
+          {wizardStep === 3 && (
             <div>
               <p className="muted">
                 {licenseUploaded
@@ -2953,7 +3122,7 @@ function WizardModal({
             </div>
           )}
 
-          {wizardStep === 6 && (
+          {wizardStep === 4 && (
             <div>
               <p className="muted">
                 {insuranceUploaded
@@ -2992,16 +3161,9 @@ function WizardModal({
             className="secondary-btn"
             type="button"
             onClick={previousWizardStep}
-            disabled={wizardStep <= 1}
+            disabled={wizardStep <= 0}
           >
             Back
-          </button>
-          <button
-            className="secondary-btn"
-            type="button"
-            onClick={skipWizardStep}
-          >
-            Skip For Now
           </button>
           <button
             className="primary-btn"
@@ -3279,47 +3441,34 @@ function ReturnReviewNotice({ report }) {
 }
 
 function AuthScreen({
-  authMode,
-  setAuthMode,
   authForm,
   setAuthForm,
   handleAuth,
-  handleForgotPassword,
+  verifyEmailOtp,
+  emailOtp,
+  setEmailOtp,
+  emailOtpSent,
+  setEmailOtpSent,
+  emailAuthBusy,
   message,
   checkoutIntent,
   pendingVehicleName,
-  reservationForm
+  reservationForm,
+  checkoutSecondsRemaining,
+  checkoutExpired
 }) {
-  const isSignUp = authMode === 'sign-up';
   const update = (key, value) => setAuthForm({ ...authForm, [key]: value });
 
   return (
     <div className="auth-screen">
-      <form className="auth-card" onSubmit={handleAuth}>
+      <form className="auth-card" onSubmit={emailOtpSent ? verifyEmailOtp : handleAuth}>
         <img className="auth-logo" src={logoMobileUrl} alt="Rent Me CT" />
         <span className="auth-portal-label">Client</span>
-        <h2>{checkoutIntent ? (isSignUp ? 'Create Account to Continue' : 'Sign In to Continue') : (isSignUp ? 'Create Account' : 'Client Login')}</h2>
+        <h2>{checkoutIntent ? 'Continue Your Booking' : 'Passwordless Client Login'}</h2>
+        <p className="muted">Enter your email once. We will securely sign you in—or create your account automatically if this is your first rental.</p>
 
-        {isSignUp && (
-          <input
-            placeholder="Full legal name"
-            value={authForm.fullName}
-            onChange={(e) => update('fullName', e.target.value)}
-            required
-          />
-        )}
-
-        {isSignUp && (
-          <label className="auth-date-field">
-            <span>Date of birth</span>
-            <input
-              type="date"
-              max={getTodayDateInputValue()}
-              value={authForm.dateOfBirth}
-              onChange={(e) => update('dateOfBirth', e.target.value)}
-              required
-            />
-          </label>
+        {checkoutIntent && checkoutSecondsRemaining !== null && (
+          <CheckoutHoldTimer secondsRemaining={checkoutSecondsRemaining} expired={checkoutExpired} compact />
         )}
 
         <input
@@ -3327,69 +3476,44 @@ function AuthScreen({
           placeholder="Email"
           value={authForm.email}
           onChange={(e) => update('email', e.target.value)}
+          disabled={emailOtpSent || emailAuthBusy}
           required
         />
 
-        <input
-          type="password"
-          placeholder="Password"
-          value={authForm.password}
-          onChange={(e) => update('password', e.target.value)}
-          required
-        />
-
-        {isSignUp && (
+        {emailOtpSent && (
           <input
-            placeholder="Phone number"
-            value={authForm.phone}
-            onChange={(e) => update('phone', e.target.value)}
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            placeholder="One-time email code"
+            value={emailOtp}
+            onChange={(e) => setEmailOtp(e.target.value.replace(/\D/g, '').slice(0, 8))}
             required
           />
         )}
 
-        {isSignUp && (
-          <input
-            placeholder="Home address"
-            value={authForm.address}
-            onChange={(e) => update('address', e.target.value)}
-            required
-          />
-        )}
-
-        {isSignUp && (
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={authForm.billingSame}
-              onChange={(e) => update('billingSame', e.target.checked)}
-            />
-            Billing address is the same as home address
-          </label>
-        )}
-
-        <button className="primary-btn" type="submit">
-          {checkoutIntent ? (isSignUp ? 'Continue Reservation' : 'Continue Reservation') : (isSignUp ? 'Create Account' : 'Sign In')}
+        <button className="primary-btn" type="submit" disabled={emailAuthBusy || checkoutExpired}>
+          {emailAuthBusy ? 'Please wait…' : emailOtpSent ? 'Verify & Open Booking' : 'Email My Secure Sign-In'}
         </button>
 
-        {!isSignUp && (
-        <button
-          className="link-btn"
-          type="button"
-          onClick={handleForgotPassword}
-        >
-          Forgot password?
-        </button>
-      )}
         {message && <p className="auth-message">{message}</p>}
 
-        <button
-          className="link-btn"
-          type="button"
-          onClick={() => setAuthMode(isSignUp ? 'sign-in' : 'sign-up')}
-        >
-          {isSignUp ? 'Already have an account? Sign in' : 'Need an account? Create one'}
-        </button>
+        {emailOtpSent && <button className="link-btn" type="button" onClick={() => {
+          setEmailOtp('');
+          setEmailOtpSent(false);
+        }}>Use a different email</button>}
       </form>
+    </div>
+  );
+}
+
+function CheckoutHoldTimer({ secondsRemaining, expired, compact = false }) {
+  return (
+    <div className={`checkout-hold-timer ${expired ? 'expired' : ''} ${compact ? 'compact' : ''}`} role="timer" aria-live="polite">
+      <Clock size={compact ? 18 : 21} />
+      <div>
+        <strong>{expired ? 'Vehicle hold expired' : `${formatCheckoutCountdown(secondsRemaining)} remaining`}</strong>
+        <span>{expired ? 'Return to the fleet page to begin a new booking.' : 'Finish the required steps before this vehicle is released.'}</span>
+      </div>
     </div>
   );
 }
@@ -3615,6 +3739,13 @@ function money(value) {
     style: 'currency',
     currency: 'USD',
   });
+}
+
+function formatCheckoutCountdown(totalSeconds) {
+  const safeSeconds = Math.max(0, Number(totalSeconds || 0));
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
 function formatRentalDate(date, time) {
@@ -3886,7 +4017,8 @@ function rentalPeriodsOverlap(reservation, rental) {
 
   if (!requestedStart || !requestedEnd || !bookedStart || !bookedEnd) return false;
 
-  const blockedUntil = new Date(bookedEnd.getTime() + TURNAROUND_BUFFER_MINUTES * 60 * 1000);
+  const bufferMinutes = rental?.status === 'calendar_block' ? 0 : TURNAROUND_BUFFER_MINUTES;
+  const blockedUntil = new Date(bookedEnd.getTime() + bufferMinutes * 60 * 1000);
   return requestedStart < blockedUntil && requestedEnd > bookedStart;
 }
 
