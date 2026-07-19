@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   AlertTriangle,
@@ -17,24 +17,25 @@ import {
   X,
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
+import logoUrl from './assets/logo-sidebar.png';
+import logoMobileUrl from './assets/logo-mobile.png';
 import './styles.css';
 
-const VEHICLE_IMAGE_MODULES = import.meta.glob([
-  './assets/Audi*.png',
-  './assets/Benz*.png',
-  './assets/BMW*.png',
-  './assets/Buick*.png',
-  './assets/Cadillac*.png',
-  './assets/Dodge*.png',
-  './assets/Ford*.png',
-  './assets/Kia*.png',
-  './assets/Mercedes*.png',
-], { eager: true, query: '?url', import: 'default' });
+const DEFAULT_VEHICLE_IMAGE_NAMES = [
+  'Audi-A4-002', 'Audi-A4-158', 'Audi-A6-385', 'Audi-A6-473', 'Audi-A8L-YPS',
+  'Audi-Q3-100', 'Audi-Q5-148', 'Audi-Q5-149', 'Audi-Q5-203', 'Audi-Q5-210',
+  'Audi-Q5-225', 'Audi-Q5-234', 'Audi-Q5-474', 'Audi-Q5-997', 'Audi-S3-001',
+  'BMW-328I-004', 'BMW-330I-157', 'BMW-330XI-166', 'Benz-C300-418',
+  'Benz-CLS-AMG-550-224', 'Buick-Encore-649', 'Cadillac-ATS-780',
+  'Dodge-Van-451', 'Dodge-Van-452', 'Ford-Escape-650', 'Ford-F350-4X4-191',
+  'Kia-Soul-656', 'Mercedes-Benz-C300-677', 'Mercedes-C300-321',
+];
 
 const RENTMECT_ADDRESS =
   import.meta.env.VITE_RENTMECT_ADDRESS || '12 Holmes Circle, Farmington, CT';
 
 const CT_TAX_RATE = 0.0635;
+const STANDARD_SECURITY_DEPOSIT = 300;
 const AGREEMENT_VERSION = 'rentmect-master-v2026-05-20';
 const MILEAGE_POLICY = '200 miles/day included; excess mileage $0.35/mile';
 const CANCELLATION_TERMS = 'Contact Rent Me CT before pickup for cancellation or schedule changes.';
@@ -290,6 +291,7 @@ function App() {
   const [reservationSaving, setReservationSaving] = useState(false);
   const [agreementSaving, setAgreementSaving] = useState(false);
   const [paymentSaving, setPaymentSaving] = useState(false);
+  const [identitySaving, setIdentitySaving] = useState(false);
   const [returnSaving, setReturnSaving] = useState(false);
   const [extensionSaving, setExtensionSaving] = useState(false);
   const [extensionPreview, setExtensionPreview] = useState(null);
@@ -299,6 +301,7 @@ function App() {
 
   const [authForm, setAuthForm] = useState({
     fullName: '',
+    dateOfBirth: '',
     email: '',
     password: '',
     phone: '',
@@ -314,8 +317,10 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [reports, setReports] = useState([]);
   const [extensionRequests, setExtensionRequests] = useState([]);
+  const [serviceFees, setServiceFees] = useState([]);
   const [supportText, setSupportText] = useState('');
   const [activeTab, setActiveTab] = useState('overview');
+  const [navCollapsed, setNavCollapsed] = useState(false);
   const [agreementModalOpen, setAgreementModalOpen] = useState(false);
 
   const [reservationForm, setReservationForm] = useState({
@@ -339,6 +344,7 @@ function App() {
 
   const [profileForm, setProfileForm] = useState({
     full_name: '',
+    date_of_birth: '',
     phone: '',
     address: '',
   });
@@ -352,6 +358,8 @@ function App() {
   const [verifyingCode, setVerifyingCode] = useState(false);
   const [agreementChecked, setAgreementChecked] = useState(false);
   const [signatureName, setSignatureName] = useState('');
+  const [signatureImageData, setSignatureImageData] = useState('');
+  const [insuranceCoverage, setInsuranceCoverage] = useState({ collision: false, liability: false });
 
   function notify(text, type = 'info') {
     setNotice({ text, type });
@@ -403,6 +411,35 @@ function App() {
       loadPortalData(session.user.id);
     }
   }, [session]);
+
+  useEffect(() => {
+    if (!portalDataReady || !session?.access_token) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('identity') !== 'return') return;
+    url.searchParams.delete('identity');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+    refreshIdentityVerification(true);
+  }, [portalDataReady, session?.access_token]);
+
+  useEffect(() => {
+    if (!session?.user?.id) return undefined;
+    let refreshTimer;
+    const refreshFleetCalendar = () => {
+      window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(async () => {
+        const { data } = await supabase.rpc('get_vehicle_booking_blocks');
+        if (data) setFleetRentals(data);
+      }, 150);
+    };
+    const fleetChannel = supabase
+      .channel('client-fleet-source-of-truth')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rentals' }, refreshFleetCalendar)
+      .subscribe();
+    return () => {
+      window.clearTimeout(refreshTimer);
+      supabase.removeChannel(fleetChannel);
+    };
+  }, [session?.user?.id]);
 
   useEffect(() => {
     if (!session?.user?.id || !pendingBookingId) return;
@@ -530,7 +567,9 @@ function App() {
 
     const rentalTotal = Number(selectedVehicle.daily_rate || 0) * days;
     const taxAmount = rentalTotal * CT_TAX_RATE;
-    const securityDeposit = Number(selectedVehicle.security_deposit || 0);
+    const securityDeposit = isCustomerUnder25(profileForm.date_of_birth)
+      ? 500
+      : STANDARD_SECURITY_DEPOSIT;
 
     return {
       days,
@@ -539,7 +578,7 @@ function App() {
       securityDeposit,
       checkoutTotal: rentalTotal + taxAmount,
     };
-  }, [selectedVehicle, reservationForm]);
+  }, [selectedVehicle, reservationForm, profileForm.date_of_birth]);
 
   const userEmail = session?.user?.email || '';
   const userName =
@@ -547,6 +586,12 @@ function App() {
     session?.user?.user_metadata?.full_name ||
     userEmail ||
     'Rent Me CT Customer';
+  const clientGreetingName =
+    profile?.full_name ||
+    session?.user?.user_metadata?.full_name ||
+    userEmail.split('@')[0] ||
+    'there';
+  const clientFirstName = clientGreetingName.trim().split(/\s+/)[0] || 'there';
 
   const currentRentalDocuments = useMemo(() => {
     if (!currentRental?.id) return [];
@@ -556,12 +601,9 @@ function App() {
   const currentInsuranceDocument = useMemo(() => latestDocument(currentRentalDocuments, 'insurance'), [currentRentalDocuments]);
   const currentRentalLicenseDocument = useMemo(() => latestDocument(currentRentalDocuments, 'license'), [currentRentalDocuments]);
   const documentsForActiveRental = useMemo(() => {
-    if (!reusableLicenseDocument || currentRentalLicenseDocument?.id === reusableLicenseDocument.id) {
-      return currentRentalDocuments;
-    }
-
-    return [reusableLicenseDocument, ...currentRentalDocuments];
-  }, [currentRentalDocuments, currentRentalLicenseDocument?.id, reusableLicenseDocument]);
+    const license = reusableLicenseDocument || currentRentalLicenseDocument;
+    return [license, currentInsuranceDocument].filter(Boolean);
+  }, [currentInsuranceDocument, currentRentalLicenseDocument, reusableLicenseDocument]);
   const currentRentalExtensions = useMemo(() => {
     if (!currentRental?.id) return [];
     return extensionRequests.filter((request) => request.rental_id === currentRental.id);
@@ -608,6 +650,8 @@ function App() {
   const emailVerified = Boolean(session?.user?.email_confirmed_at);
   const agreementSigned = Boolean(currentRental?.agreement_signed);
   const paymentPaid = currentRental?.payment_status === 'paid';
+  const identityStatus = profile?.identity_verification_status || 'unverified';
+  const identityVerified = identityStatus === 'verified';
   const returnCountdown = getReturnCountdown(currentRental?.return_date, currentRental?.return_time, now);
   const returnConfirmationSent = Boolean(
     currentRental?.status === 'return_initiated' ||
@@ -661,7 +705,7 @@ function App() {
   ].filter(Boolean);
   const extensionWindow = getExtensionRequestWindow(currentRental, now);
   const vehicleStepCompleted = Boolean(currentRental?.vehicles || (!currentRental && selectedVehicle));
-  const allGuidedStepsComplete = Boolean(phoneVerified && vehicleStepCompleted && licenseUploaded && insuranceUploaded && agreementSigned && paymentPaid);
+  const allGuidedStepsComplete = Boolean(phoneVerified && vehicleStepCompleted && identityVerified && licenseUploaded && insuranceUploaded && agreementSigned && paymentPaid);
 function getBookingIdFromUrl() {
     return new URLSearchParams(window.location.search).get('booking') || '';
   }
@@ -805,6 +849,7 @@ function loadSavedBookingFromWebsite() {
       reportsResult,
       extensionsResult,
       fleetRentalsResult,
+      serviceFeesResult,
     ] = await Promise.all([
       supabase.from('profiles').select('*').eq('id', userId).single(),
       supabase.from('vehicles').select('*').order('created_at', { ascending: false }),
@@ -834,12 +879,18 @@ function loadSavedBookingFromWebsite() {
         .eq('user_id', userId)
         .order('created_at', { ascending: false }),
       supabase.rpc('get_vehicle_booking_blocks'),
+      supabase
+        .from('service_fees')
+        .select('*')
+        .eq('active', true)
+        .order('created_at', { ascending: false }),
     ]);
 
     if (profileResult.data) {
       setProfile(profileResult.data);
       setProfileForm({
         full_name: profileResult.data.full_name || '',
+        date_of_birth: profileResult.data.date_of_birth || '',
         phone: profileResult.data.phone || '',
         address: profileResult.data.address || '',
       });
@@ -853,6 +904,7 @@ function loadSavedBookingFromWebsite() {
     if (reportsResult.data) setReports(reportsResult.data);
     if (extensionsResult.data) setExtensionRequests(extensionsResult.data);
     if (fleetRentalsResult.data) setFleetRentals(fleetRentalsResult.data);
+    if (serviceFeesResult.data) setServiceFees(serviceFeesResult.data);
 
     setPortalDataReady(true);
     setLoading(false);
@@ -869,6 +921,7 @@ function loadSavedBookingFromWebsite() {
         options: {
           data: {
             full_name: authForm.fullName,
+            date_of_birth: authForm.dateOfBirth,
             phone: authForm.phone,
             address: authForm.address,
             billing_same_as_home: authForm.billingSame,
@@ -933,10 +986,15 @@ function loadSavedBookingFromWebsite() {
     if (event) event.preventDefault();
     if (!session?.user?.id) return;
 
+    if (!isValidBirthDate(profileForm.date_of_birth)) {
+      notify('Enter a valid date of birth before saving your profile.');
+      return;
+    }
     const { data, error } = await supabase.rpc('save_customer_profile_contact_details', {
       p_full_name: profileForm.full_name,
       p_phone: profileForm.phone,
       p_address: profileForm.address,
+      p_date_of_birth: profileForm.date_of_birth,
     });
 
     if (error) {
@@ -1028,6 +1086,12 @@ async function verifyPhoneCode() {
     if (!session?.user?.id) return null;
 
     if (currentRental) return currentRental;
+
+    if (!isValidBirthDate(profileForm.date_of_birth)) {
+      notify('Add and save your date of birth before creating a reservation.');
+      setActiveTab('profile');
+      return null;
+    }
 
     if (!selectedVehicle) {
       notify('Choose a vehicle first.');
@@ -1145,15 +1209,42 @@ async function verifyPhoneCode() {
       return;
     }
 
+    const existingDocument = documentType === 'license'
+      ? latestDocument(documents, 'license')
+      : latestDocument(documents.filter((document) => document.rental_id === rental.id), 'insurance');
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
-    const path = `${session.user.id}/${documentType}/${Date.now()}-${safeName}`;
+    const existingPath = existingDocument?.file_path || existingDocument?.storage_path || existingDocument?.path;
+    const path = existingPath || `${session.user.id}/${documentType}/${Date.now()}-${safeName}`;
 
     const { error: uploadError } = await supabase.storage
       .from('rental-documents')
-      .upload(path, file, { upsert: false });
+      .upload(path, file, { upsert: Boolean(existingDocument) });
 
     if (uploadError) {
       notify(uploadError.message);
+      return;
+    }
+
+    if (existingDocument?.id) {
+      const { data, error } = await supabase.rpc('replace_customer_rental_document', {
+        p_document_id: existingDocument.id,
+        p_file_path: path,
+      });
+
+      if (error) {
+        notify(error.message);
+        return;
+      }
+
+      const nextDocuments = documents.map((item) => (item.id === data.id ? data : item));
+      setDocuments(nextDocuments);
+      await syncRentalDocumentReviewStatus(rental, nextDocuments);
+      await maybeMarkReadyForPickup(rental, nextDocuments);
+      notify(`${documentTypeLabel(documentType)} replaced.`);
+      if (event.target) event.target.value = '';
+      if (wizardOpen && documentType === 'license' && wizardStep === 5) {
+        setWizardStep(5);
+      }
       return;
     }
 
@@ -1180,9 +1271,10 @@ async function verifyPhoneCode() {
     await maybeMarkReadyForPickup(rental, nextDocuments);
     notify(`${documentTypeLabel(documentType)} uploaded.`);
 
-    if (wizardOpen && documentType === 'license' && wizardStep === 4) {
+    if (wizardOpen && documentType === 'license' && wizardStep === 5) {
       setWizardStep(5);
     }
+    if (event.target) event.target.value = '';
   }
 
   async function openDocument(document) {
@@ -1291,6 +1383,7 @@ async function verifyPhoneCode() {
 
     const rentalDocuments = nextDocuments.filter((document) => document.rental_id === rentalOverride.id);
     const ready =
+      identityVerified &&
       isApprovedDocument(latestDocument(nextDocuments, 'license')) &&
       isApprovedDocument(latestDocument(rentalDocuments, 'insurance')) &&
       Boolean(rentalOverride.agreement_signed) &&
@@ -1343,6 +1436,11 @@ async function verifyPhoneCode() {
       return;
     }
 
+    if (!signatureImageData) {
+      notify('Draw your signature in the signature box.');
+      return;
+    }
+
     setAgreementSaving(true);
     const snapshot = buildAgreementWithDetails({
       agreementText: AGREEMENT_TEXT,
@@ -1356,6 +1454,8 @@ async function verifyPhoneCode() {
         returnTime: reservationForm.returnTime || rental.return_time,
       },
       rental,
+      signatureName: signatureName.trim(),
+      signatureImageData,
     });
     const agreementHash = await sha256(snapshot);
 
@@ -1366,6 +1466,7 @@ async function verifyPhoneCode() {
       p_agreement_snapshot: snapshot,
       p_agreement_hash: agreementHash,
       p_user_agent: navigator.userAgent,
+      p_signature_data: signatureImageData,
     });
     setAgreementSaving(false);
 
@@ -1610,8 +1711,9 @@ async function verifyPhoneCode() {
     if (!vehicleStepCompleted) return 1;
     if (!agreementSigned) return 2;
     if (!paymentPaid) return 3;
-    if (!licenseUploaded) return 4;
-    if (!insuranceUploaded) return 5;
+    if (!identityVerified) return 4;
+    if (!licenseUploaded) return 5;
+    if (!insuranceUploaded) return 6;
     return 0;
   }
 
@@ -1619,6 +1721,51 @@ async function verifyPhoneCode() {
     setActiveTab('overview');
     setWizardStep(step);
     setWizardOpen(true);
+  }
+
+  async function callStripeIdentity(action, redirectToStripe = false) {
+    if (!session?.access_token || identitySaving) return null;
+    setIdentitySaving(true);
+    const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stripe-web-hook`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({
+        action,
+        returnUrl: `${window.location.origin}${window.location.pathname}?identity=return`,
+      }),
+    });
+    const data = await response.json().catch(() => null);
+    setIdentitySaving(false);
+    if (!response.ok || data?.error) {
+      notify(data?.error || `Identity verification could not be loaded (${response.status}).`);
+      return null;
+    }
+    setProfile((current) => current ? { ...current, identity_verification_status: data.status } : current);
+    if (data.verified) {
+      notify('Stripe Identity verification is complete.', 'success');
+      await loadPortalData(session.user.id);
+    } else if (data.status === 'processing') {
+      notify('Stripe is processing your identity verification. Refresh again shortly.');
+    } else if (redirectToStripe && data.url) {
+      window.location.assign(data.url);
+    }
+    return data;
+  }
+
+  function startIdentityVerification() {
+    return callStripeIdentity('create_identity_verification', true);
+  }
+
+  function refreshIdentityVerification(showNotice = false) {
+    const result = callStripeIdentity('get_identity_verification', false);
+    if (showNotice) result.then((data) => {
+      if (data && !data.verified && data.status !== 'processing') notify('Identity verification still needs attention.');
+    });
+    return result;
   }
 
   async function startStripeCheckout() {
@@ -1708,6 +1855,11 @@ async function verifyPhoneCode() {
       if (!rental) return;
     }
 
+    if (wizardStep === 4 && !identityVerified) {
+      notify('Complete Stripe Identity verification before continuing.');
+      return;
+    }
+
     if (wizardStep === wizardSteps.length - 1) {
       setWizardOpen(false);
       return;
@@ -1757,6 +1909,12 @@ async function verifyPhoneCode() {
       completed: paymentPaid,
     },
     {
+      title: 'Verify Government ID & Selfie',
+      icon: ShieldCheck,
+      status: identityVerified ? 'Verified' : identityStatus === 'processing' ? 'Processing' : 'Required Before Pickup',
+      completed: identityVerified,
+    },
+    {
       title: 'Upload Driver License',
       icon: Upload,
       status: licenseUploaded ? 'Completed' : 'Required Before Pickup',
@@ -1777,6 +1935,8 @@ async function verifyPhoneCode() {
     vehicle: selectedVehicle || currentRental?.vehicles,
     reservation: reservationForm,
     rental: currentRental,
+    signatureName,
+    signatureImageData,
   });
 
   const tabs = [
@@ -1809,15 +1969,17 @@ async function verifyPhoneCode() {
   }
 
   return (
-    <div className="portal-shell compact-shell">
-      <aside className="sidebar">
+    <div className={`portal-shell compact-shell ${navCollapsed ? 'nav-collapsed' : ''}`}>
+      <aside className={`sidebar ${navCollapsed ? 'collapsed' : ''}`}>
         <div className="brand-block">
-          <div className="brand-mark">RM</div>
-          <div>
-            <strong>Rent Me CT</strong>
-            <span>Client Portal</span>
-          </div>
+          <picture>
+            <source media="(max-width: 760px)" srcSet={logoMobileUrl} />
+            <img className="brand-logo" src={logoUrl} alt="Rent Me CT" />
+          </picture>
         </div>
+        <button className="nav-toggle" type="button" onClick={() => setNavCollapsed(!navCollapsed)} aria-label={navCollapsed ? 'Expand navigation' : 'Collapse navigation'}>
+          <X size={17} /><span>{navCollapsed ? 'Expand' : 'Collapse'}</span>
+        </button>
 
         <nav className="side-nav tab-nav">
           {tabs.map(({ key, label, icon: Icon }) => (
@@ -1827,13 +1989,13 @@ async function verifyPhoneCode() {
               className={activeTab === key ? 'active' : ''}
               onClick={() => setActiveTab(key)}
             >
-              <Icon size={18} /> {label}
+              <Icon size={18} /> <span>{label}</span>
             </button>
           ))}
         </nav>
 
         <button className="logout-btn" onClick={signOut}>
-          <LogOut size={17} /> Log Out
+          <LogOut size={17} /> <span>Log Out</span>
         </button>
       </aside>
 
@@ -1842,7 +2004,7 @@ async function verifyPhoneCode() {
         <header className="portal-header compact-header">
           <div>
             <p className="eyebrow">Welcome back</p>
-            <h1>{userName}</h1>
+            <h1>{clientFirstName}</h1>
             <span>{userEmail} • {emailVerified ? 'Email verified' : 'Email verification pending'}</span>
           </div>
           <div className="header-actions">
@@ -1893,7 +2055,7 @@ async function verifyPhoneCode() {
               <Metric icon={Clock} label="Pickup" value={formatRentalDate(overviewPickupDate, overviewPickupTime)} />
               <Metric icon={Clock} label="Return" value={formatRentalDate(overviewReturnDate, overviewReturnTime)} />
               <Metric icon={CalendarDays} label="Rental Days" value={getRentalDaysSafe(overviewPickupDate, overviewReturnDate)} />
-              <Metric icon={CreditCard} label="Deposit" value={currentRental ? money(currentRental.security_deposit) : selectedVehicle ? money(selectedVehicle.security_deposit) : 'Pending'} />
+              <Metric icon={CreditCard} label="Deposit" value={currentRental ? money(currentRental.security_deposit) : selectedVehicle ? money(isCustomerUnder25(profileForm.date_of_birth) ? 500 : STANDARD_SECURITY_DEPOSIT) : 'Pending'} />
             </section>
 
             {currentRental && (
@@ -2091,8 +2253,9 @@ async function verifyPhoneCode() {
                 <ChecklistItem icon={Car} title="Dates & Vehicle" status={vehicleStepCompleted ? 'Selected' : 'Required'} completed={vehicleStepCompleted} onOpen={() => openWizardAtStep(1)} />
                 <ChecklistItem icon={FileSignature} title="Rental Agreement" status={agreementSigned ? 'Signed' : 'Required'} completed={agreementSigned} onOpen={() => openWizardAtStep(2)} />
                 <ChecklistItem icon={CreditCard} title="Deposit & Rental Payment" status={paymentPaid ? 'Paid' : 'Payment Pending'} completed={paymentPaid} onOpen={() => openWizardAtStep(3)} />
-                <ChecklistItem icon={Upload} title="Driver License Upload" status={licenseUploaded ? 'Uploaded' : 'Required Before Pickup'} completed={licenseUploaded} onOpen={() => openWizardAtStep(4)} />
-                <ChecklistItem icon={FileText} title="Insurance Upload" status={insuranceUploaded ? 'Uploaded' : 'Required Before Pickup'} completed={insuranceUploaded} onOpen={() => openWizardAtStep(5)} />
+                <ChecklistItem icon={ShieldCheck} title="Stripe Identity" status={identityVerified ? 'Verified' : identityStatus === 'processing' ? 'Processing' : 'Required Before Pickup'} completed={identityVerified} onOpen={() => openWizardAtStep(4)} />
+                <ChecklistItem icon={Upload} title="Driver License Upload" status={licenseUploaded ? 'Uploaded' : 'Required Before Pickup'} completed={licenseUploaded} onOpen={() => openWizardAtStep(5)} />
+                <ChecklistItem icon={FileText} title="Insurance Upload" status={insuranceUploaded ? 'Uploaded' : 'Required Before Pickup'} completed={insuranceUploaded} onOpen={() => openWizardAtStep(6)} />
               </div>
               {(missingRequiredDocuments || documentsRejected) && (
                 <DocumentRequirementNotice
@@ -2113,6 +2276,17 @@ async function verifyPhoneCode() {
                   value={profileForm.full_name}
                   onChange={(e) => setProfileForm({ ...profileForm, full_name: e.target.value })}
                 />
+                <label className="profile-date-field">
+                  <span>Date of birth</span>
+                  <input
+                    type="date"
+                    max={getTodayDateInputValue()}
+                    value={profileForm.date_of_birth}
+                    onChange={(e) => setProfileForm({ ...profileForm, date_of_birth: e.target.value })}
+                    required
+                  />
+                  {profileForm.date_of_birth && <small>{isCustomerUnder25(profileForm.date_of_birth) ? 'Under 25: refundable security deposit is $500.' : 'Age 25 or older: standard vehicle deposit applies.'}</small>}
+                </label>
                 <input
                   placeholder="Phone number"
                   value={profileForm.phone}
@@ -2175,12 +2349,15 @@ async function verifyPhoneCode() {
                   />
                 )}
                 {!insuranceUploaded && (
-                  <UploadCard
-                    title={insuranceRejected ? 'Replace Insurance' : 'Upload Insurance'}
-                    text={insuranceRejected ? 'This rental insurance upload was rejected. Upload a replacement for review.' : 'Upload proof of active auto insurance for this rental.'}
-                    icon={FileText}
-                    onUpload={(e) => uploadDocument(e, 'insurance')}
-                  />
+                  <div className="insurance-upload-card">
+                    <InsuranceOptionsPanel insuranceCoverage={insuranceCoverage} setInsuranceCoverage={setInsuranceCoverage} />
+                    <UploadCard
+                      title={insuranceRejected ? 'Replace Insurance' : 'Upload Insurance'}
+                      text={insuranceRejected ? 'This rental insurance upload was rejected. Upload a replacement for review.' : 'Upload proof of active auto insurance for this rental.'}
+                      icon={FileText}
+                      onUpload={(e) => uploadDocument(e, 'insurance')}
+                    />
+                  </div>
                 )}
               </section>
             )}
@@ -2208,6 +2385,11 @@ async function verifyPhoneCode() {
             <button className="primary-btn big-action" onClick={() => setAgreementModalOpen(true)}>
               <FileSignature size={18} /> Review & Sign Agreement
             </button>
+            {currentRental?.agreement_snapshot && (
+              <button className="secondary-btn big-action" type="button" onClick={() => downloadAgreement(currentRental)}>
+                Download Signed Agreement
+              </button>
+            )}
           </section>
         )}
 
@@ -2222,12 +2404,13 @@ async function verifyPhoneCode() {
               <div className="invoice-row"><span>Rental Days</span><strong>{currentRental ? getRentalDaysSafe(currentRental.pickup_date, currentRental.return_date) : estimate ? `${estimate.days} days` : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Rental</span><strong>{currentRental ? money(currentRental.rental_total) : estimate ? money(estimate.rentalTotal) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>CT Sales Tax</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
-              <div className="invoice-row"><span>Security Deposit</span><strong>{currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
+              <div className="invoice-row"><span>Security Deposit</span><strong>{currentRental ? money(isCustomerUnder25(profileForm.date_of_birth) ? 500 : currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
+              <ServiceFeesSummary serviceFees={serviceFees} />
               <div className="invoice-row"><span>Mileage Included</span><strong>{MILEAGE_POLICY}</strong></div>
               <div className="invoice-row"><span>Pickup Address</span><strong>{RENTMECT_ADDRESS}</strong></div>
               <div className="invoice-row"><span>Required Before Pickup</span><strong>Phone, agreement, payment, saved driver license, and insurance for this rental</strong></div>
               <div className="invoice-row"><span>Cancellation</span><strong>{CANCELLATION_TERMS}</strong></div>
-              <div className="invoice-row total-row"><span>Total Due Today</span><strong>{estimate && !estimate.invalid ? money(estimate.checkoutTotal + estimate.securityDeposit) : currentRental ? money(Number(currentRental.rental_total || 0) + Number(currentRental.tax_amount || 0) + Number(currentRental.security_deposit || 0)) : 'Pending'}</strong></div>
+              <div className="invoice-row total-row"><span>Total Due Today</span><strong>{estimate && !estimate.invalid ? money(estimate.checkoutTotal + estimate.securityDeposit) : currentRental ? money(Number(currentRental.rental_total || 0) + Number(currentRental.tax_amount || 0) + Number(isCustomerUnder25(profileForm.date_of_birth) ? 500 : currentRental.security_deposit || 0)) : 'Pending'}</strong></div>
             </div>
             <div className="agreement-status-box">
               <CheckCircle2 size={24} />
@@ -2318,8 +2501,11 @@ async function verifyPhoneCode() {
           setAgreementChecked={setAgreementChecked}
           signatureName={signatureName}
           setSignatureName={setSignatureName}
+          signatureImageData={signatureImageData}
+          setSignatureImageData={setSignatureImageData}
           signAgreement={signAgreement}
           agreementSaving={agreementSaving}
+          currentRental={currentRental}
           onClose={() => setAgreementModalOpen(false)}
         />
       )}
@@ -2353,6 +2539,11 @@ async function verifyPhoneCode() {
           runTestStripePayment={startStripeCheckout}
           paymentSaving={paymentSaving}
           paymentPaid={paymentPaid}
+          identityStatus={identityStatus}
+          identityVerified={identityVerified}
+          identitySaving={identitySaving}
+          startIdentityVerification={startIdentityVerification}
+          refreshIdentityVerification={refreshIdentityVerification}
           uploadDocument={uploadDocument}
           licenseUploaded={licenseUploaded}
           insuranceUploaded={insuranceUploaded}
@@ -2360,9 +2551,14 @@ async function verifyPhoneCode() {
           setAgreementChecked={setAgreementChecked}
           signatureName={signatureName}
           setSignatureName={setSignatureName}
+          signatureImageData={signatureImageData}
+          setSignatureImageData={setSignatureImageData}
           signAgreement={signAgreement}
           agreementSaving={agreementSaving}
           agreementText={agreementTextWithDetails}
+          serviceFees={serviceFees}
+          insuranceCoverage={insuranceCoverage}
+          setInsuranceCoverage={setInsuranceCoverage}
           currentRental={currentRental}
           fleetRentals={fleetRentals}
         />
@@ -2399,6 +2595,11 @@ function WizardModal({
   runTestStripePayment,
   paymentSaving,
   paymentPaid,
+  identityStatus,
+  identityVerified,
+  identitySaving,
+  startIdentityVerification,
+  refreshIdentityVerification,
   uploadDocument,
   licenseUploaded,
   insuranceUploaded,
@@ -2407,14 +2608,20 @@ function WizardModal({
   setAgreementChecked,
   signatureName,
   setSignatureName,
+  signatureImageData,
+  setSignatureImageData,
   signAgreement,
   agreementSaving,
   agreementText,
+  serviceFees,
+  insuranceCoverage,
+  setInsuranceCoverage,
   currentRental,
   fleetRentals,
 }) {
   const step = wizardSteps[wizardStep];
   const Icon = step.icon;
+  const [vehicleReminder, setVehicleReminder] = useState(null);
 
   return (
     <div className="wizard-backdrop">
@@ -2570,6 +2777,7 @@ function WizardModal({
                         if (!bookable) return;
                         setWizardReminder(null);
                         setReservationForm({ ...reservationForm, vehicleId: vehicle.id });
+                        setVehicleReminder(vehicle);
                       }}
                       disabled={!bookable}
                       aria-pressed={selected}
@@ -2615,6 +2823,7 @@ function WizardModal({
                 <div className="invoice-row">
                   <span>{estimate.invalid ? 'Return date must be after pickup' : `${estimate.days} rental days`}</span>
                   <strong>{estimate.invalid ? 'Invalid' : `${money(estimate.checkoutTotal)} + deposit ${money(estimate.securityDeposit)}`}</strong>
+                  {!estimate.invalid && profileForm.date_of_birth && <small>{isCustomerUnder25(profileForm.date_of_birth) ? 'Under-25 deposit applied' : 'Standard deposit applied'}</small>}
                 </div>
               )}
 
@@ -2656,6 +2865,8 @@ function WizardModal({
                 }}
               />
 
+              <SignaturePad value={signatureImageData} onChange={setSignatureImageData} />
+
               <button className="primary-btn" onClick={() => {
                 setWizardReminder(null);
                 signAgreement();
@@ -2674,19 +2885,20 @@ function WizardModal({
               <div className="invoice-row"><span>Rental Days</span><strong>{currentRental ? getRentalDaysSafe(currentRental.pickup_date, currentRental.return_date) : estimate ? `${estimate.days} days` : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Rental</span><strong>{currentRental ? money(currentRental.rental_total) : estimate ? money(estimate.rentalTotal) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Taxes</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
-              <div className="invoice-row"><span>Security Deposit</span><strong>{currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
+              <div className="invoice-row"><span>Security Deposit</span><strong>{currentRental ? money(isCustomerUnder25(profileForm.date_of_birth) ? 500 : currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
+              <ServiceFeesSummary serviceFees={serviceFees} />
               <div className="invoice-row"><span>Mileage</span><strong>{MILEAGE_POLICY}</strong></div>
               <div className="invoice-row"><span>Pickup</span><strong>{RENTMECT_ADDRESS}</strong></div>
-              <div className="invoice-row"><span>Required Before Pickup</span><strong>A saved driver license and insurance for this rental are required before vehicle release.</strong></div>
-              <div className="invoice-row"><span>After payment</span><strong>Upload documents so Rent Me CT can review and confirm pickup details.</strong></div>
+              <div className="invoice-row"><span>Required Before Pickup</span><strong>Stripe Identity verification, a saved driver license, and insurance are required before vehicle release.</strong></div>
+              <div className="invoice-row"><span>After payment</span><strong>Complete identity verification and upload documents so Rent Me CT can confirm pickup.</strong></div>
 
               {paymentPaid && <p className="auth-message">Payment recorded. Deposit is marked as held.</p>}
-              {(!licenseUploaded || !insuranceUploaded) && (
+              {(!identityVerified || !licenseUploaded || !insuranceUploaded) && (
                 <div className="pickup-reminder-box compact-reminder">
                   <ShieldCheck size={22} />
                   <div>
-                    <strong>Documents still required</strong>
-                    <span>Payment does not complete pickup approval. Keep a driver license on file and upload insurance for this rental.</span>
+                    <strong>Verification still required</strong>
+                    <span>Payment does not complete pickup approval. Finish Stripe Identity and keep license and insurance documents on file.</span>
                   </div>
                 </div>
               )}
@@ -2697,6 +2909,16 @@ function WizardModal({
           )}
 
           {wizardStep === 4 && (
+            <IdentityVerificationPanel
+              status={identityStatus}
+              verified={identityVerified}
+              saving={identitySaving}
+              onStart={startIdentityVerification}
+              onRefresh={() => refreshIdentityVerification(true)}
+            />
+          )}
+
+          {wizardStep === 5 && (
             <div>
               <p className="muted">
                 {licenseUploaded
@@ -2728,13 +2950,14 @@ function WizardModal({
             </div>
           )}
 
-          {wizardStep === 5 && (
+          {wizardStep === 6 && (
             <div>
               <p className="muted">
                 {insuranceUploaded
                   ? 'Insurance is uploaded for this rental. Rent Me CT will review it before vehicle release.'
                   : 'Upload proof of active auto insurance. Rent Me CT must have insurance on file before pickup.'}
               </p>
+              <InsuranceOptionsPanel insuranceCoverage={insuranceCoverage} setInsuranceCoverage={setInsuranceCoverage} />
               {insuranceUploaded ? (
                 <div className="wizard-upload-complete">
                   <CheckCircle2 size={20} />
@@ -2787,6 +3010,36 @@ function WizardModal({
                 : 'Next'}
           </button>
         </div>
+
+        {vehicleReminder && (
+          <div className="vehicle-reminder-backdrop" role="presentation">
+            <div className="vehicle-reminder-modal" role="dialog" aria-modal="true" aria-labelledby="vehicleReminderTitle">
+              <button
+                className="wizard-close"
+                type="button"
+                onClick={() => setVehicleReminder(null)}
+                aria-label="Close vehicle reminder"
+              >
+                <X size={20} />
+              </button>
+              <p className="eyebrow">Before Checkout</p>
+              <h3 id="vehicleReminderTitle">Have these ready for {vehicleReminder.name}</h3>
+              <div className="vehicle-reminder-list">
+                <div>
+                  <FileText size={20} />
+                  <span>Driver's license number</span>
+                </div>
+                <div>
+                  <ShieldCheck size={20} />
+                  <span>Insurance declaration page if you opt out of Wheelbase insurance</span>
+                </div>
+              </div>
+              <button className="primary-btn" type="button" onClick={() => setVehicleReminder(null)}>
+                Continue
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2798,8 +3051,11 @@ function AgreementModal({
   setAgreementChecked,
   signatureName,
   setSignatureName,
+  signatureImageData,
+  setSignatureImageData,
   signAgreement,
   agreementSaving,
+  currentRental,
   onClose,
 }) {
   return (
@@ -2836,8 +3092,15 @@ function AgreementModal({
             onChange={(e) => setSignatureName(e.target.value)}
           />
 
+          <SignaturePad value={signatureImageData} onChange={setSignatureImageData} />
+
           <div className="button-row end-row">
             <button className="secondary-btn" onClick={onClose}>Cancel</button>
+            {currentRental?.agreement_snapshot && (
+              <button className="secondary-btn" type="button" onClick={() => downloadAgreement(currentRental)}>
+                Download Agreement
+              </button>
+            )}
             <button className="primary-btn" onClick={signAgreement} disabled={agreementSaving}>
               <FileSignature size={17} /> {agreementSaving ? 'Signing...' : 'Sign Agreement'}
             </button>
@@ -2846,6 +3109,115 @@ function AgreementModal({
       </div>
     </div>
   );
+}
+
+function SignaturePad({ value, onChange }) {
+  const canvasRef = useRef(null);
+  const drawingRef = useRef(false);
+
+  function getPoint(event) {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const source = event.touches?.[0] || event;
+    return {
+      x: source.clientX - rect.left,
+      y: source.clientY - rect.top,
+    };
+  }
+
+  function start(event) {
+    event.preventDefault();
+    const canvas = canvasRef.current;
+    const context = canvas.getContext('2d');
+    const point = getPoint(event);
+    drawingRef.current = true;
+    context.beginPath();
+    context.moveTo(point.x, point.y);
+  }
+
+  function move(event) {
+    if (!drawingRef.current) return;
+    event.preventDefault();
+    const canvas = canvasRef.current;
+    const context = canvas.getContext('2d');
+    const point = getPoint(event);
+    context.lineWidth = 2.4;
+    context.lineCap = 'round';
+    context.strokeStyle = '#172033';
+    context.lineTo(point.x, point.y);
+    context.stroke();
+  }
+
+  function stop() {
+    if (!drawingRef.current) return;
+    drawingRef.current = false;
+    onChange(canvasRef.current.toDataURL('image/png'));
+  }
+
+  function clear() {
+    const canvas = canvasRef.current;
+    const context = canvas.getContext('2d');
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    onChange('');
+  }
+
+  useEffect(() => {
+    if (!value || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const context = canvas.getContext('2d');
+    const image = new Image();
+    image.onload = () => {
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    };
+    image.src = value;
+  }, [value]);
+
+  return <div className="signature-pad-wrap">
+    <div className="signature-pad-header">
+      <strong>Draw signature</strong>
+      <button className="link-btn" type="button" onClick={clear}>Clear</button>
+    </div>
+    <canvas
+      ref={canvasRef}
+      className="signature-pad"
+      width="720"
+      height="220"
+      onMouseDown={start}
+      onMouseMove={move}
+      onMouseUp={stop}
+      onMouseLeave={stop}
+      onTouchStart={start}
+      onTouchMove={move}
+      onTouchEnd={stop}
+      aria-label="Draw your signature"
+    />
+  </div>;
+}
+
+function InsuranceOptionsPanel({ insuranceCoverage, setInsuranceCoverage }) {
+  return <div className="insurance-options-panel">
+    <div>
+      <strong>Insurance options</strong>
+      <span>Confirm your policy includes both coverages before upload.</span>
+    </div>
+    <div className="insurance-checks">
+      <label><input type="checkbox" checked={insuranceCoverage.collision} onChange={(event) => setInsuranceCoverage({ ...insuranceCoverage, collision: event.target.checked })} /> Collision coverage</label>
+      <label><input type="checkbox" checked={insuranceCoverage.liability} onChange={(event) => setInsuranceCoverage({ ...insuranceCoverage, liability: event.target.checked })} /> Liability coverage</label>
+    </div>
+    <a className="secondary-btn" href="#payment">Review payment and insurance requirements</a>
+  </div>;
+}
+
+function ServiceFeesSummary({ serviceFees }) {
+  if (!serviceFees.length) return null;
+
+  return <div className="invoice-row fee-summary-row">
+    <span>Optional / Admin Fees</span>
+    <strong>
+      {serviceFees.map((fee) => `${fee.name}: ${money(fee.amount)}`).join(' | ')}
+    </strong>
+  </div>;
 }
 
 function LoadingScreen() {
@@ -2920,30 +3292,9 @@ function AuthScreen({
 
   return (
     <div className="auth-screen">
-      <div className="auth-left">
-        <p className="eyebrow">Rent Me CT</p>
-        <h1>{checkoutIntent ? 'Finish your reservation.' : 'Premium rentals with a smarter client portal.'}</h1>
-        <p>
-          {checkoutIntent
-            ? 'Create an account or sign in to continue. Your selected dates and vehicle will stay attached to this checkout.'
-            : 'Sign in or create an account to continue your rental, upload documents, sign your agreement, and complete payment.'}
-        </p>
-        {checkoutIntent && (
-          <div className="agreement-status-box">
-            <Car size={24} />
-            <div>
-              <strong>{pendingVehicleName || 'Vehicle selected from website'}</strong>
-              <span>
-                {reservationForm.pickupDate && reservationForm.returnDate
-                  ? `${reservationForm.pickupDate} to ${reservationForm.returnDate}`
-                  : 'Rental dates saved from website'}
-              </span>
-            </div>
-          </div>
-        )}
-      </div>
-
       <form className="auth-card" onSubmit={handleAuth}>
+        <img className="auth-logo" src={logoMobileUrl} alt="Rent Me CT" />
+        <span className="auth-portal-label">Client</span>
         <h2>{checkoutIntent ? (isSignUp ? 'Create Account to Continue' : 'Sign In to Continue') : (isSignUp ? 'Create Account' : 'Client Login')}</h2>
 
         {isSignUp && (
@@ -2953,6 +3304,19 @@ function AuthScreen({
             onChange={(e) => update('fullName', e.target.value)}
             required
           />
+        )}
+
+        {isSignUp && (
+          <label className="auth-date-field">
+            <span>Date of birth</span>
+            <input
+              type="date"
+              max={getTodayDateInputValue()}
+              value={authForm.dateOfBirth}
+              onChange={(e) => update('dateOfBirth', e.target.value)}
+              required
+            />
+          </label>
         )}
 
         <input
@@ -3044,6 +3408,26 @@ function Metric({ icon: Icon, label, value }) {
       <strong>{value || 'Pending'}</strong>
     </div>
   );
+}
+
+function IdentityVerificationPanel({ status, verified, saving, onStart, onRefresh }) {
+  const requiresInput = ['unverified', 'requires_input', 'canceled', 'redacted'].includes(status);
+  return <div className={`identity-verification-panel ${verified ? 'verified' : status}`}>
+    <ShieldCheck size={30} />
+    <div>
+      <strong>{verified ? 'Identity verified' : status === 'processing' ? 'Stripe is checking your submission' : 'Verify your government ID and selfie'}</strong>
+      <span>{verified
+        ? 'Stripe confirmed the document and selfie match. Rent Me CT stores only the verification status and session reference.'
+        : status === 'processing'
+          ? 'Most checks finish quickly. Use refresh if this page does not update automatically.'
+          : 'You will continue to Stripe’s secure hosted verification. Stripe captures the ID and selfie; do not email these images to us.'}</span>
+      <small>This identity check does not replace Rent Me CT’s separate driver-license validity and insurance review.</small>
+      <div className="identity-verification-actions">
+        {requiresInput && <button type="button" className="primary-btn" onClick={onStart} disabled={saving}>{saving ? 'Opening Stripe...' : status === 'requires_input' ? 'Retry With Stripe Identity' : 'Start Stripe Identity'}</button>}
+        {!verified && <button type="button" className="secondary-btn" onClick={onRefresh} disabled={saving}>{saving ? 'Checking...' : 'Refresh Status'}</button>}
+      </div>
+    </div>
+  </div>;
 }
 
 function ChecklistItem({ icon: Icon, title, status, completed, onOpen }) {
@@ -3192,6 +3576,29 @@ function getTodayDateInputValue(date = new Date()) {
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
+function customerAge(dateOfBirth, today = new Date()) {
+  const [year, month, day] = String(dateOfBirth || '').split('-').map(Number);
+  if (!year || !month || !day) return null;
+  const birthDate = new Date(year, month - 1, day);
+  if (
+    Number.isNaN(birthDate.getTime()) ||
+    birthDate.getFullYear() !== year ||
+    birthDate.getMonth() + 1 !== month ||
+    birthDate.getDate() !== day ||
+    birthDate > today
+  ) return null;
+  let age = today.getFullYear() - year;
+  const birthdayHasPassed = today.getMonth() + 1 > month || (today.getMonth() + 1 === month && today.getDate() >= day);
+  if (!birthdayHasPassed) age -= 1;
+  return age;
+}
+function isValidBirthDate(dateOfBirth) {
+  return customerAge(dateOfBirth) !== null;
+}
+function isCustomerUnder25(dateOfBirth) {
+  const age = customerAge(dateOfBirth);
+  return age !== null && age < 25;
+}
 
 function getNextDateInputValue(value) {
   const date = new Date(`${value}T00:00:00`);
@@ -3228,13 +3635,11 @@ function vehicleImageKey(value) {
 }
 
 const VEHICLE_IMAGES_BY_KEY = Object.fromEntries(
-  Object.entries(VEHICLE_IMAGE_MODULES).map(([path, url]) => {
-    const filename = path.split('/').pop()?.replace(/\.[^.]+$/, '') || '';
-    return [vehicleImageKey(filename), url];
-  })
+  DEFAULT_VEHICLE_IMAGE_NAMES.map((name) => [vehicleImageKey(name), `/assets/${name}.webp`])
 );
 
 function getVehicleImage(vehicle) {
+  if (Array.isArray(vehicle?.image_urls) && vehicle.image_urls[0]) return vehicle.image_urls[0];
   const imageKey = vehicleImageKey(vehicle?.name);
   if (VEHICLE_IMAGES_BY_KEY[imageKey]) return VEHICLE_IMAGES_BY_KEY[imageKey];
 
@@ -3482,7 +3887,7 @@ function rentalPeriodsOverlap(reservation, rental) {
   return requestedStart < blockedUntil && requestedEnd > bookedStart;
 }
 
-function buildAgreementWithDetails({ agreementText, profile, email, vehicle, reservation, rental }) {
+function buildAgreementWithDetails({ agreementText, profile, email, vehicle, reservation, rental, signatureName, signatureImageData }) {
   const details = `
 AUTO-FILLED RENTAL DETAILS
 
@@ -3511,11 +3916,65 @@ Tax Amount: ${rental?.tax_amount ? money(rental.tax_amount) : 'Pending'}
 Security Deposit: ${rental?.security_deposit ? money(rental.security_deposit) : vehicle?.security_deposit ? money(vehicle.security_deposit) : 'Pending'}
 Mileage Policy: ${MILEAGE_POLICY}
 Cancellation Terms: ${CANCELLATION_TERMS}
+Typed Signature: ${signatureName || rental?.agreement_signature_name || 'Pending'}
+Drawn Signature Image: ${signatureImageData || extractSignatureImage(rental?.agreement_snapshot) || 'Pending'}
 
 ------------------------------------------------------------
 `;
 
   return `${details}\n${agreementText}`;
+}
+
+function extractSignatureImage(snapshot = '') {
+  const match = String(snapshot).match(/Drawn Signature Image:\s*(data:image\/png;base64,[^\s]+)/);
+  return match?.[1] || '';
+}
+
+function agreementHtml(snapshot, title = 'Rent Me CT Signed Agreement') {
+  const signatureImage = extractSignatureImage(snapshot);
+  const printableText = String(snapshot || '').replace(/Drawn Signature Image:\s*data:image\/png;base64,[^\s]+/, 'Drawn Signature Image: embedded below');
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>${escapeHtml(title)}</title>
+  <style>
+    body{font-family:Arial,sans-serif;color:#172033;line-height:1.5;padding:32px;max-width:900px;margin:auto}
+    pre{white-space:pre-wrap;font-family:inherit}
+    .signature{margin-top:24px;border:1px solid #d6dee8;border-radius:10px;padding:16px}
+    .signature img{max-width:420px;width:100%;height:auto;display:block}
+  </style>
+</head>
+<body>
+  <pre>${escapeHtml(printableText)}</pre>
+  ${signatureImage ? `<div class="signature"><strong>Drawn Signature</strong><img src="${signatureImage}" alt="Drawn renter signature"></div>` : ''}
+</body>
+</html>`;
+}
+
+function downloadAgreement(rental) {
+  const snapshot = rental?.agreement_snapshot;
+  if (!snapshot) return;
+  const html = agreementHtml(snapshot, `Rent Me CT Agreement ${rental.id || ''}`);
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `rent-me-ct-agreement-${rental.id || 'signed'}.html`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function escapeHtml(value) {
+  return String(value || '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;',
+  })[char]);
 }
 
 createRoot(document.getElementById('root')).render(<App />);

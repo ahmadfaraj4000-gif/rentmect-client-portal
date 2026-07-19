@@ -144,6 +144,20 @@ select option {
 }
 .link-btn { background: none; border: 0; color: white; font-weight: 900; margin-top: 15px; cursor: pointer; }
 .auth-message { color: #fff; background: rgba(229,9,20,.16); border: 1px solid rgba(229,9,20,.32); padding: 12px; border-radius: 14px; }
+.auth-date-field,
+.profile-date-field {
+  display: grid;
+  gap: 6px;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 850;
+}
+.auth-date-field small,
+.profile-date-field small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
 
 .portal-shell {
   display: grid;
@@ -655,7 +669,79 @@ select option {
   color: var(--muted);
   line-height: 1.4;
 }
+
+.identity-verification-panel{
+  display:flex;
+  gap:16px;
+  align-items:flex-start;
+  padding:18px;
+  border:1px solid rgba(255,255,255,.18);
+  border-radius:14px;
+  background:rgba(255,255,255,.06);
+}
+.identity-verification-panel>svg{flex:0 0 auto;color:#f2c86b}
+.identity-verification-panel.verified>svg{color:#8dffa1}
+.identity-verification-panel>div{display:grid;gap:8px}
+.identity-verification-panel strong{font-size:17px}
+.identity-verification-panel span,.identity-verification-panel small{line-height:1.5;color:rgba(255,255,255,.76)}
+.identity-verification-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px}
+@media(max-width:620px){.identity-verification-panel{display:grid}.identity-verification-actions button{width:100%}}
 .wizard-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 22px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+
+.vehicle-reminder-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1010;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(16,19,27,.56);
+  backdrop-filter: blur(8px);
+}
+.vehicle-reminder-modal {
+  position: relative;
+  width: min(520px, 94vw);
+  padding: 24px;
+  border: 1px solid rgba(18,24,38,.12);
+  border-radius: 18px;
+  background: #fff;
+  color: #10131b;
+  box-shadow: 0 28px 80px rgba(20,24,35,.24);
+}
+.vehicle-reminder-modal .wizard-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  background: #fff;
+  color: #202636;
+  border-color: rgba(18,24,38,.14);
+}
+.vehicle-reminder-modal h3 {
+  margin: 0 42px 16px 0;
+  font-size: 24px;
+  line-height: 1.15;
+}
+.vehicle-reminder-list {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 18px;
+}
+.vehicle-reminder-list div {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid rgba(229,9,20,.16);
+  border-radius: 14px;
+  background: #fff6f6;
+  color: #202636;
+  font-weight: 850;
+  line-height: 1.35;
+}
+.vehicle-reminder-list svg {
+  flex: 0 0 auto;
+  color: #e50914;
+}
 
 .agreement-scroll-box,
 .agreement-preview,
@@ -1326,6 +1412,444 @@ select option {
   }
 }
 
+/* Final visual reset: flat, calm, professional */
+.auth-screen,
+.loading-screen,
+.portal-shell,
+.hero-panel,
+.auth-card,
+.panel,
+.metric-card,
+.check-item,
+.agreement-modal,
+.wizard-modal,
+.tab-nav button.active,
+.primary-btn,
+.support-form button {
+  background-image: none !important;
+}
+.auth-screen,
+.loading-screen,
+.portal-shell {
+  background: #eef3f2 !important;
+}
+.sidebar {
+  background: #193c2d !important;
+  box-shadow: none !important;
+}
+.tab-nav button.active {
+  background: #25513f !important;
+  box-shadow: inset 4px 0 0 #e7473f !important;
+}
+.hero-panel,
+.return-action-block,
+.extension-form,
+.reservation-summary div,
+.uploaded-document-row,
+.selected-vehicle-media,
+.metric-card,
+.check-item,
+.invoice-row,
+.doc-row,
+.history-row,
+.message-row,
+.vehicle-card,
+.notice-banner,
+.return-review-notice {
+  background: #fff !important;
+  box-shadow: none !important;
+  border-color: #d9e1df !important;
+  border-radius: 6px !important;
+}
+.auth-card input,
+.support-form input,
+.portal-form input,
+.portal-form select,
+.signature-input {
+  box-shadow: none !important;
+  border-radius: 4px !important;
+}
+.primary-btn,
+.support-form button {
+  background: #193c2d !important;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+}
+.secondary-btn,
+.return-btn,
+.check-item button,
+label.secondary-btn {
+  border-radius: 4px !important;
+  box-shadow: none !important;
+}
+
+/* Final contrast and color discipline pass */
+:root {
+  --client-sidebar: #123d2a;
+  --client-sidebar-active: #1d5039;
+  --client-green: #145c37;
+  --client-red: #9f241f;
+  --client-line: #cfd9d6;
+}
+.sidebar .nav-toggle {
+  background: transparent !important;
+  border: 1px solid rgba(255,255,255,.34) !important;
+  color: #fff !important;
+  box-shadow: none !important;
+}
+.sidebar .nav-toggle svg,
+.sidebar .nav-toggle span {
+  color: #fff !important;
+}
+.sidebar .nav-toggle:hover {
+  background: rgba(255,255,255,.08) !important;
+}
+.tab-nav button.active {
+  background: var(--client-sidebar-active) !important;
+  box-shadow: inset 4px 0 0 var(--client-red) !important;
+}
+.primary-btn,
+.support-form button {
+  background: var(--client-sidebar) !important;
+}
+.eyebrow {
+  color: var(--client-red) !important;
+}
+.check-item.complete,
+.wizard-upload-complete,
+.return-confirmation-box,
+.document-on-file-note,
+.extension-payment-note.paid {
+  background: #e6f0ea !important;
+  color: var(--client-green) !important;
+  border-color: #6a9a7b !important;
+}
+.auth-message,
+.pickup-reminder-box,
+.extension-payment-note {
+  background: #f1ead7 !important;
+  color: #604515 !important;
+  border-color: #9c7b31 !important;
+}
+.return-review-notice,
+.vehicle-picker-card.selected {
+  border-color: var(--client-red) !important;
+}
+.return-review-notice > strong {
+  background: #f5dedc !important;
+  color: #81211d !important;
+}
+.insurance-options-panel {
+  background: #f7faf9 !important;
+  border-color: #6a9a7b !important;
+}
+
+.brand-logo,
+.auth-logo {
+  width: 54px;
+  height: 54px;
+  object-fit: contain;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+.auth-logo {
+  width: 86px;
+  height: 86px;
+  margin-bottom: 18px;
+}
+.portal-shell.nav-collapsed {
+  grid-template-columns: 86px 1fr;
+}
+.nav-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: -10px 0 18px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+  color: var(--text);
+  font-weight: 900;
+}
+.sidebar.collapsed {
+  padding: 22px 16px;
+}
+.sidebar.collapsed .brand-block {
+  justify-content: center;
+}
+.sidebar.collapsed .brand-block div:not(:first-child),
+.sidebar.collapsed .nav-toggle span,
+.sidebar.collapsed .tab-nav button span,
+.sidebar.collapsed .logout-btn span {
+  display: none;
+}
+.sidebar.collapsed .tab-nav button,
+.sidebar.collapsed .logout-btn,
+.sidebar.collapsed .nav-toggle {
+  justify-content: center;
+  padding: 13px;
+}
+.signature-pad-wrap {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+}
+.signature-pad-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+.signature-pad {
+  width: 100%;
+  height: 180px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #fff;
+  touch-action: none;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.8);
+}
+.insurance-options-panel {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(46,125,74,.24);
+  border-radius: 18px;
+  background: rgba(46,125,74,.08);
+  margin-bottom: 12px;
+}
+.insurance-options-panel strong,
+.signature-pad-header strong {
+  color: var(--text);
+}
+.insurance-options-panel span {
+  display: block;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.insurance-checks {
+  display: grid;
+  gap: 8px;
+}
+.insurance-checks label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 900;
+}
+.insurance-upload-card {
+  display: grid;
+  gap: 12px;
+}
+.fee-summary-row {
+  grid-column: 1 / -1;
+}
+.fee-summary-row strong {
+  white-space: normal;
+  text-align: right;
+}
+@media(max-width:900px) {
+  .portal-shell.nav-collapsed,
+  .portal-shell {
+    grid-template-columns: 1fr;
+  }
+  .sidebar.collapsed .tab-nav,
+  .sidebar.collapsed .logout-btn {
+    display: none;
+  }
+  .sidebar.collapsed .brand-block div:not(:first-child) {
+    display: block;
+  }
+}
+
+/* Flat professional client theme: red, white, green; no gradients */
+:root {
+  --client-bg: #eef3f2;
+  --client-surface: #ffffff;
+  --client-ink: #263238;
+  --client-muted: #60747c;
+  --client-green: #1f7a4d;
+  --client-red: #e7473f;
+  --client-sidebar: #193c2d;
+  --client-sidebar-active: #25513f;
+  --client-line: #d9e1df;
+}
+body {
+  background: var(--client-bg);
+  color: var(--client-ink);
+}
+.loading-screen,
+.auth-screen,
+.portal-shell,
+.auth-card,
+.panel,
+.metric-card,
+.hero-panel,
+.agreement-modal,
+.wizard-modal {
+  background-image: none !important;
+}
+.portal-shell,
+.auth-screen,
+.loading-screen {
+  background: var(--client-bg) !important;
+}
+.sidebar {
+  background: var(--client-sidebar) !important;
+  border-right: 0;
+  box-shadow: none;
+}
+.brand-block strong,
+.brand-block span,
+.sidebar .nav-toggle,
+.tab-nav button,
+.logout-btn {
+  color: #fff !important;
+}
+.brand-logo {
+  background: #fff;
+  border-color: rgba(255,255,255,.28);
+}
+.nav-toggle,
+.tab-nav button,
+.logout-btn {
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 4px !important;
+}
+.tab-nav button svg,
+.logout-btn svg,
+.nav-toggle svg {
+  color: rgba(255,255,255,.9);
+}
+.tab-nav button:hover,
+.tab-nav button.active {
+  background: var(--client-sidebar-active) !important;
+  color: #fff !important;
+}
+.tab-nav button.active {
+  box-shadow: inset 4px 0 0 var(--client-red);
+}
+.portal-main {
+  max-width: none;
+  padding: 24px;
+}
+.portal-header {
+  padding: 0 0 18px;
+  border-bottom: 1px solid var(--client-line);
+  margin-bottom: 18px;
+}
+.portal-header h1 {
+  font-size: 34px;
+  letter-spacing: 0;
+  color: var(--client-ink);
+}
+.portal-header span,
+.muted,
+.history-row span,
+.message span,
+.message p {
+  color: var(--client-muted);
+}
+.auth-card,
+.panel,
+.metric-card,
+.hero-panel,
+.agreement-modal,
+.wizard-modal,
+.reservation-summary div,
+.check-item,
+.vehicle-picker-card,
+.message,
+.agreement-status-box,
+.extension-form,
+.return-action-block,
+.insurance-options-panel,
+.signature-pad {
+  background: #fff !important;
+  border: 1px solid var(--client-line) !important;
+  border-radius: 6px !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}
+.panel,
+.hero-panel {
+  padding: 20px;
+}
+.panel h3,
+.hero-panel h2,
+.auth-card h2 {
+  letter-spacing: 0;
+  color: var(--client-ink);
+}
+.eyebrow {
+  color: var(--client-red);
+  letter-spacing: .12em;
+}
+.primary-btn,
+.support-form button {
+  background: var(--client-sidebar) !important;
+  color: #fff !important;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+}
+.secondary-btn,
+.return-btn,
+.check-item button,
+label.secondary-btn {
+  background: #fff !important;
+  color: var(--client-ink) !important;
+  border: 1px solid var(--client-line) !important;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+}
+.auth-card input,
+.portal-form input,
+.portal-form select,
+.support-form input,
+.signature-input {
+  border-radius: 4px !important;
+  background: #fff !important;
+  color: var(--client-ink) !important;
+  border-color: var(--client-line) !important;
+  box-shadow: none !important;
+}
+.check-item.complete,
+.wizard-upload-complete,
+.return-confirmation-box,
+.document-on-file-note,
+.extension-payment-note.paid {
+  background: #edf7f1 !important;
+  color: #14663d !important;
+  border-color: #b9dbc8 !important;
+}
+.auth-message,
+.pickup-reminder-box,
+.extension-payment-note {
+  background: #fff8e7 !important;
+  color: #775200 !important;
+  border-color: #ead59b !important;
+}
+.return-review-notice {
+  border-left-color: var(--client-red);
+}
+.return-review-notice svg,
+.agreement-status-box svg {
+  color: var(--client-red);
+}
+.link-btn {
+  color: var(--client-green);
+}
+.signature-pad {
+  border-radius: 4px !important;
+}
+.insurance-options-panel {
+  background: #f7faf9 !important;
+}
+
 /* Light customer theme aligned with the public booking pages. */
 .loading-screen,
 .auth-screen,
@@ -1437,9 +1961,9 @@ select option {
 
 .next-vehicle-card,
 .extension-payment-note {
-  background: #fff8e5;
-  color: #503900;
-  border-color: rgba(184,134,11,.26);
+  background: #f3ddda;
+  color: #681512;
+  border-color: #9f241f;
 }
 
 .extension-payment-note.paid {
@@ -1509,4 +2033,645 @@ select option {
     grid-column: 1 / -1;
     justify-self: start;
   }
+}
+
+/* Pull the client portal back visually to match the denser admin/Wheelbase scale. */
+body {
+  font-size: 14px !important;
+}
+.portal-shell {
+  grid-template-columns: 224px minmax(0, 1fr) !important;
+}
+.portal-shell.nav-collapsed {
+  grid-template-columns: 72px minmax(0, 1fr) !important;
+}
+.portal-main {
+  padding: 16px 18px !important;
+  max-width: 1420px !important;
+}
+.portal-header {
+  margin-bottom: 12px !important;
+}
+.portal-header h1 {
+  font-size: 26px !important;
+  letter-spacing: 0 !important;
+}
+.hero-panel {
+  padding: 16px !important;
+  margin-bottom: 12px !important;
+}
+.hero-panel h2 {
+  font-size: 26px !important;
+  letter-spacing: 0 !important;
+}
+.hero-panel p {
+  font-size: 13px !important;
+  line-height: 1.45 !important;
+}
+.panel,
+.metric-card,
+.return-action-block,
+.extension-form,
+.uploaded-document-row,
+.history-row,
+.message-row,
+.vehicle-card {
+  border-radius: 4px !important;
+}
+.panel {
+  padding: 15px !important;
+}
+.panel h3 {
+  font-size: 21px !important;
+  margin-bottom: 8px !important;
+}
+.metric-grid {
+  gap: 10px !important;
+  margin-bottom: 12px !important;
+}
+.metric-card {
+  padding: 12px !important;
+}
+.metric-card strong {
+  font-size: 14px !important;
+}
+.sidebar {
+  padding: 12px !important;
+}
+.brand-block {
+  margin-bottom: 14px !important;
+}
+.brand-mark,
+.brand-logo {
+  width: 40px !important;
+  height: 40px !important;
+  border-radius: 4px !important;
+}
+.side-nav,
+.tab-nav {
+  gap: 5px !important;
+}
+.side-nav a,
+.tab-nav button,
+.sidebar .nav-toggle {
+  min-height: 38px !important;
+  padding: 9px 10px !important;
+  border-radius: 4px !important;
+  font-size: 13px !important;
+}
+.primary-btn,
+.secondary-btn,
+.return-btn,
+.logout-btn,
+.support-form button,
+.check-item button {
+  min-height: 36px !important;
+  padding: 8px 12px !important;
+  border-radius: 4px !important;
+  font-size: 13px !important;
+}
+.auth-card input,
+.support-form input,
+.portal-form input,
+.portal-form select,
+.signature-input {
+  min-height: 38px !important;
+  padding: 9px 11px !important;
+  border-radius: 4px !important;
+  font-size: 13px !important;
+}
+.check-item,
+.invoice-row,
+.doc-row,
+.history-row,
+.message-row,
+.reservation-summary div {
+  padding: 10px 12px !important;
+}
+.check-item strong,
+.invoice-row strong,
+.doc-row strong,
+.history-row strong,
+.message-row strong {
+  font-size: 14px !important;
+}
+.check-item span,
+.invoice-row span,
+.doc-row span,
+.history-row span,
+.message-row span,
+.muted {
+  font-size: 12px !important;
+  line-height: 1.4 !important;
+}
+.selected-vehicle-media {
+  max-width: 330px !important;
+  border-radius: 4px !important;
+}
+@media (max-width: 900px) {
+  .portal-shell,
+  .portal-shell.nav-collapsed {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* Final brand pass: make green the dominant client portal color. */
+:root {
+  --client-green: #0f6f3c;
+  --client-green-dark: #0d4f2f;
+  --client-red: #9f241f;
+  --client-sidebar: #0f3f2a;
+  --client-sidebar-active: #155a38;
+  --client-line: #cddad4;
+  --green: #0f6f3c;
+  --red: #9f241f;
+  --red2: #9f241f;
+}
+.brand-logo {
+  width: 116px !important;
+  height: auto !important;
+  max-height: 60px !important;
+  object-fit: contain !important;
+  border: 1px solid rgba(255,255,255,.65) !important;
+  border-radius: 4px !important;
+  background: #fff !important;
+  padding: 7px 10px !important;
+  box-sizing: border-box !important;
+}
+.auth-logo {
+  width: 190px !important;
+  height: auto !important;
+  max-height: 84px !important;
+  object-fit: contain !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+.portal-shell.nav-collapsed .brand-logo {
+  width: 46px !important;
+  max-height: 42px !important;
+  padding: 5px !important;
+}
+.tab-nav button.active,
+.side-nav a.active {
+  background: var(--client-sidebar-active) !important;
+  box-shadow: inset 4px 0 0 #fff !important;
+}
+.tab-nav button:hover,
+.side-nav a:hover {
+  background: #174b34 !important;
+}
+.primary-btn,
+.return-btn,
+.support-form button,
+.check-item button {
+  background: var(--client-green) !important;
+  border-color: var(--client-green) !important;
+  color: #fff !important;
+  box-shadow: none !important;
+}
+.primary-btn:hover,
+.return-btn:hover,
+.support-form button:hover,
+.check-item button:hover {
+  background: var(--client-green-dark) !important;
+  border-color: var(--client-green-dark) !important;
+}
+.eyebrow {
+  color: var(--client-green) !important;
+}
+.check-item.complete,
+.extension-payment-note.paid,
+.insurance-status.complete {
+  background: rgba(15,111,60,.1) !important;
+  color: var(--client-green-dark) !important;
+  border-color: rgba(15,111,60,.28) !important;
+}
+.auth-card input:focus,
+.support-form input:focus,
+.portal-form input:focus,
+.portal-form select:focus,
+.signature-input:focus {
+  border-color: var(--client-green) !important;
+  box-shadow: 0 0 0 3px rgba(15,111,60,.14) !important;
+}
+
+/* Layout polish: tighter rhythm without cramped text. */
+.content-grid,
+.metric-grid,
+.vehicle-date-grid,
+.vehicle-picker-grid {
+  gap: 12px !important;
+}
+.portal-form,
+.support-form,
+.extension-form {
+  gap: 10px !important;
+}
+.portal-form label,
+.support-form label,
+.extension-form label {
+  display: grid !important;
+  gap: 5px !important;
+  min-width: 0 !important;
+}
+.portal-form label span,
+.support-form label span,
+.extension-form label span {
+  color: var(--client-muted) !important;
+  font-size: 11px !important;
+  font-weight: 950 !important;
+  letter-spacing: .04em !important;
+  text-transform: uppercase !important;
+}
+.document-actions,
+.button-row,
+.header-actions,
+.insurance-checks {
+  gap: 8px !important;
+  align-items: center !important;
+}
+.document-actions button,
+.document-actions label,
+.button-row button {
+  white-space: nowrap !important;
+}
+.uploaded-document-row,
+.check-item,
+.invoice-row,
+.history-row,
+.message-row {
+  grid-template-columns: minmax(0,1fr) auto !important;
+}
+.uploaded-document-row strong,
+.uploaded-document-row span,
+.check-item strong,
+.check-item span,
+.invoice-row span,
+.invoice-row strong {
+  overflow-wrap: anywhere !important;
+}
+@media (max-width: 760px) {
+  .uploaded-document-row,
+  .check-item,
+  .invoice-row,
+  .history-row,
+  .message-row {
+    grid-template-columns: 1fr !important;
+  }
+  .document-actions,
+  .button-row {
+    justify-content: flex-start !important;
+  }
+}
+
+/* Brand hierarchy swap: logo red shell, logo green accent. */
+:root {
+  --brand-red-shell: #b5161b;
+  --brand-red-shell-active: #8f1116;
+  --brand-red-shell-hover: #9f1419;
+  --brand-olive: #238a3a;
+  --brand-olive-active: #176f2b;
+  --client-sidebar: var(--brand-red-shell);
+  --client-sidebar-active: var(--brand-red-shell-active);
+  --client-green: var(--brand-olive);
+  --client-green-dark: #0b2f20;
+  --client-red: var(--brand-olive);
+  --green: var(--brand-olive);
+  --red: var(--brand-olive);
+  --red2: var(--brand-olive);
+}
+.sidebar {
+  background: var(--brand-red-shell) !important;
+  border-right: 1px solid #7f1014 !important;
+}
+.sidebar .nav-toggle,
+.tab-nav button,
+.side-nav a,
+.logout-btn {
+  background: rgba(255,255,255,.055) !important;
+  color: #fff !important;
+  border: 1px solid rgba(255,255,255,.11) !important;
+}
+.sidebar .nav-toggle:hover,
+.tab-nav button:hover,
+.side-nav a:hover {
+  background: var(--brand-red-shell-hover) !important;
+}
+.tab-nav button.active,
+.side-nav a.active {
+  background: var(--brand-red-shell-active) !important;
+  box-shadow: inset 4px 0 0 var(--brand-olive) !important;
+}
+.tab-nav button svg,
+.side-nav a svg,
+.sidebar .nav-toggle svg,
+.logout-btn svg {
+  color: #fff !important;
+}
+.brand-block span,
+.sidebar .nav-toggle span,
+.tab-nav button span,
+.side-nav a span,
+.logout-btn span {
+  color: #fff !important;
+}
+.primary-btn,
+.return-btn,
+.support-form button,
+.check-item button {
+  background: var(--brand-olive) !important;
+  border-color: var(--brand-olive) !important;
+}
+.primary-btn:hover,
+.return-btn:hover,
+.support-form button:hover,
+.check-item button:hover {
+  background: var(--brand-olive-active) !important;
+  border-color: var(--brand-olive-active) !important;
+}
+.eyebrow {
+  color: var(--brand-olive) !important;
+}
+
+/* Separate the sidebar identity from its controls with balanced spacing. */
+.portal-shell .sidebar .brand-block {
+  width: 100% !important;
+  margin-bottom: 24px !important;
+  padding-bottom: 24px !important;
+  border-bottom: 1px solid rgba(255,255,255,.22) !important;
+  box-sizing: border-box !important;
+}
+
+@media (max-width: 760px) {
+  .portal-shell .sidebar .brand-block {
+    margin-bottom: 0 !important;
+    padding-bottom: 0 !important;
+    border-bottom: 0 !important;
+  }
+}
+
+.portal-shell .portal-header .eyebrow {
+  color: var(--brand-olive) !important;
+}
+
+.portal-shell .portal-header h1 {
+  color: #223037 !important;
+}
+
+.portal-shell .portal-header span {
+  color: #607176 !important;
+}
+.auth-card input:focus,
+.support-form input:focus,
+.portal-form input:focus,
+.portal-form select:focus,
+.signature-input:focus {
+  border-color: var(--brand-olive) !important;
+  box-shadow: 0 0 0 3px rgba(35,138,58,.16) !important;
+}
+.check-item.complete,
+.extension-payment-note.paid,
+.insurance-status.complete {
+  background: rgba(15,63,42,.1) !important;
+  color: var(--brand-olive) !important;
+  border-color: rgba(35,138,58,.28) !important;
+}
+
+/* Final logo fit: generated transparent assets should never be cropped. */
+.brand-block picture {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 100% !important;
+}
+
+.brand-logo,
+.portal-shell.nav-collapsed .brand-logo {
+  display: block !important;
+  width: 148px !important;
+  height: 52px !important;
+  max-width: 100% !important;
+  max-height: none !important;
+  object-fit: contain !important;
+  object-position: center !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
+}
+
+.portal-shell.nav-collapsed .brand-logo {
+  width: 58px !important;
+  height: 42px !important;
+}
+
+.auth-logo {
+  display: block !important;
+  width: 220px !important;
+  height: 72px !important;
+  max-width: 100% !important;
+  max-height: none !important;
+  object-fit: contain !important;
+  object-position: center !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+}
+
+@media (max-width: 760px) {
+  .brand-logo,
+  .portal-shell.nav-collapsed .brand-logo {
+    width: 138px !important;
+    height: 48px !important;
+    background: transparent !important;
+    border: 0 !important;
+    padding: 0 !important;
+  }
+}
+
+/* Final auth layout: match admin portal with centered logo and form. */
+.auth-screen {
+  min-height: 100vh !important;
+  display: grid !important;
+  grid-template-columns: 1fr !important;
+  place-items: center !important;
+  gap: 0 !important;
+  padding: 24px !important;
+  background: #eef3f2 !important;
+}
+
+.auth-screen .auth-left {
+  display: none !important;
+}
+
+.auth-screen .auth-card {
+  width: min(420px, calc(100vw - 32px)) !important;
+  max-height: calc(100vh - 48px) !important;
+  overflow: auto !important;
+  display: grid !important;
+  justify-items: center !important;
+  gap: 14px !important;
+  padding: 30px !important;
+  border-radius: 8px !important;
+  background: #fff !important;
+  border: 1px solid var(--client-line) !important;
+  box-shadow: 0 12px 32px rgba(15,63,42,.08) !important;
+  backdrop-filter: none !important;
+}
+
+.auth-screen .auth-logo {
+  width: 230px !important;
+  height: 76px !important;
+  margin: 0 !important;
+  object-fit: contain !important;
+}
+
+.auth-screen .auth-portal-label {
+  margin: -4px 0 8px !important;
+  color: #223037 !important;
+  font-size: 18px !important;
+  font-weight: 950 !important;
+  line-height: 1 !important;
+  text-align: center !important;
+}
+
+.auth-screen .auth-card h2 {
+  display: none !important;
+}
+
+.auth-screen .auth-card input,
+.auth-screen .checkbox-row,
+.auth-screen .primary-btn,
+.auth-screen .link-btn,
+.auth-screen .auth-message {
+  width: 100% !important;
+}
+
+.auth-screen .auth-card input {
+  height: 48px !important;
+  margin: 0 !important;
+  border-radius: 5px !important;
+  font-size: 15px !important;
+  background: #fff !important;
+  color: #223037 !important;
+  border-color: var(--client-line) !important;
+  box-shadow: none !important;
+}
+
+.auth-screen .auth-card input::placeholder {
+  color: #95a1af !important;
+}
+
+.auth-screen .primary-btn {
+  justify-content: center !important;
+}
+
+.auth-screen .link-btn {
+  margin: 0 !important;
+  color: var(--brand-olive) !important;
+  text-align: center !important;
+  justify-content: center !important;
+}
+
+.auth-screen .checkbox-row {
+  color: #607176 !important;
+}
+
+.auth-screen .checkbox-row input {
+  width: auto !important;
+  height: auto !important;
+}
+
+/* Client sidebar brand should match the admin logo-only treatment. */
+.portal-shell .brand-block {
+  justify-content: center !important;
+  gap: 0 !important;
+}
+
+/* Final client/admin style match: same red shell, white controls, and green action shade. */
+:root {
+  --brand-red-shell: #b5161b;
+  --brand-red-shell-active: #8f1116;
+  --brand-red-shell-hover: #9f1419;
+  --brand-olive: #238a3a;
+  --brand-olive-active: #176f2b;
+  --client-sidebar: var(--brand-red-shell);
+  --client-sidebar-active: var(--brand-red-shell-active);
+  --client-green: var(--brand-olive);
+  --client-green-dark: #0b2f20;
+}
+
+.portal-shell .sidebar {
+  background: var(--brand-red-shell) !important;
+  border-right: 1px solid #7f1014 !important;
+}
+
+.portal-shell .tab-nav button,
+.portal-shell .side-nav a {
+  background: rgba(255,255,255,.055) !important;
+  color: #fff !important;
+  border: 1px solid rgba(255,255,255,.11) !important;
+}
+
+.portal-shell .tab-nav button:hover,
+.portal-shell .side-nav a:hover {
+  background: var(--brand-red-shell-hover) !important;
+}
+
+.portal-shell .tab-nav button.active,
+.portal-shell .side-nav a.active {
+  background: var(--brand-red-shell-active) !important;
+  box-shadow: inset 4px 0 0 #fff !important;
+}
+
+.portal-shell .tab-nav button svg,
+.portal-shell .tab-nav button span,
+.portal-shell .side-nav a svg,
+.portal-shell .side-nav a span {
+  color: #fff !important;
+}
+
+.portal-shell .nav-toggle,
+.portal-shell .logout-btn {
+  background: #fff !important;
+  color: var(--brand-red-shell) !important;
+  border: 1px solid rgba(255,255,255,.85) !important;
+  box-shadow: 0 6px 18px rgba(0,0,0,.12) !important;
+}
+
+.portal-shell .nav-toggle svg,
+.portal-shell .nav-toggle span,
+.portal-shell .logout-btn svg,
+.portal-shell .logout-btn span {
+  color: var(--brand-red-shell) !important;
+}
+
+.portal-shell .nav-toggle:hover,
+.portal-shell .logout-btn:hover {
+  background: #fff5f5 !important;
+  color: var(--brand-red-shell-active) !important;
+}
+
+.primary-btn,
+.return-btn,
+.support-form button,
+.check-item button {
+  background: var(--brand-olive) !important;
+  border-color: var(--brand-olive) !important;
+  color: #fff !important;
+}
+
+.primary-btn:hover,
+.return-btn:hover,
+.support-form button:hover,
+.check-item button:hover {
+  background: var(--brand-olive-active) !important;
+  border-color: var(--brand-olive-active) !important;
+}
+
+.eyebrow {
+  color: var(--brand-olive) !important;
 }
