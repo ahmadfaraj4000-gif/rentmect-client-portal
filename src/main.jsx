@@ -2739,7 +2739,8 @@ async function verifyPhoneCode() {
           sendingCode={sendingCode}
           verifyingCode={verifyingCode}
           phoneVerified={phoneVerified}
-          vehicles={vehicles}
+          bookingFlowTestMode={bookingFlowTestMode}
+          checkoutVehicleChoices={checkoutVehicleChoices}
           reservationForm={reservationForm}
           setReservationForm={setReservationForm}
           selectedVehicle={selectedVehicle}
@@ -2794,7 +2795,8 @@ function WizardModal({
   sendingCode,
   verifyingCode,
   phoneVerified,
-  vehicles,
+  bookingFlowTestMode,
+  checkoutVehicleChoices,
   reservationForm,
   setReservationForm,
   selectedVehicle,
