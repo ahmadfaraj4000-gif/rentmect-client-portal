@@ -19,6 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
+import BookingPreviewFleet from './BookingPreviewFleet';
 import logoUrl from './assets/logo-sidebar.png';
 import logoMobileUrl from './assets/logo-mobile.png';
 import './styles.css';
@@ -306,6 +307,9 @@ Company Representative: ____________________ Date: __________
 `;
 
 function App() {
+  const previewRoute = new URLSearchParams(window.location.search).get('preview') || '';
+  const bookingPreviewFleetMode = previewRoute === 'fleet';
+  const bookingPreviewCheckoutMode = previewRoute === '1';
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
@@ -342,6 +346,7 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [reports, setReports] = useState([]);
   const [extensionRequests, setExtensionRequests] = useState([]);
+  const [rentalCharges, setRentalCharges] = useState([]);
   const [serviceFees, setServiceFees] = useState([]);
   const [under25Pricing, setUnder25Pricing] = useState(DEFAULT_UNDER_25_PRICING);
   const [supportText, setSupportText] = useState('');
@@ -519,6 +524,12 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!session?.user?.id || !portalDataReady) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('billing') === '1' || params.get('charge')) setActiveTab('payment');
+  }, [session?.user?.id, portalDataReady]);
+
+  useEffect(() => {
     if (!checkoutExpiresAt) return undefined;
     setCheckoutNow(Date.now());
     const timer = window.setInterval(() => setCheckoutNow(Date.now()), 1000);
@@ -551,10 +562,14 @@ function App() {
 
   const currentRental = useMemo(() => {
     const blockingRentals = rentals.filter((r) => BLOCKING_RENTAL_STATUSES.includes(r.status));
-    const testPreviewSelected = pendingVehicleId === BOOKING_FLOW_TEST_VEHICLE_ID ||
-      reservationForm.vehicleId === BOOKING_FLOW_TEST_VEHICLE_ID;
-    if (testPreviewSelected) {
-      return blockingRentals.find((rental) => rental.vehicle_id === BOOKING_FLOW_TEST_VEHICLE_ID);
+    if (checkoutIntent && reservationForm.vehicleId) {
+      return blockingRentals.find((rental) => (
+        rental.vehicle_id === reservationForm.vehicleId &&
+        rental.pickup_date === reservationForm.pickupDate &&
+        rental.return_date === reservationForm.returnDate &&
+        String(rental.pickup_time || '9:00 AM') === String(reservationForm.pickupTime || '9:00 AM') &&
+        String(rental.return_time || '9:00 AM') === String(reservationForm.returnTime || '9:00 AM')
+      ));
     }
 
     const priority = (status) => {
@@ -563,7 +578,7 @@ function App() {
       return 2;
     };
     return [...blockingRentals].sort((a, b) => priority(a.status) - priority(b.status))[0];
-  }, [rentals, pendingVehicleId, reservationForm.vehicleId]);
+  }, [rentals, checkoutIntent, reservationForm.vehicleId, reservationForm.pickupDate, reservationForm.returnDate, reservationForm.pickupTime, reservationForm.returnTime]);
 
   useEffect(() => {
     if (!currentRental?.id) return;
@@ -597,7 +612,7 @@ function App() {
   );
 
   useEffect(() => {
-    if (!session?.user?.id || !portalDataReady || !checkoutIntent || checkoutWizardStarted || bookingFlowTestMode) return;
+    if (!session?.user?.id || !portalDataReady || !checkoutIntent || checkoutWizardStarted || bookingFlowTestMode || bookingPreviewCheckoutMode) return;
     if (pendingVehicleName && vehicles.length === 0) return;
     if (currentRental) {
       setCheckoutWizardStarted(true);
@@ -609,7 +624,7 @@ function App() {
     setWizardStep(contactStepCompleted ? 1 : 0);
     setWizardOpen(true);
     setCheckoutWizardStarted(true);
-  }, [session, portalDataReady, checkoutIntent, checkoutWizardStarted, pendingVehicleName, vehicles.length, reservationForm.vehicleId, currentRental, contactStepCompleted, bookingFlowTestMode]);
+  }, [session, portalDataReady, checkoutIntent, checkoutWizardStarted, pendingVehicleName, vehicles.length, reservationForm.vehicleId, currentRental, contactStepCompleted, bookingFlowTestMode, bookingPreviewCheckoutMode]);
 
   const previousRentals = useMemo(() => {
     return rentals.filter((r) => ['completed', 'cancelled'].includes(r.status));
@@ -645,7 +660,10 @@ function App() {
     const markupPercentage = under25 ? Number(under25Pricing.rental_markup_percentage || 0) : 0;
     const markupAmount = baseRentalTotal * markupPercentage / 100;
     const rentalTotal = baseRentalTotal + markupAmount;
-    const taxAmount = rentalTotal * CT_TAX_RATE;
+    const serviceFeeTotal = serviceFees.reduce((sum, fee) => sum + Number(fee.amount || 0), 0);
+    const taxableServiceFeeTotal = serviceFees.filter((fee) => fee.taxable).reduce((sum, fee) => sum + Number(fee.amount || 0), 0);
+    const serviceFeeTaxAmount = taxableServiceFeeTotal * CT_TAX_RATE;
+    const taxAmount = (rentalTotal + taxableServiceFeeTotal) * CT_TAX_RATE;
     const baseSecurityDeposit = Number(selectedVehicle.security_deposit || 0);
     const securityDeposit = under25
       ? calculateUnder25Deposit(baseSecurityDeposit, under25Pricing)
@@ -658,12 +676,14 @@ function App() {
       markupPercentage,
       markupAmount,
       rentalTotal,
+      serviceFeeTotal,
+      serviceFeeTaxAmount,
       taxAmount,
       baseSecurityDeposit,
       securityDeposit,
-      checkoutTotal: rentalTotal + taxAmount,
+      checkoutTotal: rentalTotal + serviceFeeTotal + taxAmount,
     };
-  }, [selectedVehicle, reservationForm, profileForm.date_of_birth, under25Pricing]);
+  }, [selectedVehicle, reservationForm, profileForm.date_of_birth, under25Pricing, serviceFees]);
 
   const userEmail = session?.user?.email || '';
   const userName =
@@ -735,6 +755,11 @@ function App() {
   const emailVerified = Boolean(session?.user?.email_confirmed_at);
   const agreementSigned = Boolean(currentRental?.agreement_signed);
   const paymentPaid = currentRental?.payment_status === 'paid';
+  const currentRentalAdditionalCharges = rentalCharges.filter((charge) =>
+    !charge.included_in_initial_payment && (
+      charge.rental_id === currentRental?.id || !['paid', 'waived'].includes(charge.status)
+    )
+  );
   const checkoutDeadline = checkoutExpiresAt ? new Date(checkoutExpiresAt).getTime() : 0;
   const checkoutSecondsRemaining = checkoutDeadline
     ? Math.max(0, Math.ceil((checkoutDeadline - checkoutNow) / 1000))
@@ -911,6 +936,19 @@ function getBookingIdFromUrl() {
 
       applyBookingDataToPortal(pendingBooking);
 
+      if (pendingBooking.vehicle_id) {
+        const { data: pendingVehicle } = await supabase
+          .from('vehicles')
+          .select('*')
+          .eq('id', pendingBooking.vehicle_id)
+          .maybeSingle();
+        if (pendingVehicle) {
+          setVehicles((current) => current.some((vehicle) => vehicle.id === pendingVehicle.id)
+            ? current
+            : [pendingVehicle, ...current]);
+        }
+      }
+
       if (currentSession?.user?.id) {
         await supabase.rpc('claim_customer_pending_booking', {
           p_booking_id: bookingId,
@@ -972,6 +1010,7 @@ function loadSavedBookingFromWebsite() {
       fleetRentalsResult,
       serviceFeesResult,
       under25PricingResult,
+      rentalChargesResult,
     ] = await Promise.all([
       supabase.from('profiles').select('*').eq('id', userId).single(),
       supabase
@@ -1015,6 +1054,11 @@ function loadSavedBookingFromWebsite() {
         .select('*')
         .eq('id', true)
         .maybeSingle(),
+      supabase
+        .from('rental_charge_items')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false }),
     ]);
 
     if (profileResult.data) {
@@ -1039,6 +1083,7 @@ function loadSavedBookingFromWebsite() {
     if (fleetRentalsResult.data) setFleetRentals(fleetRentalsResult.data);
     if (serviceFeesResult.data) setServiceFees(serviceFeesResult.data);
     if (under25PricingResult.data) setUnder25Pricing(under25PricingResult.data);
+    if (rentalChargesResult.data) setRentalCharges(rentalChargesResult.data);
 
     setPortalDataReady(true);
     setLoading(false);
@@ -2006,6 +2051,22 @@ async function verifyPhoneCode() {
       return;
     }
 
+    if (!targetExtension && isBookingFlowTestVehicle(rental?.vehicles || selectedVehicle)) {
+      const { data: completedTestRental, error: testPaymentError } = await supabase.rpc('complete_booking_flow_test_payment', {
+        p_rental_id: rental.id,
+      });
+      setPaymentSaving(false);
+      if (testPaymentError || !completedTestRental) {
+        notify(testPaymentError?.message || 'The no-charge test payment could not be completed.');
+        return;
+      }
+      setRentals((current) => current.map((item) => item.id === completedTestRental.id
+        ? { ...item, ...completedTestRental, vehicles: item.vehicles }
+        : item));
+      notify('Test booking completed. No payment was collected.', 'success');
+      return;
+    }
+
     const bookingId = pendingBookingId || getBookingIdFromUrl();
     const returnUrl = new URL(window.location.href);
     returnUrl.hash = '';
@@ -2057,6 +2118,39 @@ async function verifyPhoneCode() {
       return;
     }
 
+    window.location.assign(data.url);
+  }
+
+  async function payAdditionalRentalCharge(charge) {
+    if (!charge?.id || paymentSaving) return;
+    setPaymentSaving(true);
+    const returnUrl = new URL(window.location.href);
+    returnUrl.hash = '';
+    returnUrl.searchParams.set('payment', 'stripe_success');
+    returnUrl.searchParams.set('charge', charge.id);
+    const cancelUrl = new URL(returnUrl);
+    cancelUrl.searchParams.set('payment', 'stripe_cancelled');
+    const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stripe-web-hook`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({
+        action: 'create_checkout',
+        targetType: 'charge',
+        chargeId: charge.id,
+        successUrl: returnUrl.toString(),
+        cancelUrl: cancelUrl.toString(),
+      }),
+    });
+    const data = await response.json().catch(() => null);
+    setPaymentSaving(false);
+    if (!response.ok || data?.error || !data?.url) {
+      notify(data?.error || 'The additional-charge checkout could not be opened.');
+      return;
+    }
     window.location.assign(data.url);
   }
 
@@ -2200,10 +2294,12 @@ async function verifyPhoneCode() {
     { key: 'messages', label: 'Messages', icon: MessageCircle },
   ];
 
+  if (bookingPreviewFleetMode) return <BookingPreviewFleet />;
+
   if (loading) return <LoadingScreen />;
 
   if (!session) {
-    if (checkoutIntent && pendingVehicleId === BOOKING_FLOW_TEST_VEHICLE_ID) {
+    if (checkoutIntent && bookingPreviewCheckoutMode) {
       return (
         <PreviewGuestExperience
           page={previewPage}
@@ -2219,6 +2315,8 @@ async function verifyPhoneCode() {
           emailAuthBusy={emailAuthBusy}
           message={message}
           reservationForm={reservationForm}
+          vehicle={selectedVehicle}
+          estimate={estimate}
           checkoutSecondsRemaining={checkoutSecondsRemaining}
           checkoutExpired={checkoutExpired}
         />
@@ -2245,7 +2343,7 @@ async function verifyPhoneCode() {
     );
   }
 
-  if (bookingFlowTestMode && checkoutIntent && !previewPortalOpen) {
+  if (bookingPreviewCheckoutMode && checkoutIntent && !previewPortalOpen) {
     return (
       <>
         {notice && (
@@ -2273,6 +2371,7 @@ async function verifyPhoneCode() {
           continueContact={continuePreviewContact}
           reservationSaving={reservationSaving}
           currentRental={currentRental}
+          vehicle={selectedVehicle || currentRental?.vehicles}
           identityStatus={identityStatus}
           identityVerified={identityVerified}
           identitySaving={identitySaving}
@@ -2773,13 +2872,24 @@ async function verifyPhoneCode() {
               <div className="invoice-row"><span>Rental Total</span><strong>{currentRental ? money(currentRental.rental_total) : estimate ? money(estimate.rentalTotal) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>CT Sales Tax</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Security Deposit</span><strong>{currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
-              <ServiceFeesSummary serviceFees={serviceFees} />
+              <ServiceFeesSummary serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
               <div className="invoice-row"><span>Mileage Included</span><strong>{MILEAGE_POLICY}</strong></div>
               <div className="invoice-row"><span>Pickup Address</span><strong>{RENTMECT_ADDRESS}</strong></div>
               <div className="invoice-row"><span>Required Before Pickup</span><strong>Phone, agreement, payment, saved driver license, and insurance for this rental</strong></div>
               <div className="invoice-row"><span>Cancellation</span><strong>{CANCELLATION_TERMS}</strong></div>
-              <div className="invoice-row total-row"><span>Total Due Today</span><strong>{estimate && !estimate.invalid ? money(estimate.checkoutTotal + estimate.securityDeposit) : currentRental ? money(Number(currentRental.rental_total || 0) + Number(currentRental.tax_amount || 0) + Number(currentRental.security_deposit || 0)) : 'Pending'}</strong></div>
+              <div className="invoice-row total-row"><span>Total Due Today</span><strong>{currentRental ? money(Number(currentRental.rental_total || 0) + Number(currentRental.service_fee_total || 0) + Number(currentRental.tax_amount || 0) + Number(currentRental.security_deposit || 0)) : estimate && !estimate.invalid ? money(estimate.checkoutTotal + estimate.securityDeposit) : 'Pending'}</strong></div>
             </div>
+            {currentRentalAdditionalCharges.length > 0 && (
+              <div className="additional-charge-list">
+                <h4>Additional rental charges</h4>
+                <p className="muted">Tolls, add-ons, or other charges added by Rent Me CT appear here with their exact tax and payment status.</p>
+                {currentRentalAdditionalCharges.map((charge) => <div className="invoice-row" key={charge.id}>
+                  <span>{charge.name}{charge.description ? ` — ${charge.description}` : ''}<small>Rental {String(charge.rental_id).slice(0, 8).toUpperCase()} • {prettyStatus(charge.status)}</small></span>
+                  <strong>{money(charge.total_amount)}</strong>
+                  {['pending', 'failed', 'checkout_open'].includes(charge.status) && <button className="secondary-btn" type="button" onClick={() => payAdditionalRentalCharge(charge)} disabled={paymentSaving}>{paymentSaving ? 'Opening…' : 'Pay charge'}</button>}
+                </div>)}
+              </div>
+            )}
             <div className="agreement-status-box">
               <CheckCircle2 size={24} />
               <div>
@@ -3313,7 +3423,7 @@ function WizardModal({
               <div className="invoice-row"><span>Rental Total</span><strong>{currentRental ? money(currentRental.rental_total) : estimate ? money(estimate.rentalTotal) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Taxes</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Security Deposit</span><strong>{currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
-              <ServiceFeesSummary serviceFees={serviceFees} />
+              <ServiceFeesSummary serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
               <div className="invoice-row"><span>Mileage</span><strong>{MILEAGE_POLICY}</strong></div>
               <div className="invoice-row"><span>Pickup</span><strong>{RENTMECT_ADDRESS}</strong></div>
               <div className="invoice-row"><span>Booking checklist</span><strong>Phone, Identity, license, insurance, and agreement are complete before payment unlocks.</strong></div>
@@ -3628,13 +3738,14 @@ function InsuranceOptionsPanel({ insuranceCoverage, setInsuranceCoverage }) {
   </div>;
 }
 
-function ServiceFeesSummary({ serviceFees }) {
-  if (!serviceFees.length) return null;
+function ServiceFeesSummary({ serviceFees, total }) {
+  const feeTotal = Number(total ?? serviceFees.reduce((sum, fee) => sum + Number(fee.amount || 0), 0));
+  if (!serviceFees.length && feeTotal <= 0) return null;
 
   return <div className="invoice-row fee-summary-row">
-    <span>Optional / Admin Fees</span>
+    <span>Booking Fees</span>
     <strong>
-      {serviceFees.map((fee) => `${fee.name}: ${money(fee.amount)}`).join(' | ')}
+      {serviceFees.length ? `${serviceFees.map((fee) => `${fee.name}: ${money(fee.amount)}`).join(' | ')} — ${money(feeTotal)} total` : money(feeTotal)}
     </strong>
   </div>;
 }
@@ -3708,13 +3819,20 @@ function PreviewGuestExperience({
   emailAuthBusy,
   message,
   reservationForm,
+  vehicle,
+  estimate,
   checkoutSecondsRemaining,
   checkoutExpired,
 }) {
   const days = Math.max(1, getRentalDays(reservationForm.pickupDate, reservationForm.returnDate));
-  const rental = days;
-  const tax = rental * CT_TAX_RATE;
-  const total = rental + tax + 300;
+  const displayVehicle = vehicle || { id: BOOKING_FLOW_TEST_VEHICLE_ID, name: 'Booking Flow Test Vehicle', brand: 'Rent Me CT', model: 'Checkout Preview', vehicle_type: 'Internal Test', daily_rate: 1, security_deposit: 300, description: 'Internal test vehicle for the booking flow.', features: TEST_VEHICLE_FEATURES };
+  const images = getVehicleImages(displayVehicle);
+  const features = Array.isArray(displayVehicle.features) && displayVehicle.features.length ? displayVehicle.features : TEST_VEHICLE_FEATURES;
+  const rental = Number(estimate?.rentalTotal ?? Number(displayVehicle.daily_rate || 0) * days);
+  const serviceFeeTotal = Number(estimate?.serviceFeeTotal || 0);
+  const tax = Number(estimate?.taxAmount ?? rental * CT_TAX_RATE);
+  const deposit = Number(estimate?.securityDeposit ?? displayVehicle.security_deposit ?? 300);
+  const total = rental + serviceFeeTotal + tax + deposit;
   const update = (key, value) => setAuthForm({ ...authForm, [key]: value });
 
   if (page === 'checkout') {
@@ -3782,9 +3900,11 @@ function PreviewGuestExperience({
           <PreviewTripSummary
             reservationForm={reservationForm}
             rentalTotal={rental}
+            serviceFeeTotal={serviceFeeTotal}
             taxAmount={tax}
-            securityDeposit={300}
+            securityDeposit={deposit}
             total={total}
+            vehicle={displayVehicle}
             secondsRemaining={checkoutSecondsRemaining}
             expired={checkoutExpired}
           />
@@ -3797,11 +3917,11 @@ function PreviewGuestExperience({
     <div className="preview-detail-shell">
       <PreviewTopbar />
       <main className="preview-detail-main">
-        <section className="preview-gallery" aria-label="Booking Flow Test Vehicle photos">
-          <img className="preview-gallery-featured" src={TEST_VEHICLE_PREVIEW_IMAGES[0]} alt="Booking Flow Test Vehicle featured view" />
+        <section className="preview-gallery" aria-label={`${displayVehicle.name} photos`}>
+          <img className="preview-gallery-featured" src={images[0]} alt={`${displayVehicle.name} featured view`} />
           <div className="preview-gallery-stack">
-            {TEST_VEHICLE_PREVIEW_IMAGES.slice(1, 3).map((image, index) => (
-              <img key={image} src={image} alt={`Booking Flow Test Vehicle view ${index + 2}`} />
+            {images.slice(1, 3).map((image, index) => (
+              <img key={image} src={image} alt={`${displayVehicle.name} view ${index + 2}`} />
             ))}
           </div>
           <span className="preview-badge">Preview vehicle</span>
@@ -3810,8 +3930,8 @@ function PreviewGuestExperience({
         <div className="preview-detail-layout">
           <div className="preview-detail-copy">
             <p className="eyebrow">Booking Preview</p>
-            <h1>Booking Flow Test Vehicle</h1>
-            <p className="preview-vehicle-subtitle">Rent Me CT • Internal checkout preview</p>
+            <h1>{displayVehicle.name}</h1>
+            <p className="preview-vehicle-subtitle">{[displayVehicle.brand, displayVehicle.model, displayVehicle.vehicle_type].filter(Boolean).join(' • ')}</p>
             <div className="preview-spec-pills">
               <span><Car size={17} /> 5 seats</span>
               <span><CreditCard size={17} /> Automatic</span>
@@ -3820,13 +3940,13 @@ function PreviewGuestExperience({
 
             <section className="preview-detail-section">
               <h2>About this vehicle</h2>
-              <p>This test vehicle lets you experience Rent Me CT’s new booking process safely before it is connected to the public fleet. Your selected dates and times have carried over automatically.</p>
+              <p>{displayVehicle.description || 'A clean, reliable Rent Me CT vehicle. Your selected dates and times have carried over automatically.'}</p>
             </section>
 
             <section className="preview-detail-section">
               <h2>Vehicle features</h2>
               <div className="preview-feature-grid">
-                {TEST_VEHICLE_FEATURES.map((feature) => <span key={feature}><CheckCircle2 size={17} /> {feature}</span>)}
+                {features.map((feature) => <span key={feature}><CheckCircle2 size={17} /> {feature}</span>)}
               </div>
             </section>
 
@@ -3844,8 +3964,9 @@ function PreviewGuestExperience({
               <div><span>Trip end</span><strong>{formatRentalDate(reservationForm.returnDate, reservationForm.returnTime)}</strong></div>
             </div>
             <div className="preview-price-row"><span>{days} rental {days === 1 ? 'day' : 'days'}</span><strong>{money(rental)}</strong></div>
+            {serviceFeeTotal > 0 && <div className="preview-price-row"><span>Booking fees</span><strong>{money(serviceFeeTotal)}</strong></div>}
             <div className="preview-price-row"><span>Estimated tax</span><strong>{money(tax)}</strong></div>
-            <div className="preview-price-row"><span>Refundable deposit</span><strong>{money(300)}</strong></div>
+            <div className="preview-price-row"><span>Refundable deposit</span><strong>{money(deposit)}</strong></div>
             <div className="preview-price-row preview-total-row"><span>Due today</span><strong>{money(total)}</strong></div>
             <button className="preview-primary-button" type="button" onClick={() => setPage('checkout')} disabled={checkoutExpired}>
               Continue to checkout <ChevronRight size={18} />
@@ -3892,6 +4013,7 @@ function PreviewCheckout({
   continueContact,
   reservationSaving,
   currentRental,
+  vehicle,
   identityStatus,
   identityVerified,
   identitySaving,
@@ -3916,9 +4038,10 @@ function PreviewCheckout({
   const documentsComplete = licenseUploaded && insuranceUploaded;
   const completedCount = [contactStepCompleted, identityVerified, documentsComplete, agreementSigned, paymentPaid].filter(Boolean).length;
   const rentalTotal = Number(currentRental?.rental_total ?? estimate?.rentalTotal ?? 0);
+  const serviceFeeTotal = Number(currentRental?.service_fee_total ?? estimate?.serviceFeeTotal ?? 0);
   const taxAmount = Number(currentRental?.tax_amount ?? estimate?.taxAmount ?? 0);
   const securityDeposit = Number(currentRental?.security_deposit ?? estimate?.securityDeposit ?? 0);
-  const total = rentalTotal + taxAmount + securityDeposit;
+  const total = rentalTotal + serviceFeeTotal + taxAmount + securityDeposit;
 
   useEffect(() => {
     if (paymentPaid) return;
@@ -3934,10 +4057,10 @@ function PreviewCheckout({
         <main className="preview-confirmation">
           <CheckCircle2 size={54} />
           <p className="eyebrow">Booking received</p>
-          <h1>Your test booking is complete.</h1>
+          <h1>Your booking is complete.</h1>
           <p>Payment is recorded. Rent Me CT can now review the submitted documents and prepare pickup details.</p>
           <div className="preview-confirmation-trip">
-            <strong>Booking Flow Test Vehicle</strong>
+            <strong>{vehicle?.name || 'Your Rent Me CT vehicle'}</strong>
             <span>{formatRentalDate(reservationForm.pickupDate, reservationForm.pickupTime)}</span>
             <span>to {formatRentalDate(reservationForm.returnDate, reservationForm.returnTime)}</span>
           </div>
@@ -4005,15 +4128,15 @@ function PreviewCheckout({
               <div><span>Rental</span><strong>{money(rentalTotal)}</strong></div>
               <div><span>CT sales tax</span><strong>{money(taxAmount)}</strong></div>
               <div><span>Refundable security deposit</span><strong>{money(securityDeposit)}</strong></div>
-              <ServiceFeesSummary serviceFees={serviceFees} />
+              <ServiceFeesSummary serviceFees={serviceFees} total={serviceFeeTotal} />
               <div className="preview-payment-total"><span>Total due today</span><strong>{money(total)}</strong></div>
             </div>
-            <p className="preview-security-note"><ShieldCheck size={16} /> Payment opens Stripe’s secure test checkout. The test vehicle cannot be charged with a live Stripe key.</p>
-            <button className="preview-primary-button preview-pay-button" type="button" onClick={startStripeCheckout} disabled={paymentSaving || !agreementSigned || checkoutExpired}>{paymentSaving ? 'Opening secure payment…' : `Pay ${money(total)} & book trip`} <ChevronRight size={18} /></button>
+            <p className="preview-security-note"><ShieldCheck size={16} /> {isBookingFlowTestVehicle(vehicle) ? 'Internal test checkout records no charge and can never be used for a real vehicle.' : 'Payment opens Stripe’s secure hosted checkout after every verification step is complete.'}</p>
+            <button className="preview-primary-button preview-pay-button" type="button" onClick={startStripeCheckout} disabled={paymentSaving || !agreementSigned || checkoutExpired}>{paymentSaving ? 'Completing…' : isBookingFlowTestVehicle(vehicle) ? 'Complete no-charge test booking' : `Pay ${money(total)} & book trip`} <ChevronRight size={18} /></button>
           </PreviewCheckoutSection>
         </section>
 
-        <PreviewTripSummary reservationForm={reservationForm} rentalTotal={rentalTotal} taxAmount={taxAmount} securityDeposit={securityDeposit} total={total} secondsRemaining={checkoutSecondsRemaining} expired={checkoutExpired} />
+        <PreviewTripSummary reservationForm={reservationForm} rentalTotal={rentalTotal} serviceFeeTotal={serviceFeeTotal} taxAmount={taxAmount} securityDeposit={securityDeposit} total={total} secondsRemaining={checkoutSecondsRemaining} expired={checkoutExpired} vehicle={vehicle} />
       </main>
     </div>
   );
@@ -4044,12 +4167,13 @@ function PreviewUploadCard({ title, text, complete, onUpload }) {
   );
 }
 
-function PreviewTripSummary({ reservationForm, rentalTotal, taxAmount, securityDeposit, total, secondsRemaining, expired }) {
+function PreviewTripSummary({ reservationForm, rentalTotal, serviceFeeTotal = 0, taxAmount, securityDeposit, total, secondsRemaining, expired, vehicle }) {
+  const displayVehicle = vehicle || { name: 'Booking Flow Test Vehicle', id: BOOKING_FLOW_TEST_VEHICLE_ID };
   return (
     <aside className="preview-trip-summary">
       <div className="preview-trip-vehicle">
-        <img src={TEST_VEHICLE_PREVIEW_IMAGES[0]} alt="Booking Flow Test Vehicle" />
-        <div><span>Booking Preview</span><strong>Booking Flow Test Vehicle</strong></div>
+        <img src={getVehicleImages(displayVehicle)[0]} alt={displayVehicle.name} />
+        <div><span>Booking Preview</span><strong>{displayVehicle.name}</strong></div>
       </div>
       <div className="preview-trip-summary-dates">
         <div><CalendarDays size={18} /><span><small>Pickup</small><strong>{formatRentalDate(reservationForm.pickupDate, reservationForm.pickupTime)}</strong></span></div>
@@ -4059,6 +4183,7 @@ function PreviewTripSummary({ reservationForm, rentalTotal, taxAmount, securityD
       {secondsRemaining !== null && <CheckoutHoldTimer secondsRemaining={secondsRemaining} expired={expired} />}
       <div className="preview-trip-prices">
         <div><span>Rental</span><strong>{money(rentalTotal)}</strong></div>
+        {Number(serviceFeeTotal) > 0 && <div><span>Booking fees</span><strong>{money(serviceFeeTotal)}</strong></div>}
         <div><span>Estimated tax</span><strong>{money(taxAmount)}</strong></div>
         <div><span>Refundable deposit</span><strong>{money(securityDeposit)}</strong></div>
         <div className="preview-total-row"><span>Due today</span><strong>{money(total)}</strong></div>
@@ -4562,6 +4687,15 @@ function getVehicleImage(vehicle) {
   );
 
   return fallbackKey ? VEHICLE_IMAGES_BY_KEY[fallbackKey] : Object.values(VEHICLE_IMAGES_BY_KEY)[0];
+}
+
+function getVehicleImages(vehicle) {
+  const uploaded = Array.isArray(vehicle?.image_urls)
+    ? vehicle.image_urls.filter(Boolean)
+    : String(vehicle?.image_urls || '').split(/\r?\n|,/).map((value) => value.trim()).filter(Boolean);
+  if (uploaded.length) return uploaded;
+  if (isBookingFlowTestVehicle(vehicle)) return TEST_VEHICLE_PREVIEW_IMAGES;
+  return [getVehicleImage(vehicle)];
 }
 
 function parseRentalDateTime(date, time) {
