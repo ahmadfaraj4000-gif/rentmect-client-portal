@@ -2838,6 +2838,63 @@ body {
   color: var(--brand-olive) !important;
 }
 
+/* Final black navigation overrides. */
+:root{--client-sidebar:#050505;--client-sidebar-active:#262626}
+.portal-shell .sidebar,.portal-shell .sidebar.collapsed{background:#050505!important;border-right-color:#292929!important}
+.portal-shell .tab-nav button,.portal-shell .side-nav a,.portal-shell .nav-toggle,.portal-shell .logout-btn{background:#111!important;color:#fff!important;border-color:#343434!important;box-shadow:none!important}
+.portal-shell .tab-nav button:hover,.portal-shell .side-nav a:hover,.portal-shell .nav-toggle:hover,.portal-shell .logout-btn:hover{background:#1d1d1d!important;color:#fff!important;border-color:#555!important}
+.portal-shell .tab-nav button.active,.portal-shell .side-nav a.active{background:#2a2a2a!important;border-color:#606060!important;box-shadow:inset 4px 0 0 #fff!important}
+.portal-shell .tab-nav button svg,.portal-shell .tab-nav button span,.portal-shell .side-nav a svg,.portal-shell .side-nav a span,.portal-shell .nav-toggle svg,.portal-shell .nav-toggle span,.portal-shell .logout-btn svg,.portal-shell .logout-btn span{color:#fff!important}
+
+/* Final portal navigation palette: black shell with grayscale interaction states. */
+:root {
+  --client-sidebar: #050505;
+  --client-sidebar-active: #262626;
+}
+
+.portal-shell .sidebar,
+.portal-shell .sidebar.collapsed {
+  background: #050505 !important;
+  border-right-color: #292929 !important;
+}
+
+.portal-shell .tab-nav button,
+.portal-shell .side-nav a,
+.portal-shell .nav-toggle,
+.portal-shell .logout-btn {
+  background: #111 !important;
+  color: #fff !important;
+  border-color: #343434 !important;
+  box-shadow: none !important;
+}
+
+.portal-shell .tab-nav button:hover,
+.portal-shell .side-nav a:hover,
+.portal-shell .nav-toggle:hover,
+.portal-shell .logout-btn:hover {
+  background: #1d1d1d !important;
+  color: #fff !important;
+  border-color: #555 !important;
+}
+
+.portal-shell .tab-nav button.active,
+.portal-shell .side-nav a.active {
+  background: #2a2a2a !important;
+  border-color: #606060 !important;
+  box-shadow: inset 4px 0 0 #fff !important;
+}
+
+.portal-shell .tab-nav button svg,
+.portal-shell .tab-nav button span,
+.portal-shell .side-nav a svg,
+.portal-shell .side-nav a span,
+.portal-shell .nav-toggle svg,
+.portal-shell .nav-toggle span,
+.portal-shell .logout-btn svg,
+.portal-shell .logout-btn span {
+  color: #fff !important;
+}
+
 /* Separate the sidebar identity from its controls with balanced spacing. */
 .portal-shell .sidebar .brand-block {
   width: 100% !important;

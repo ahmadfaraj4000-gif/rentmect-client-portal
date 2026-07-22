@@ -22,6 +22,7 @@ import { supabase } from './supabaseClient';
 import logoUrl from './assets/logo-sidebar.png';
 import logoMobileUrl from './assets/logo-mobile.png';
 import './styles.css';
+import './final-overrides.css';
 
 const DEFAULT_VEHICLE_IMAGE_NAMES = [
   'Audi-A4-002', 'Audi-A4-158', 'Audi-A6-385', 'Audi-A6-473', 'Audi-A8L-YPS',
@@ -377,6 +378,7 @@ function App() {
     phone: '',
     address: '',
     intended_vehicle_use: '',
+    email_marketing_opt_in: false,
   });
   const profileComplete = Boolean(
     profileForm.full_name.trim() &&
@@ -971,7 +973,11 @@ function loadSavedBookingFromWebsite() {
       under25PricingResult,
     ] = await Promise.all([
       supabase.from('profiles').select('*').eq('id', userId).single(),
-      supabase.from('vehicles').select('*').order('created_at', { ascending: false }),
+      supabase
+        .from('vehicles')
+        .select('*')
+        .or(`published.eq.true,id.eq.${BOOKING_FLOW_TEST_VEHICLE_ID}`)
+        .order('created_at', { ascending: false }),
       supabase
         .from('rentals')
         .select('*, vehicles(*)')
@@ -1018,6 +1024,7 @@ function loadSavedBookingFromWebsite() {
         phone: profileResult.data.phone || '',
         address: profileResult.data.address || '',
         intended_vehicle_use: profileResult.data.intended_vehicle_use || '',
+        email_marketing_opt_in: Boolean(profileResult.data.email_marketing_opt_in && !profileResult.data.email_marketing_unsubscribed_at),
       });
       setPhoneVerified(Boolean(profileResult.data.phone_verified));
     }
@@ -1126,10 +1133,20 @@ function loadSavedBookingFromWebsite() {
       return null;
     }
 
-    setProfile(data);
-    setPhoneVerified(Boolean(data.phone_verified));
-    if (showSuccess) notify('Profile saved.');
-    return data;
+    const { data: preferenceData, error: preferenceError } = await supabase.rpc('set_email_marketing_preference', {
+      p_opt_in: Boolean(profileForm.email_marketing_opt_in),
+    });
+
+    const savedProfile = preferenceError ? data : (preferenceData || data);
+    if (preferenceError) {
+      setProfileForm((current) => ({ ...current, email_marketing_opt_in: false }));
+      notify(`Your contact details were saved, but the optional email preference was not: ${preferenceError.message}`);
+    }
+
+    setProfile(savedProfile);
+    setPhoneVerified(Boolean(savedProfile.phone_verified));
+    if (showSuccess && !preferenceError) notify('Profile saved.');
+    return savedProfile;
   }
 
   async function saveProfile(event) {
@@ -2642,6 +2659,7 @@ async function verifyPhoneCode() {
                   />
                   <small>{profileForm.intended_vehicle_use.length}/500 characters</small>
                 </label>
+                <EmailMarketingPreference profileForm={profileForm} setProfileForm={setProfileForm} />
                <div className="phone-verify-box">
                 <div className="button-row">
                   <button className="primary-btn" type="submit">Save Profile</button>
@@ -2916,6 +2934,22 @@ async function verifyPhoneCode() {
   );
 }
 
+function EmailMarketingPreference({ profileForm, setProfileForm }) {
+  return (
+    <label className="email-marketing-preference">
+      <input
+        type="checkbox"
+        checked={Boolean(profileForm.email_marketing_opt_in)}
+        onChange={(event) => setProfileForm((current) => ({ ...current, email_marketing_opt_in: event.target.checked }))}
+      />
+      <span>
+        <strong>Email me occasional offers and Rent Me CT updates.</strong>
+        <small>This is optional. You can unsubscribe from any marketing email at any time.</small>
+      </span>
+    </label>
+  );
+}
+
 function WizardModal({
   wizardSteps,
   wizardStep,
@@ -3062,6 +3096,8 @@ function WizardModal({
                   setProfileForm({ ...profileForm, phone: e.target.value });
                 }}
               />
+
+              <EmailMarketingPreference profileForm={profileForm} setProfileForm={setProfileForm} />
 
               <button className="primary-btn" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>
                 {phoneVerified ? 'Phone Verified' : sendingCode ? 'Sending...' : 'Send Verification Code'}
@@ -3932,6 +3968,7 @@ function PreviewCheckout({
               <div className="preview-full-field"><AddressAutocomplete value={profileForm.address} onChange={(address) => setProfileForm((current) => ({ ...current, address }))} /></div>
               <label className="preview-full-field"><span>What will you use the vehicle for?</span><textarea maxLength="500" value={profileForm.intended_vehicle_use} onChange={(event) => setProfileForm({ ...profileForm, intended_vehicle_use: event.target.value })} placeholder="Personal transportation, work, family trip…" /></label>
               <label className="preview-full-field"><span>Mobile number</span><input value={profileForm.phone} onChange={(event) => setProfileForm({ ...profileForm, phone: event.target.value })} placeholder="(860) 555-0123" /></label>
+              <div className="preview-full-field"><EmailMarketingPreference profileForm={profileForm} setProfileForm={setProfileForm} /></div>
             </div>
             <div className="preview-inline-actions">
               <button className="preview-secondary-button" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>{phoneVerified ? 'Phone verified' : sendingCode ? 'Saving & sending…' : 'Save details & send code'}</button>

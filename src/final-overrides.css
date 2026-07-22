@@ -1,0 +1,83 @@
+:root {
+  --client-sidebar: #050505;
+  --client-sidebar-active: #262626;
+}
+
+.portal-shell .sidebar,
+.portal-shell .sidebar.collapsed {
+  background: #050505 !important;
+  border-right-color: #292929 !important;
+}
+
+.portal-shell .tab-nav button,
+.portal-shell .side-nav a,
+.portal-shell .nav-toggle,
+.portal-shell .logout-btn {
+  background: #111 !important;
+  color: #fff !important;
+  border-color: #343434 !important;
+  box-shadow: none !important;
+}
+
+.portal-shell .tab-nav button:hover,
+.portal-shell .side-nav a:hover,
+.portal-shell .nav-toggle:hover,
+.portal-shell .logout-btn:hover {
+  background: #1d1d1d !important;
+  color: #fff !important;
+  border-color: #555 !important;
+}
+
+.portal-shell .tab-nav button.active,
+.portal-shell .side-nav a.active {
+  background: #2a2a2a !important;
+  border-color: #606060 !important;
+  box-shadow: inset 4px 0 0 #fff !important;
+}
+
+.portal-shell .tab-nav button svg,
+.portal-shell .tab-nav button span,
+.portal-shell .side-nav a svg,
+.portal-shell .side-nav a span,
+.portal-shell .nav-toggle svg,
+.portal-shell .nav-toggle span,
+.portal-shell .logout-btn svg,
+.portal-shell .logout-btn span {
+  color: #fff !important;
+}
+
+.email-marketing-preference {
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 11px !important;
+  padding: 13px 14px;
+  border: 1px solid #d7d9dc;
+  border-radius: 12px;
+  background: #fafafa;
+  cursor: pointer;
+}
+
+.email-marketing-preference input {
+  width: 18px !important;
+  height: 18px;
+  margin: 2px 0 0 !important;
+  flex: 0 0 auto;
+  accent-color: #050505;
+}
+
+.email-marketing-preference > span {
+  display: grid;
+  gap: 3px;
+  color: #151515 !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0 !important;
+  line-height: 1.4;
+  text-transform: none !important;
+}
+
+.email-marketing-preference small {
+  color: #676767;
+  font-size: 12px;
+  font-weight: 500;
+}
