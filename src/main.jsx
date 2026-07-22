@@ -548,13 +548,19 @@ function App() {
 
   const currentRental = useMemo(() => {
     const blockingRentals = rentals.filter((r) => BLOCKING_RENTAL_STATUSES.includes(r.status));
+    const testPreviewSelected = pendingVehicleId === BOOKING_FLOW_TEST_VEHICLE_ID ||
+      reservationForm.vehicleId === BOOKING_FLOW_TEST_VEHICLE_ID;
+    if (testPreviewSelected) {
+      return blockingRentals.find((rental) => rental.vehicle_id === BOOKING_FLOW_TEST_VEHICLE_ID);
+    }
+
     const priority = (status) => {
       if (['active', 'overdue', 'return_initiated'].includes(status)) return 0;
       if (['ready_for_pickup', 'approved'].includes(status)) return 1;
       return 2;
     };
     return [...blockingRentals].sort((a, b) => priority(a.status) - priority(b.status))[0];
-  }, [rentals]);
+  }, [rentals, pendingVehicleId, reservationForm.vehicleId]);
 
   useEffect(() => {
     if (!currentRental?.id) return;
@@ -1273,13 +1279,18 @@ async function verifyPhoneCode() {
     }
 
     setReservationSaving(true);
-    const { data: lockedRental, error } = await supabase.rpc('create_rental_with_lock', {
-      p_vehicle_id: selectedVehicle.id,
+    const reservationParams = {
       p_pickup_date: reservationForm.pickupDate,
       p_return_date: reservationForm.returnDate,
       p_pickup_time: reservationForm.pickupTime,
       p_return_time: reservationForm.returnTime,
-    });
+    };
+    const { data: lockedRental, error } = bookingFlowTestMode
+      ? await supabase.rpc('create_booking_flow_test_rental', reservationParams)
+      : await supabase.rpc('create_rental_with_lock', {
+        p_vehicle_id: selectedVehicle.id,
+        ...reservationParams,
+      });
     setReservationSaving(false);
 
     if (error) {
@@ -4676,6 +4687,8 @@ function prettyVehicleStatus(status) {
 }
 
 function vehicleAvailabilityLabel(vehicle, reservation, rentals = [], currentRentalId = '') {
+  if (isBookingFlowTestVehicle(vehicle)) return 'Always available for testing';
+
   const status = String(vehicle?.status || 'available').toLowerCase();
   if (BLOCKING_VEHICLE_STATUSES.includes(status)) {
     return prettyVehicleStatus(status);
@@ -4711,6 +4724,8 @@ async function sha256(value) {
 }
 
 function isVehicleAvailableForDates(vehicle, reservation, rentals = [], currentRentalId = '') {
+  if (isBookingFlowTestVehicle(vehicle)) return true;
+
   const status = String(vehicle?.status || 'available').toLowerCase();
   if (BLOCKING_VEHICLE_STATUSES.includes(status)) return false;
 
