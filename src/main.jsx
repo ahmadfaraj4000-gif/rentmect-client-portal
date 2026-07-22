@@ -62,6 +62,7 @@ const AGREEMENT_VERSION = 'rentmect-master-v2026-05-20';
 const MILEAGE_POLICY = '200 miles/day included; excess mileage $0.35/mile';
 const CANCELLATION_TERMS = 'Contact Rent Me CT before pickup for cancellation or schedule changes.';
 const BLOCKING_RENTAL_STATUSES = ['pending', 'documents_needed', 'document_review', 'ready_for_pickup', 'approved', 'active', 'overdue', 'return_initiated', 'calendar_block'];
+const AVAILABILITY_RENTAL_STATUSES = [...BLOCKING_RENTAL_STATUSES, 'completed'];
 const BLOCKING_VEHICLE_STATUSES = ['maintenance', 'unavailable', 'inactive'];
 const TURNAROUND_BUFFER_MINUTES = 180;
 
@@ -4738,7 +4739,7 @@ function vehicleAvailabilityLabel(vehicle, reservation, rentals = [], currentRen
   const conflictingRental = rentals.find((rental) =>
     rental.id !== currentRentalId &&
     rental.vehicle_id === vehicle?.id &&
-    BLOCKING_RENTAL_STATUSES.includes(rental.status) &&
+    AVAILABILITY_RENTAL_STATUSES.includes(String(rental.status || '').toLowerCase()) &&
     rentalPeriodsOverlap(reservation, rental)
   );
 
@@ -4773,7 +4774,7 @@ function isVehicleAvailableForDates(vehicle, reservation, rentals = [], currentR
   return !rentals.some((rental) =>
 	    rental.id !== currentRentalId &&
 	    rental.vehicle_id === vehicle?.id &&
-	    BLOCKING_RENTAL_STATUSES.includes(rental.status) &&
+	    AVAILABILITY_RENTAL_STATUSES.includes(String(rental.status || '').toLowerCase()) &&
 	    rentalPeriodsOverlap(reservation, rental)
 	  );
 }
@@ -4802,7 +4803,8 @@ function rentalPeriodsOverlap(reservation, rental) {
 
   const bufferMinutes = rental?.status === 'calendar_block' ? 0 : TURNAROUND_BUFFER_MINUTES;
   const blockedUntil = new Date(bookedEnd.getTime() + bufferMinutes * 60 * 1000);
-  return requestedStart < blockedUntil && requestedEnd > bookedStart;
+  const requestedBlockedUntil = new Date(requestedEnd.getTime() + bufferMinutes * 60 * 1000);
+  return requestedStart < blockedUntil && requestedBlockedUntil > bookedStart;
 }
 
 function buildAgreementWithDetails({ agreementText, profile, email, vehicle, reservation, rental, signatureName, signatureImageData }) {
