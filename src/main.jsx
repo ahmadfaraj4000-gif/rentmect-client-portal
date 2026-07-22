@@ -1132,8 +1132,16 @@ function loadSavedBookingFromWebsite() {
   }
 
   async function sendPhoneCode() {
-  if (!profileForm.phone.trim()) {
-    notify('Add your phone number first.');
+  const missingContactFields = [
+    !profileForm.full_name.trim() && 'full legal name',
+    !isValidBirthDate(profileForm.date_of_birth) && 'valid date of birth',
+    !profileForm.address.trim() && 'home address',
+    !profileForm.intended_vehicle_use.trim() && 'intended vehicle use',
+    !profileForm.phone.trim() && 'phone number',
+  ].filter(Boolean);
+
+  if (missingContactFields.length) {
+    notify(`Complete these contact fields before requesting a code: ${missingContactFields.join(', ')}.`);
     return;
   }
 
@@ -2211,6 +2219,11 @@ async function verifyPhoneCode() {
   if (bookingFlowTestMode && checkoutIntent && !previewPortalOpen) {
     return (
       <>
+        {notice && (
+          <div className="preview-notice-wrap">
+            <Notice notice={notice} onDismiss={() => setNotice(null)} />
+          </div>
+        )}
         <PreviewCheckout
           activeSection={previewCheckoutSection}
           setActiveSection={setPreviewCheckoutSection}
@@ -3910,7 +3923,7 @@ function PreviewCheckout({
               <label className="preview-full-field"><span>Mobile number</span><input value={profileForm.phone} onChange={(event) => setProfileForm({ ...profileForm, phone: event.target.value })} placeholder="(860) 555-0123" /></label>
             </div>
             <div className="preview-inline-actions">
-              <button className="preview-secondary-button" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>{phoneVerified ? 'Phone verified' : sendingCode ? 'Sending…' : 'Send verification code'}</button>
+              <button className="preview-secondary-button" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>{phoneVerified ? 'Phone verified' : sendingCode ? 'Saving & sending…' : 'Save details & send code'}</button>
               {!phoneVerified && <><input className="preview-code-input" inputMode="numeric" autoComplete="one-time-code" value={phoneCode} onChange={(event) => setPhoneCode(event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="Verification code" /><button className="preview-secondary-button" type="button" onClick={verifyPhoneCode} disabled={verifyingCode}>{verifyingCode ? 'Verifying…' : 'Verify phone'}</button></>}
             </div>
             <button className="preview-primary-button" type="button" onClick={continueContact} disabled={reservationSaving || checkoutExpired}>{reservationSaving ? 'Saving…' : currentRental ? 'Continue' : 'Save & continue'} <ChevronRight size={18} /></button>
