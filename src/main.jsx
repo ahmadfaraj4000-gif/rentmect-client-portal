@@ -2,9 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   AlertTriangle,
+  ArrowLeft,
   CalendarDays,
   Car,
   CheckCircle2,
+  ChevronRight,
   Clock,
   CreditCard,
   FileSignature,
@@ -36,6 +38,16 @@ const PUBLIC_FLEET_ASSET_BASE_URL = (
 
 const RENTMECT_ADDRESS =
   import.meta.env.VITE_RENTMECT_ADDRESS || '12 Holmes Circle, Farmington, CT';
+const TEST_VEHICLE_PREVIEW_IMAGES = [
+  `${PUBLIC_FLEET_ASSET_BASE_URL}/Benz-CLS-AMG-550-224.webp`,
+  `${PUBLIC_FLEET_ASSET_BASE_URL}/fleet-2/224-1.webp`,
+  `${PUBLIC_FLEET_ASSET_BASE_URL}/fleet-2/224-2.webp`,
+  `${PUBLIC_FLEET_ASSET_BASE_URL}/fleet-2/224-3.webp`,
+];
+const TEST_VEHICLE_FEATURES = [
+  'Backup camera', 'Bluetooth', 'Apple CarPlay', 'AUX input',
+  'USB charger', 'GPS', 'Keyless entry', 'Automatic transmission',
+];
 
 const CT_TAX_RATE = 0.0635;
 const DEFAULT_UNDER_25_PRICING = {
@@ -354,6 +366,9 @@ function App() {
   const [checkoutExpiresAt, setCheckoutExpiresAt] = useState('');
   const [checkoutIntent, setCheckoutIntent] = useState(false);
   const [checkoutWizardStarted, setCheckoutWizardStarted] = useState(false);
+  const [previewPage, setPreviewPage] = useState('details');
+  const [previewCheckoutSection, setPreviewCheckoutSection] = useState('contact');
+  const [previewPortalOpen, setPreviewPortalOpen] = useState(false);
   const checkoutExpiryHandledRef = useRef('');
 
   const [profileForm, setProfileForm] = useState({
@@ -566,8 +581,14 @@ function App() {
     currentRental?.checkout_expires_at,
   ]);
 
+  const bookingFlowTestMode = Boolean(
+    pendingVehicleId === BOOKING_FLOW_TEST_VEHICLE_ID ||
+    reservationForm.vehicleId === BOOKING_FLOW_TEST_VEHICLE_ID ||
+    currentRental?.vehicle_id === BOOKING_FLOW_TEST_VEHICLE_ID
+  );
+
   useEffect(() => {
-    if (!session?.user?.id || !portalDataReady || !checkoutIntent || checkoutWizardStarted) return;
+    if (!session?.user?.id || !portalDataReady || !checkoutIntent || checkoutWizardStarted || bookingFlowTestMode) return;
     if (pendingVehicleName && vehicles.length === 0) return;
     if (currentRental) {
       setCheckoutWizardStarted(true);
@@ -579,7 +600,7 @@ function App() {
     setWizardStep(contactStepCompleted ? 1 : 0);
     setWizardOpen(true);
     setCheckoutWizardStarted(true);
-  }, [session, portalDataReady, checkoutIntent, checkoutWizardStarted, pendingVehicleName, vehicles.length, reservationForm.vehicleId, currentRental, contactStepCompleted]);
+  }, [session, portalDataReady, checkoutIntent, checkoutWizardStarted, pendingVehicleName, vehicles.length, reservationForm.vehicleId, currentRental, contactStepCompleted, bookingFlowTestMode]);
 
   const previousRentals = useMemo(() => {
     return rentals.filter((r) => ['completed', 'cancelled'].includes(r.status));
@@ -590,11 +611,6 @@ function App() {
   }, [vehicles, reservationForm.vehicleId]);
 
   const displayedVehicle = currentRental?.vehicles || selectedVehicle;
-  const bookingFlowTestMode = Boolean(
-    pendingVehicleId === BOOKING_FLOW_TEST_VEHICLE_ID ||
-    reservationForm.vehicleId === BOOKING_FLOW_TEST_VEHICLE_ID ||
-    currentRental?.vehicle_id === BOOKING_FLOW_TEST_VEHICLE_ID
-  );
   const checkoutVehicleChoices = bookingFlowTestMode
     ? vehicles.filter((vehicle) => vehicle.id === BOOKING_FLOW_TEST_VEHICLE_ID)
     : vehicles.filter((vehicle) => vehicle.id !== BOOKING_FLOW_TEST_VEHICLE_ID);
@@ -1196,6 +1212,18 @@ async function verifyPhoneCode() {
   }
 }
 
+  async function continuePreviewContact() {
+    const savedProfile = await saveProfileDetails(false);
+    if (!savedProfile) return;
+    if (!savedProfile.phone_verified) {
+      notify('Verify your phone number to continue.');
+      return;
+    }
+    const rental = currentRental || (await createReservationIfNeeded());
+    if (!rental?.id) return;
+    setPreviewCheckoutSection('identity');
+  }
+
   async function createReservationIfNeeded() {
     if (checkoutExpired) {
       notify('Your 25-minute vehicle hold expired. Return to the fleet page to start a new booking.');
@@ -1630,6 +1658,7 @@ async function verifyPhoneCode() {
 
     setRentals((prev) => prev.map((r) => (r.id === updatedRental.id ? updatedRental : r)));
     await maybeMarkReadyForPickup(updatedRental);
+    setAgreementModalOpen(false);
     notify('Agreement signed.');
   }
 
@@ -2137,6 +2166,27 @@ async function verifyPhoneCode() {
   if (loading) return <LoadingScreen />;
 
   if (!session) {
+    if (checkoutIntent && pendingVehicleId === BOOKING_FLOW_TEST_VEHICLE_ID) {
+      return (
+        <PreviewGuestExperience
+          page={previewPage}
+          setPage={setPreviewPage}
+          authForm={authForm}
+          setAuthForm={setAuthForm}
+          handleAuth={handleAuth}
+          verifyEmailOtp={verifyEmailOtp}
+          emailOtp={emailOtp}
+          setEmailOtp={setEmailOtp}
+          emailOtpSent={emailOtpSent}
+          setEmailOtpSent={setEmailOtpSent}
+          emailAuthBusy={emailAuthBusy}
+          message={message}
+          reservationForm={reservationForm}
+          checkoutSecondsRemaining={checkoutSecondsRemaining}
+          checkoutExpired={checkoutExpired}
+        />
+      );
+    }
     return (
         <AuthScreen
           authForm={authForm}
@@ -2155,6 +2205,70 @@ async function verifyPhoneCode() {
           checkoutSecondsRemaining={checkoutSecondsRemaining}
           checkoutExpired={checkoutExpired}
         />
+    );
+  }
+
+  if (bookingFlowTestMode && checkoutIntent && !previewPortalOpen) {
+    return (
+      <>
+        <PreviewCheckout
+          activeSection={previewCheckoutSection}
+          setActiveSection={setPreviewCheckoutSection}
+          reservationForm={reservationForm}
+          estimate={estimate}
+          profileForm={profileForm}
+          setProfileForm={setProfileForm}
+          userEmail={userEmail}
+          emailVerified={emailVerified}
+          phoneCode={phoneCode}
+          setPhoneCode={setPhoneCode}
+          sendPhoneCode={sendPhoneCode}
+          verifyPhoneCode={verifyPhoneCode}
+          sendingCode={sendingCode}
+          verifyingCode={verifyingCode}
+          phoneVerified={phoneVerified}
+          contactStepCompleted={contactStepCompleted}
+          continueContact={continuePreviewContact}
+          reservationSaving={reservationSaving}
+          currentRental={currentRental}
+          identityStatus={identityStatus}
+          identityVerified={identityVerified}
+          identitySaving={identitySaving}
+          startIdentityVerification={startIdentityVerification}
+          refreshIdentityVerification={refreshIdentityVerification}
+          uploadDocument={uploadDocument}
+          licenseUploaded={licenseUploaded}
+          insuranceUploaded={insuranceUploaded}
+          insuranceCoverage={insuranceCoverage}
+          setInsuranceCoverage={setInsuranceCoverage}
+          agreementSigned={agreementSigned}
+          openAgreement={() => setAgreementModalOpen(true)}
+          paymentPaid={paymentPaid}
+          paymentSaving={paymentSaving}
+          startStripeCheckout={startStripeCheckout}
+          serviceFees={serviceFees}
+          checkoutSecondsRemaining={checkoutSecondsRemaining}
+          checkoutExpired={checkoutExpired}
+          signOut={signOut}
+          openPortal={() => setPreviewPortalOpen(true)}
+        />
+        {agreementModalOpen && (
+          <AgreementModal
+            agreementText={agreementTextWithDetails}
+            agreementChecked={agreementChecked}
+            agreementSigned={agreementSigned}
+            setAgreementChecked={setAgreementChecked}
+            signatureName={signatureName}
+            setSignatureName={setSignatureName}
+            signatureImageData={signatureImageData}
+            setSignatureImageData={setSignatureImageData}
+            signAgreement={signAgreement}
+            agreementSaving={agreementSaving}
+            currentRental={currentRental}
+            onClose={() => setAgreementModalOpen(false)}
+          />
+        )}
+      </>
     );
   }
 
@@ -3516,6 +3630,379 @@ function ReturnReviewNotice({ report }) {
       </div>
       <strong>{prettyStatus(report.status || 'open')}</strong>
     </section>
+  );
+}
+
+function PreviewGuestExperience({
+  page,
+  setPage,
+  authForm,
+  setAuthForm,
+  handleAuth,
+  verifyEmailOtp,
+  emailOtp,
+  setEmailOtp,
+  emailOtpSent,
+  setEmailOtpSent,
+  emailAuthBusy,
+  message,
+  reservationForm,
+  checkoutSecondsRemaining,
+  checkoutExpired,
+}) {
+  const days = Math.max(1, getRentalDays(reservationForm.pickupDate, reservationForm.returnDate));
+  const rental = days;
+  const tax = rental * CT_TAX_RATE;
+  const total = rental + tax + 300;
+  const update = (key, value) => setAuthForm({ ...authForm, [key]: value });
+
+  if (page === 'checkout') {
+    return (
+      <div className="preview-guest-shell">
+        <PreviewTopbar onBack={() => setPage('details')} label="Back to vehicle details" />
+        <main className="preview-checkout-layout preview-guest-checkout">
+          <section className="preview-checkout-column">
+            <div className="preview-page-heading">
+              <p className="eyebrow">Secure checkout</p>
+              <h1>Let’s get your trip ready.</h1>
+              <p>Your account is created automatically. No password to remember.</p>
+            </div>
+            <form className="preview-auth-section" onSubmit={emailOtpSent ? verifyEmailOtp : handleAuth}>
+              <div className="preview-section-number">1</div>
+              <div className="preview-section-content">
+                <div className="preview-section-title">
+                  <div>
+                    <h2>Contact information</h2>
+                    <p>We’ll use this email for your receipt and secure trip access.</p>
+                  </div>
+                  <ShieldCheck size={22} />
+                </div>
+                <label>
+                  <span>Email address</span>
+                  <input
+                    type="email"
+                    placeholder="you@example.com"
+                    value={authForm.email}
+                    onChange={(event) => update('email', event.target.value)}
+                    disabled={emailOtpSent || emailAuthBusy}
+                    required
+                  />
+                </label>
+                {emailOtpSent && (
+                  <label>
+                    <span>One-time email code</span>
+                    <input
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      placeholder="Enter the code from your email"
+                      value={emailOtp}
+                      onChange={(event) => setEmailOtp(event.target.value.replace(/\D/g, '').slice(0, 8))}
+                      required
+                    />
+                  </label>
+                )}
+                <button className="preview-primary-button" type="submit" disabled={emailAuthBusy || checkoutExpired}>
+                  {emailAuthBusy ? 'Please wait…' : emailOtpSent ? 'Verify email & continue' : 'Continue with email'}
+                  <ChevronRight size={18} />
+                </button>
+                {message && <p className="preview-inline-message">{message}</p>}
+                {emailOtpSent && (
+                  <button className="preview-text-button" type="button" onClick={() => {
+                    setEmailOtp('');
+                    setEmailOtpSent(false);
+                  }}>
+                    Use a different email
+                  </button>
+                )}
+                <p className="preview-security-note"><ShieldCheck size={16} /> Returning customers receive the same secure code—no temporary passwords.</p>
+              </div>
+            </form>
+          </section>
+          <PreviewTripSummary
+            reservationForm={reservationForm}
+            rentalTotal={rental}
+            taxAmount={tax}
+            securityDeposit={300}
+            total={total}
+            secondsRemaining={checkoutSecondsRemaining}
+            expired={checkoutExpired}
+          />
+        </main>
+      </div>
+    );
+  }
+
+  return (
+    <div className="preview-detail-shell">
+      <PreviewTopbar />
+      <main className="preview-detail-main">
+        <section className="preview-gallery" aria-label="Booking Flow Test Vehicle photos">
+          <img className="preview-gallery-featured" src={TEST_VEHICLE_PREVIEW_IMAGES[0]} alt="Booking Flow Test Vehicle featured view" />
+          <div className="preview-gallery-stack">
+            {TEST_VEHICLE_PREVIEW_IMAGES.slice(1, 3).map((image, index) => (
+              <img key={image} src={image} alt={`Booking Flow Test Vehicle view ${index + 2}`} />
+            ))}
+          </div>
+          <span className="preview-badge">Preview vehicle</span>
+        </section>
+
+        <div className="preview-detail-layout">
+          <div className="preview-detail-copy">
+            <p className="eyebrow">Booking Preview</p>
+            <h1>Booking Flow Test Vehicle</h1>
+            <p className="preview-vehicle-subtitle">Rent Me CT • Internal checkout preview</p>
+            <div className="preview-spec-pills">
+              <span><Car size={17} /> 5 seats</span>
+              <span><CreditCard size={17} /> Automatic</span>
+              <span><ShieldCheck size={17} /> Verified fleet</span>
+            </div>
+
+            <section className="preview-detail-section">
+              <h2>About this vehicle</h2>
+              <p>This test vehicle lets you experience Rent Me CT’s new booking process safely before it is connected to the public fleet. Your selected dates and times have carried over automatically.</p>
+            </section>
+
+            <section className="preview-detail-section">
+              <h2>Vehicle features</h2>
+              <div className="preview-feature-grid">
+                {TEST_VEHICLE_FEATURES.map((feature) => <span key={feature}><CheckCircle2 size={17} /> {feature}</span>)}
+              </div>
+            </section>
+
+            <section className="preview-detail-section preview-policy-grid">
+              <div><strong>200 miles/day</strong><span>Included with your rental</span></div>
+              <div><strong>Secure verification</strong><span>Identity and documents protected</span></div>
+              <div><strong>Farmington pickup</strong><span>{RENTMECT_ADDRESS}</span></div>
+            </section>
+          </div>
+
+          <aside className="preview-detail-card">
+            <p className="preview-price"><strong>{money(rental)}</strong> rental subtotal</p>
+            <div className="preview-trip-dates">
+              <div><span>Trip start</span><strong>{formatRentalDate(reservationForm.pickupDate, reservationForm.pickupTime)}</strong></div>
+              <div><span>Trip end</span><strong>{formatRentalDate(reservationForm.returnDate, reservationForm.returnTime)}</strong></div>
+            </div>
+            <div className="preview-price-row"><span>{days} rental {days === 1 ? 'day' : 'days'}</span><strong>{money(rental)}</strong></div>
+            <div className="preview-price-row"><span>Estimated tax</span><strong>{money(tax)}</strong></div>
+            <div className="preview-price-row"><span>Refundable deposit</span><strong>{money(300)}</strong></div>
+            <div className="preview-price-row preview-total-row"><span>Due today</span><strong>{money(total)}</strong></div>
+            <button className="preview-primary-button" type="button" onClick={() => setPage('checkout')} disabled={checkoutExpired}>
+              Continue to checkout <ChevronRight size={18} />
+            </button>
+            <small><ShieldCheck size={14} /> You won’t be charged on this screen.</small>
+          </aside>
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function PreviewTopbar({ onBack, label = 'Booking Preview' }) {
+  return (
+    <header className="preview-topbar">
+      <div className="preview-topbar-inner">
+        {onBack ? (
+          <button type="button" onClick={onBack}><ArrowLeft size={18} /> {label}</button>
+        ) : <span className="preview-mode-label">{label}</span>}
+        <img src={logoMobileUrl} alt="Rent Me CT" />
+        <span className="preview-secure-label"><ShieldCheck size={16} /> Secure booking</span>
+      </div>
+    </header>
+  );
+}
+
+function PreviewCheckout({
+  activeSection,
+  setActiveSection,
+  reservationForm,
+  estimate,
+  profileForm,
+  setProfileForm,
+  userEmail,
+  emailVerified,
+  phoneCode,
+  setPhoneCode,
+  sendPhoneCode,
+  verifyPhoneCode,
+  sendingCode,
+  verifyingCode,
+  phoneVerified,
+  contactStepCompleted,
+  continueContact,
+  reservationSaving,
+  currentRental,
+  identityStatus,
+  identityVerified,
+  identitySaving,
+  startIdentityVerification,
+  refreshIdentityVerification,
+  uploadDocument,
+  licenseUploaded,
+  insuranceUploaded,
+  insuranceCoverage,
+  setInsuranceCoverage,
+  agreementSigned,
+  openAgreement,
+  paymentPaid,
+  paymentSaving,
+  startStripeCheckout,
+  serviceFees,
+  checkoutSecondsRemaining,
+  checkoutExpired,
+  signOut,
+  openPortal,
+}) {
+  const documentsComplete = licenseUploaded && insuranceUploaded;
+  const completedCount = [contactStepCompleted, identityVerified, documentsComplete, agreementSigned, paymentPaid].filter(Boolean).length;
+  const rentalTotal = Number(currentRental?.rental_total ?? estimate?.rentalTotal ?? 0);
+  const taxAmount = Number(currentRental?.tax_amount ?? estimate?.taxAmount ?? 0);
+  const securityDeposit = Number(currentRental?.security_deposit ?? estimate?.securityDeposit ?? 0);
+  const total = rentalTotal + taxAmount + securityDeposit;
+
+  useEffect(() => {
+    if (paymentPaid) return;
+    if (activeSection === 'identity' && identityVerified) setActiveSection('documents');
+    if (activeSection === 'documents' && documentsComplete) setActiveSection('agreement');
+    if (activeSection === 'agreement' && agreementSigned) setActiveSection('payment');
+  }, [activeSection, identityVerified, documentsComplete, agreementSigned, paymentPaid, setActiveSection]);
+
+  if (paymentPaid) {
+    return (
+      <div className="preview-checkout-shell">
+        <PreviewTopbar />
+        <main className="preview-confirmation">
+          <CheckCircle2 size={54} />
+          <p className="eyebrow">Booking received</p>
+          <h1>Your test booking is complete.</h1>
+          <p>Payment is recorded. Rent Me CT can now review the submitted documents and prepare pickup details.</p>
+          <div className="preview-confirmation-trip">
+            <strong>Booking Flow Test Vehicle</strong>
+            <span>{formatRentalDate(reservationForm.pickupDate, reservationForm.pickupTime)}</span>
+            <span>to {formatRentalDate(reservationForm.returnDate, reservationForm.returnTime)}</span>
+          </div>
+          <button className="preview-primary-button" type="button" onClick={openPortal}>Manage trip in client portal <ChevronRight size={18} /></button>
+        </main>
+      </div>
+    );
+  }
+
+  return (
+    <div className="preview-checkout-shell">
+      <PreviewTopbar />
+      <main className="preview-checkout-layout">
+        <section className="preview-checkout-column">
+          <div className="preview-page-heading preview-signed-in-heading">
+            <div>
+              <p className="eyebrow">Verify & pay</p>
+              <h1>Complete your booking.</h1>
+              <p>{completedCount} of 5 sections complete • Signed in as {userEmail}</p>
+            </div>
+            <button className="preview-text-button" type="button" onClick={signOut}>Sign out</button>
+          </div>
+
+          <PreviewCheckoutSection number="1" title="Contact information" summary={contactStepCompleted ? `${profileForm.full_name} • Phone verified` : 'Tell us who will be driving'} completed={contactStepCompleted} open={activeSection === 'contact'} onOpen={() => setActiveSection('contact')}>
+            <div className="preview-form-grid">
+              <label><span>Full legal name</span><input value={profileForm.full_name} onChange={(event) => setProfileForm({ ...profileForm, full_name: event.target.value })} placeholder="Name as shown on license" /></label>
+              <label><span>Date of birth</span><input type="date" max={getTodayDateInputValue()} value={profileForm.date_of_birth} onChange={(event) => setProfileForm({ ...profileForm, date_of_birth: event.target.value })} /></label>
+              <label className="preview-full-field"><span>Email</span><input value={userEmail} disabled /></label>
+              <div className="preview-full-field"><AddressAutocomplete value={profileForm.address} onChange={(address) => setProfileForm((current) => ({ ...current, address }))} /></div>
+              <label className="preview-full-field"><span>What will you use the vehicle for?</span><textarea maxLength="500" value={profileForm.intended_vehicle_use} onChange={(event) => setProfileForm({ ...profileForm, intended_vehicle_use: event.target.value })} placeholder="Personal transportation, work, family trip…" /></label>
+              <label className="preview-full-field"><span>Mobile number</span><input value={profileForm.phone} onChange={(event) => setProfileForm({ ...profileForm, phone: event.target.value })} placeholder="(860) 555-0123" /></label>
+            </div>
+            <div className="preview-inline-actions">
+              <button className="preview-secondary-button" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>{phoneVerified ? 'Phone verified' : sendingCode ? 'Sending…' : 'Send verification code'}</button>
+              {!phoneVerified && <><input className="preview-code-input" inputMode="numeric" autoComplete="one-time-code" value={phoneCode} onChange={(event) => setPhoneCode(event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="Verification code" /><button className="preview-secondary-button" type="button" onClick={verifyPhoneCode} disabled={verifyingCode}>{verifyingCode ? 'Verifying…' : 'Verify phone'}</button></>}
+            </div>
+            <button className="preview-primary-button" type="button" onClick={continueContact} disabled={reservationSaving || checkoutExpired}>{reservationSaving ? 'Saving…' : currentRental ? 'Continue' : 'Save & continue'} <ChevronRight size={18} /></button>
+          </PreviewCheckoutSection>
+
+          <PreviewCheckoutSection number="2" title="Identity verification" summary={identityVerified ? 'Identity verified securely by Stripe' : identityStatus === 'processing' ? 'Verification processing' : 'Government ID and selfie'} completed={identityVerified} open={activeSection === 'identity'} onOpen={() => setActiveSection('identity')}>
+            <IdentityVerificationPanel status={identityStatus} verified={identityVerified} saving={identitySaving} onStart={startIdentityVerification} onRefresh={() => refreshIdentityVerification(true)} />
+          </PreviewCheckoutSection>
+
+          <PreviewCheckoutSection number="3" title="Driver documents" summary={documentsComplete ? 'License and insurance uploaded' : `${licenseUploaded ? 'License uploaded' : 'License required'} • ${insuranceUploaded ? 'Insurance uploaded' : 'Insurance required'}`} completed={documentsComplete} open={activeSection === 'documents'} onOpen={() => setActiveSection('documents')}>
+            <div className="preview-upload-grid">
+              <PreviewUploadCard title="Driver license" text="Clear photo or PDF. Reused for future rentals." complete={licenseUploaded} onUpload={(event) => uploadDocument(event, 'license')} />
+              <div>
+                <InsuranceOptionsPanel insuranceCoverage={insuranceCoverage} setInsuranceCoverage={setInsuranceCoverage} />
+                <PreviewUploadCard title="Proof of insurance" text="Current policy showing active coverage." complete={insuranceUploaded} onUpload={(event) => uploadDocument(event, 'insurance')} />
+              </div>
+            </div>
+          </PreviewCheckoutSection>
+
+          <PreviewCheckoutSection number="4" title="Rental agreement" summary={agreementSigned ? 'Agreement signed' : 'Review the terms and add your signature'} completed={agreementSigned} open={activeSection === 'agreement'} onOpen={() => setActiveSection('agreement')}>
+            <div className="preview-agreement-summary">
+              <FileSignature size={28} />
+              <div><strong>Review the important rental terms</strong><p>Mileage, fuel, late-return, damage, toll, smoking, and payment authorizations are included in the full agreement.</p></div>
+            </div>
+            <button className="preview-primary-button" type="button" onClick={openAgreement} disabled={!documentsComplete}>{agreementSigned ? 'View signed agreement' : 'Review & sign agreement'} <ChevronRight size={18} /></button>
+          </PreviewCheckoutSection>
+
+          <PreviewCheckoutSection number="5" title="Payment" summary={paymentPaid ? 'Payment complete' : `Due today ${money(total)}`} completed={paymentPaid} open={activeSection === 'payment'} onOpen={() => setActiveSection('payment')}>
+            <div className="preview-payment-breakdown">
+              <div><span>Rental</span><strong>{money(rentalTotal)}</strong></div>
+              <div><span>CT sales tax</span><strong>{money(taxAmount)}</strong></div>
+              <div><span>Refundable security deposit</span><strong>{money(securityDeposit)}</strong></div>
+              <ServiceFeesSummary serviceFees={serviceFees} />
+              <div className="preview-payment-total"><span>Total due today</span><strong>{money(total)}</strong></div>
+            </div>
+            <p className="preview-security-note"><ShieldCheck size={16} /> Payment opens Stripe’s secure test checkout. The test vehicle cannot be charged with a live Stripe key.</p>
+            <button className="preview-primary-button preview-pay-button" type="button" onClick={startStripeCheckout} disabled={paymentSaving || !agreementSigned || checkoutExpired}>{paymentSaving ? 'Opening secure payment…' : `Pay ${money(total)} & book trip`} <ChevronRight size={18} /></button>
+          </PreviewCheckoutSection>
+        </section>
+
+        <PreviewTripSummary reservationForm={reservationForm} rentalTotal={rentalTotal} taxAmount={taxAmount} securityDeposit={securityDeposit} total={total} secondsRemaining={checkoutSecondsRemaining} expired={checkoutExpired} />
+      </main>
+    </div>
+  );
+}
+
+function PreviewCheckoutSection({ number, title, summary, completed, open, onOpen, children }) {
+  return (
+    <section className={`preview-checkout-section ${open ? 'open' : ''} ${completed ? 'complete' : ''}`}>
+      <button className="preview-checkout-section-header" type="button" onClick={onOpen} aria-expanded={open}>
+        <span className="preview-section-number">{completed ? <CheckCircle2 size={18} /> : number}</span>
+        <span><strong>{title}</strong><small>{summary}</small></span>
+        <ChevronRight className="preview-section-chevron" size={20} />
+      </button>
+      {open && <div className="preview-checkout-section-body">{children}</div>}
+    </section>
+  );
+}
+
+function PreviewUploadCard({ title, text, complete, onUpload }) {
+  return (
+    <label className={`preview-upload-card ${complete ? 'complete' : ''}`}>
+      {complete ? <CheckCircle2 size={25} /> : <Upload size={25} />}
+      <strong>{complete ? `${title} uploaded` : title}</strong>
+      <span>{complete ? 'Ready for review. Choose a file to replace it.' : text}</span>
+      <em>{complete ? 'Replace file' : 'Choose file'}</em>
+      <input type="file" accept="image/*,.pdf" onChange={onUpload} />
+    </label>
+  );
+}
+
+function PreviewTripSummary({ reservationForm, rentalTotal, taxAmount, securityDeposit, total, secondsRemaining, expired }) {
+  return (
+    <aside className="preview-trip-summary">
+      <div className="preview-trip-vehicle">
+        <img src={TEST_VEHICLE_PREVIEW_IMAGES[0]} alt="Booking Flow Test Vehicle" />
+        <div><span>Booking Preview</span><strong>Booking Flow Test Vehicle</strong></div>
+      </div>
+      <div className="preview-trip-summary-dates">
+        <div><CalendarDays size={18} /><span><small>Pickup</small><strong>{formatRentalDate(reservationForm.pickupDate, reservationForm.pickupTime)}</strong></span></div>
+        <div><Clock size={18} /><span><small>Return</small><strong>{formatRentalDate(reservationForm.returnDate, reservationForm.returnTime)}</strong></span></div>
+        <div><MapPin size={18} /><span><small>Location</small><strong>{RENTMECT_ADDRESS}</strong></span></div>
+      </div>
+      {secondsRemaining !== null && <CheckoutHoldTimer secondsRemaining={secondsRemaining} expired={expired} />}
+      <div className="preview-trip-prices">
+        <div><span>Rental</span><strong>{money(rentalTotal)}</strong></div>
+        <div><span>Estimated tax</span><strong>{money(taxAmount)}</strong></div>
+        <div><span>Refundable deposit</span><strong>{money(securityDeposit)}</strong></div>
+        <div className="preview-total-row"><span>Due today</span><strong>{money(total)}</strong></div>
+      </div>
+      <p><ShieldCheck size={15} /> Secure checkout • Your progress is saved</p>
+    </aside>
   );
 }
 
