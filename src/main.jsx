@@ -1061,7 +1061,7 @@ function loadSavedBookingFromWebsite() {
     }
 
     setEmailOtpSent(true);
-    setMessage('Check your email for a secure sign-in link or one-time code. First-time customers get an account automatically.');
+    setMessage("Check your email for a secure sign-in link or one-time code. If you don't see it, check your spam or junk folder. First-time customers get an account automatically.");
   }
 
   async function verifyEmailOtp(event) {
