@@ -3176,3 +3176,27 @@ body {
 .eyebrow {
   color: var(--brand-olive) !important;
 }
+.customer-exception-notice{
+  display:flex;
+  align-items:flex-start;
+  gap:10px;
+  margin-bottom:16px;
+  padding:13px 14px;
+  border:2px solid #d97706;
+  border-radius:14px;
+  background:#fff7ed;
+  color:#7c2d12
+}
+.customer-exception-notice.expired{
+  border-color:#b42318;
+  background:#fff1f0;
+  color:#8f1d16
+}
+.customer-exception-notice>div{
+  display:grid;
+  gap:3px
+}
+.customer-exception-notice span{
+  font-size:12px;
+  line-height:1.45
+}

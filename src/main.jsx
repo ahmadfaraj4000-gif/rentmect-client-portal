@@ -346,6 +346,7 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [reports, setReports] = useState([]);
   const [extensionRequests, setExtensionRequests] = useState([]);
+  const [emergencyExceptions, setEmergencyExceptions] = useState([]);
   const [rentalCharges, setRentalCharges] = useState([]);
   const [serviceFees, setServiceFees] = useState([]);
   const [under25Pricing, setUnder25Pricing] = useState(DEFAULT_UNDER_25_PRICING);
@@ -713,6 +714,9 @@ function App() {
     if (!currentRental?.id) return [];
     return extensionRequests.filter((request) => request.rental_id === currentRental.id);
   }, [extensionRequests, currentRental?.id]);
+  const currentEmergencyException = emergencyExceptions.find((item) =>
+    item.rental_id === currentRental?.id && item.status === 'active'
+  );
   const currentRentalReports = useMemo(() => {
     if (!currentRental?.id) return [];
     return reports.filter((report) => report.rental_id === currentRental.id);
@@ -1007,6 +1011,7 @@ function loadSavedBookingFromWebsite() {
       messagesResult,
       reportsResult,
       extensionsResult,
+      emergencyExceptionsResult,
       fleetRentalsResult,
       serviceFeesResult,
       under25PricingResult,
@@ -1043,6 +1048,7 @@ function loadSavedBookingFromWebsite() {
         .select('*')
         .eq('user_id', userId)
         .order('created_at', { ascending: false }),
+      supabase.rpc('get_my_rental_emergency_exceptions'),
       supabase.rpc('get_vehicle_booking_blocks'),
       supabase
         .from('service_fees')
@@ -1080,6 +1086,7 @@ function loadSavedBookingFromWebsite() {
     if (messagesResult.data) setMessages(messagesResult.data);
     if (reportsResult.data) setReports(reportsResult.data);
     if (extensionsResult.data) setExtensionRequests(extensionsResult.data);
+    if (emergencyExceptionsResult.data) setEmergencyExceptions(emergencyExceptionsResult.data);
     if (fleetRentalsResult.data) setFleetRentals(fleetRentalsResult.data);
     if (serviceFeesResult.data) setServiceFees(serviceFeesResult.data);
     if (under25PricingResult.data) setUnder25Pricing(under25PricingResult.data);
@@ -2476,6 +2483,10 @@ async function verifyPhoneCode() {
 
         {activeTab === 'overview' && (
           <>
+            {currentEmergencyException && <section className={`customer-exception-notice ${new Date(currentEmergencyException.expires_at).getTime() <= Date.now() ? 'expired' : ''}`}>
+              <AlertTriangle size={21}/>
+              <div><strong>Rental released with temporary exceptions</strong><span>{(currentEmergencyException.exception_scopes || []).map(prettyStatus).join(', ')} remain incomplete. Complete them as soon as possible. Exception expires {new Date(currentEmergencyException.expires_at).toLocaleString()}.</span></div>
+            </section>}
             <section className="hero-panel compact-hero" id="reservation">
               <div>
                 <p className="eyebrow">Reservation Setup</p>
@@ -2665,7 +2676,7 @@ async function verifyPhoneCode() {
                                       ? 'Same brand'
                                       : 'Available option'}
                               </span>
-                              <small>{money(vehicle.daily_rate)}/day • {money(vehicle.continuation_deposit ?? vehicle.security_deposit)} refundable deposit • Request switch</small>
+                              <small>{money(vehicle.daily_rate)}/day • {money(vehicle.continuation_deposit ?? vehicle.security_deposit)} required deposit; your current hold carries over and only the difference changes • Request switch</small>
                             </button>
                           ))}
                         </div>
@@ -2913,6 +2924,8 @@ async function verifyPhoneCode() {
                 <strong>Extension Payment Required</strong>
                 <span>Approved return: {formatRentalDate(approvedUnpaidExtension.requested_return_date, approvedUnpaidExtension.requested_return_time)}</span>
                 <span>Extension due: {money(approvedUnpaidExtension.extension_total_amount)}</span>
+                {approvedUnpaidExtension.request_kind === 'switch_car_continuation' && <span>{money(approvedUnpaidExtension.deposit_carried_amount || 0)} deposit carries forward{Number(approvedUnpaidExtension.deposit_increase_amount || 0) > 0 ? `; ${money(approvedUnpaidExtension.deposit_increase_amount)} additional deposit is included` : ''}{Number(approvedUnpaidExtension.deposit_decrease_amount || 0) > 0 ? `; ${money(approvedUnpaidExtension.deposit_decrease_amount)} will be refunded after the original vehicle passes inspection` : ''}.</span>}
+                {approvedUnpaidExtension.request_kind !== 'switch_car_continuation' && <span>Your existing security deposit remains held; no second deposit is charged.</span>}
                 <small>Pay securely with Stripe before the longer return window activates.</small>
               </div>
             )}
