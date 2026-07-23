@@ -1361,16 +1361,15 @@ async function verifyPhoneCode() {
       return null;
     }
 
-    const { data, error: reloadError } = await supabase
+    const { data: reloadedRental, error: reloadError } = await supabase
       .from('rentals')
       .select('*, vehicles(*)')
       .eq('id', lockedRental.id)
       .single();
 
-    if (reloadError) {
-      notify(reloadError.message);
-      return null;
-    }
+    const data = reloadError
+      ? { ...lockedRental, vehicles: selectedVehicle }
+      : reloadedRental;
 
     let rentalData = data;
     const bookingId = pendingBookingId || getBookingIdFromUrl();
@@ -1381,6 +1380,9 @@ async function verifyPhoneCode() {
       });
 
       if (holdError) {
+        await supabase.rpc('cancel_customer_unattached_rental', {
+          p_rental_id: data.id,
+        });
         notify(holdError.message || 'Could not attach the checkout hold.');
         return null;
       }
@@ -2663,7 +2665,7 @@ async function verifyPhoneCode() {
                                       ? 'Same brand'
                                       : 'Available option'}
                               </span>
-                              <small>{money(vehicle.daily_rate)}/day • Request switch</small>
+                              <small>{money(vehicle.daily_rate)}/day • {money(vehicle.continuation_deposit ?? vehicle.security_deposit)} refundable deposit • Request switch</small>
                             </button>
                           ))}
                         </div>
