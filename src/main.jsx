@@ -4467,6 +4467,7 @@ function loadGoogleMaps() {
 function AddressAutocomplete({ value, onChange }) {
   const hostRef = useRef(null);
   const onChangeRef = useRef(onChange);
+  const userEditingRef = useRef(false);
   const [editing, setEditing] = useState(!value);
   const [manualEntry, setManualEntry] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -4477,7 +4478,7 @@ function AddressAutocomplete({ value, onChange }) {
   }, [onChange]);
 
   useEffect(() => {
-    if (value) setEditing(false);
+    if (value && !userEditingRef.current) setEditing(false);
   }, [value]);
 
   useEffect(() => {
@@ -4499,6 +4500,7 @@ function AddressAutocomplete({ value, onChange }) {
           await place.fetchFields({ fields: ['formattedAddress'] });
           if (place.formattedAddress) {
             onChangeRef.current(place.formattedAddress);
+            userEditingRef.current = false;
             setEditing(false);
           }
         } catch {
@@ -4527,7 +4529,10 @@ function AddressAutocomplete({ value, onChange }) {
       <div className="selected-address" aria-label="Selected home address">
         <MapPin size={19} />
         <span><small>Home address</small><strong>{value}</strong></span>
-        <button type="button" className="link-btn" onClick={() => setEditing(true)}>Change</button>
+        <button type="button" className="link-btn" onClick={() => {
+          userEditingRef.current = true;
+          setEditing(true);
+        }}>Change</button>
       </div>
     );
   }
@@ -4541,9 +4546,13 @@ function AddressAutocomplete({ value, onChange }) {
           placeholder="Street, city, state, ZIP"
           maxLength="240"
           value={value}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={(event) => {
+            userEditingRef.current = true;
+            onChange(event.target.value);
+          }}
           required
         />
+        <small>Your home address is kept with your renter profile for rental records and agreement preparation.</small>
         {loadFailed && <small>Address suggestions are unavailable right now. Enter the address manually.</small>}
       </label>
     );
@@ -4553,6 +4562,7 @@ function AddressAutocomplete({ value, onChange }) {
     <div className="address-autocomplete-field">
       <span>Home address</span>
       <div className="google-address-widget" ref={hostRef} />
+      <small>Your home address is kept with your renter profile for rental records and agreement preparation.</small>
       <button type="button" className="link-btn address-manual-toggle" onClick={() => setManualEntry(true)}>
         Enter address manually
       </button>
