@@ -13,6 +13,7 @@ import {
   FileText,
   LogOut,
   MapPin,
+  Menu,
   MessageCircle,
   ShieldCheck,
   Upload,
@@ -59,6 +60,9 @@ const DEFAULT_UNDER_25_PRICING = {
   rental_markup_percentage: 10,
 };
 const BOOKING_FLOW_TEST_VEHICLE_ID = '00000000-0000-4000-8000-000000000015';
+const BOOKING_FLOW_TEST_ENABLED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_BOOKING_FLOW_TEST === 'true';
+const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
+const ACCEPTED_DOCUMENT_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
 const AGREEMENT_VERSION = 'rentmect-master-v2026-05-20';
 const MILEAGE_POLICY = '200 miles/day included; excess mileage $0.35/mile';
 const CANCELLATION_TERMS = 'Contact Rent Me CT before pickup for cancellation or schedule changes.';
@@ -327,6 +331,9 @@ function App() {
   const [extensionMode, setExtensionMode] = useState('extend');
   const [tripChangeChoice, setTripChangeChoice] = useState('');
   const [portalDataReady, setPortalDataReady] = useState(false);
+  const [portalHealth, setPortalHealth] = useState({ refreshing: false, errors: [], lastUpdated: null });
+  const [documentUploadBusy, setDocumentUploadBusy] = useState({});
+  const [supportSending, setSupportSending] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [checkoutNow, setCheckoutNow] = useState(() => Date.now());
 
@@ -411,9 +418,14 @@ function App() {
   const [insuranceCoverage, setInsuranceCoverage] = useState({ collision: false, liability: false });
 
   function notify(text, type = 'info') {
-    setNotice({ text, type });
+    const resolvedType = type === 'info' && /could not|failed|error|invalid|expired|cannot|must|required|choose|enter|complete|verify|unavailable/i.test(text)
+      ? 'error'
+      : type;
+    setNotice({ text, type: resolvedType });
     window.clearTimeout(notify.timeout);
-    notify.timeout = window.setTimeout(() => setNotice(null), 5200);
+    if (resolvedType !== 'error') {
+      notify.timeout = window.setTimeout(() => setNotice(null), 5200);
+    }
   }
 
   useEffect(() => {
@@ -477,8 +489,23 @@ function App() {
     const refreshFleetCalendar = () => {
       window.clearTimeout(refreshTimer);
       refreshTimer = window.setTimeout(async () => {
-        const { data } = await supabase.rpc('get_vehicle_booking_blocks');
+        const { data, error } = await supabase.rpc('get_vehicle_booking_blocks');
+        if (error) {
+          setPortalHealth((current) => ({
+            ...current,
+            errors: [
+              ...(current.errors || []).filter((item) => item.label !== 'Availability'),
+              { label: 'Availability', message: userFacingPortalError(error, 'Live vehicle availability could not refresh.') },
+            ],
+          }));
+          return;
+        }
         if (data) setFleetRentals(data);
+        setPortalHealth((current) => ({
+          ...current,
+          errors: (current.errors || []).filter((item) => item.label !== 'Availability'),
+          lastUpdated: new Date().toISOString(),
+        }));
       }, 150);
     };
     const refreshOnFocus = () => refreshFleetCalendar();
@@ -487,7 +514,7 @@ function App() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rentals' }, refreshFleetCalendar)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pending_bookings' }, refreshFleetCalendar)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_availability_blocks' }, refreshFleetCalendar)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, () => loadPortalData(session.user.id))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, () => loadPortalData(session.user.id, { silent: true }))
       .subscribe();
     calendarPoll = window.setInterval(refreshFleetCalendar, 15 * 1000);
     window.addEventListener('focus', refreshOnFocus);
@@ -610,7 +637,7 @@ function App() {
     currentRental?.checkout_expires_at,
   ]);
 
-  const bookingFlowTestMode = Boolean(
+  const bookingFlowTestMode = BOOKING_FLOW_TEST_ENABLED && Boolean(
     pendingVehicleId === BOOKING_FLOW_TEST_VEHICLE_ID ||
     reservationForm.vehicleId === BOOKING_FLOW_TEST_VEHICLE_ID ||
     currentRental?.vehicle_id === BOOKING_FLOW_TEST_VEHICLE_ID
@@ -1023,8 +1050,14 @@ function loadSavedBookingFromWebsite() {
     }
   }
 
-  async function loadPortalData(userId) {
-    setLoading(true);
+  async function loadPortalData(userId, { silent = false } = {}) {
+    if (!silent) setLoading(true);
+    setPortalHealth((current) => ({ ...current, refreshing: true }));
+    let vehiclesQuery = supabase.from('vehicles').select('*');
+    vehiclesQuery = BOOKING_FLOW_TEST_ENABLED
+      ? vehiclesQuery.or(`published.eq.true,id.eq.${BOOKING_FLOW_TEST_VEHICLE_ID}`)
+      : vehiclesQuery.eq('published', true);
+    vehiclesQuery = vehiclesQuery.order('created_at', { ascending: false });
 
     const [
       profileResult,
@@ -1041,11 +1074,7 @@ function loadSavedBookingFromWebsite() {
       rentalChargesResult,
     ] = await Promise.all([
       supabase.from('profiles').select('*').eq('id', userId).single(),
-      supabase
-        .from('vehicles')
-        .select('*')
-        .or(`published.eq.true,id.eq.${BOOKING_FLOW_TEST_VEHICLE_ID}`)
-        .order('created_at', { ascending: false }),
+      vehiclesQuery,
       supabase
         .from('rentals')
         .select('*, vehicles(*)')
@@ -1090,6 +1119,24 @@ function loadSavedBookingFromWebsite() {
         .order('created_at', { ascending: false }),
     ]);
 
+    const dataErrors = [
+      ['Profile', profileResult.error],
+      ['Fleet', vehiclesResult.error],
+      ['Rentals', rentalsResult.error],
+      ['Documents', documentsResult.error],
+      ['Messages', messagesResult.error],
+      ['Reports', reportsResult.error],
+      ['Extensions', extensionsResult.error],
+      ['Rental exceptions', emergencyExceptionsResult.error],
+      ['Availability', fleetRentalsResult.error],
+      ['Fees', serviceFeesResult.error],
+      ['Age-based pricing', under25PricingResult.error],
+      ['Additional charges', rentalChargesResult.error],
+    ].filter(([, error]) => Boolean(error)).map(([label, error]) => ({
+      label,
+      message: userFacingPortalError(error, `${label} could not refresh.`),
+    }));
+
     if (profileResult.data) {
       setProfile(profileResult.data);
       setProfileForm({
@@ -1115,8 +1162,13 @@ function loadSavedBookingFromWebsite() {
     if (under25PricingResult.data) setUnder25Pricing(under25PricingResult.data);
     if (rentalChargesResult.data) setRentalCharges(rentalChargesResult.data);
 
+    setPortalHealth({
+      refreshing: false,
+      errors: dataErrors,
+      lastUpdated: new Date().toISOString(),
+    });
     setPortalDataReady(true);
-    setLoading(false);
+    if (!silent) setLoading(false);
   }
 
   async function handleAuth(event) {
@@ -1459,13 +1511,21 @@ async function verifyPhoneCode() {
   async function uploadDocument(event, documentType) {
     const file = event.target.files?.[0];
     if (!file || !session?.user?.id) return;
-
-    const rental = currentRental || (await createReservationIfNeeded());
-
-    if (!rental?.id) {
-      notify('Create a reservation before uploading documents.');
+    const validationError = validateDocumentFile(file);
+    if (validationError) {
+      notify(validationError, 'error');
+      event.target.value = '';
       return;
     }
+
+    setDocumentUploadBusy((current) => ({ ...current, [documentType]: true }));
+    try {
+      const rental = currentRental || (await createReservationIfNeeded());
+
+      if (!rental?.id) {
+        notify('Create a reservation before uploading documents.');
+        return;
+      }
 
     const existingDocument = documentType === 'license'
       ? latestDocument(documents, 'license')
@@ -1532,7 +1592,10 @@ async function verifyPhoneCode() {
     if (wizardOpen && documentType === 'license' && wizardStep === 3) {
       setWizardStep(3);
     }
-    if (event.target) event.target.value = '';
+      if (event.target) event.target.value = '';
+    } finally {
+      setDocumentUploadBusy((current) => ({ ...current, [documentType]: false }));
+    }
   }
 
   async function openDocument(document) {
@@ -1564,10 +1627,19 @@ async function verifyPhoneCode() {
   async function replaceDocument(event, document) {
     const file = event.target.files?.[0];
     if (!file || !session?.user?.id || !document?.id) return;
+    const validationError = validateDocumentFile(file);
+    if (validationError) {
+      notify(validationError, 'error');
+      event.target.value = '';
+      return;
+    }
 
-    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
-    const existingPath = document.file_path || document.storage_path || document.path;
-    const path = existingPath || `${session.user.id}/${document.document_type}/${Date.now()}-${safeName}`;
+    const busyKey = `replace:${document.id}`;
+    setDocumentUploadBusy((current) => ({ ...current, [busyKey]: true }));
+    try {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
+      const existingPath = document.file_path || document.storage_path || document.path;
+      const path = existingPath || `${session.user.id}/${document.document_type}/${Date.now()}-${safeName}`;
 
     const { error: uploadError } = await supabase.storage
       .from('rental-documents')
@@ -1597,7 +1669,11 @@ async function verifyPhoneCode() {
     setDocuments(nextDocuments);
     await syncRentalDocumentReviewStatus(currentRental, nextDocuments);
     await maybeMarkReadyForPickup(currentRental, nextDocuments);
-    notify(`${documentTypeLabel(document.document_type)} replaced and sent for review.`);
+      notify(`${documentTypeLabel(document.document_type)} replaced and sent for review.`);
+      if (event.target) event.target.value = '';
+    } finally {
+      setDocumentUploadBusy((current) => ({ ...current, [busyKey]: false }));
+    }
   }
 
   async function syncRentalDocumentReviewStatus(rental, nextDocuments) {
@@ -1754,28 +1830,33 @@ async function verifyPhoneCode() {
     event.preventDefault();
 
     const text = supportText.trim();
-    if (!text || !session?.user?.id) return;
+    if (!text || !session?.user?.id || supportSending) return;
 
-    const { data, error } = await supabase
-      .from('rental_messages')
-      .insert({
-        user_id: session.user.id,
-        rental_id: currentRental?.id || null,
-        sender_role: 'client',
-        message: text,
-        read_by_admin: false,
-        read_by_client: true,
-      })
-      .select()
-      .single();
+    setSupportSending(true);
+    try {
+      const { data, error } = await supabase
+        .from('rental_messages')
+        .insert({
+          user_id: session.user.id,
+          rental_id: currentRental?.id || null,
+          sender_role: 'client',
+          message: text,
+          read_by_admin: false,
+          read_by_client: true,
+        })
+        .select()
+        .single();
 
-    if (error) {
-      notify(error.message);
-      return;
+      if (error) {
+        notify(error.message);
+        return;
+      }
+
+      setMessages((current) => [...current, data]);
+      setSupportText('');
+    } finally {
+      setSupportSending(false);
     }
-
-    setMessages([...messages, data]);
-    setSupportText('');
   }
 
   async function confirmReturn() {
@@ -2409,6 +2490,7 @@ async function verifyPhoneCode() {
           startIdentityVerification={startIdentityVerification}
           refreshIdentityVerification={refreshIdentityVerification}
           uploadDocument={uploadDocument}
+          documentUploadBusy={documentUploadBusy}
           licenseUploaded={licenseUploaded}
           insuranceUploaded={insuranceUploaded}
           insuranceCoverage={insuranceCoverage}
@@ -2454,7 +2536,7 @@ async function verifyPhoneCode() {
           </picture>
         </div>
         <button className="nav-toggle" type="button" onClick={() => setNavCollapsed(!navCollapsed)} aria-label={navCollapsed ? 'Expand navigation' : 'Collapse navigation'}>
-          <X size={17} /><span>{navCollapsed ? 'Expand' : 'Collapse'}</span>
+          {navCollapsed ? <Menu size={17} /> : <X size={17} />}<span>{navCollapsed ? 'Expand' : 'Collapse'}</span>
         </button>
 
         <nav className="side-nav tab-nav">
@@ -2464,6 +2546,7 @@ async function verifyPhoneCode() {
               type="button"
               className={activeTab === key ? 'active' : ''}
               onClick={() => setActiveTab(key)}
+              aria-current={activeTab === key ? 'page' : undefined}
             >
               <Icon size={18} /> <span>{label}</span>
             </button>
@@ -2492,6 +2575,8 @@ async function verifyPhoneCode() {
             </button>}
           </div>
         </header>
+
+        <PortalDataHealth health={portalHealth} onRetry={() => loadPortalData(session.user.id, { silent: true })} />
 
         {checkoutHoldActive && (
           <CheckoutHoldTimer
@@ -2746,11 +2831,12 @@ async function verifyPhoneCode() {
               <p className="eyebrow">Profile</p>
               <h3>Customer Information</h3>
               <form className="portal-form" onSubmit={saveProfile}>
-                <input
-                  placeholder="Full legal name"
+                <label><span>Full legal name</span><input
+                  autoComplete="name"
+                  placeholder="Name as shown on your license"
                   value={profileForm.full_name}
                   onChange={(e) => setProfileForm({ ...profileForm, full_name: e.target.value })}
-                />
+                /></label>
                 <label className="profile-date-field">
                   <span>Date of birth</span>
                   <input
@@ -2762,11 +2848,13 @@ async function verifyPhoneCode() {
                   />
                   {profileForm.date_of_birth && <small>{isCustomerUnder25(profileForm.date_of_birth) ? 'Under 25: the configured deposit adjustment and rental markup apply.' : 'Age 25 or older: the selected vehicle deposit applies.'}</small>}
                 </label>
-                <input
-                  placeholder="Phone number"
+                <label><span>Phone number</span><input
+                  type="tel"
+                  autoComplete="tel"
+                  placeholder="Example: 8605551234"
                   value={profileForm.phone}
                   onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value })}
-                />
+                /></label>
                 <AddressAutocomplete
                   value={profileForm.address}
                   onChange={(address) => setProfileForm((current) => ({ ...current, address }))}
@@ -2834,6 +2922,7 @@ async function verifyPhoneCode() {
                     text={licenseRejected ? 'The saved driver license was rejected. Upload a replacement to keep it on file.' : 'Upload a clear image or PDF once. Returning rentals can reuse this driver license.'}
                     icon={Upload}
                     onUpload={(e) => uploadDocument(e, 'license')}
+                    busy={Boolean(documentUploadBusy.license)}
                   />
                 )}
                 {!insuranceUploaded && (
@@ -2844,6 +2933,7 @@ async function verifyPhoneCode() {
                       text={insuranceRejected ? 'This rental insurance upload was rejected. Upload a replacement for review.' : 'Upload proof of active auto insurance for this rental.'}
                       icon={FileText}
                       onUpload={(e) => uploadDocument(e, 'insurance')}
+                      busy={Boolean(documentUploadBusy.insurance)}
                     />
                   </div>
                 )}
@@ -2852,7 +2942,7 @@ async function verifyPhoneCode() {
             {licenseUploaded && !currentRentalLicenseDocument && (
               <p className="document-on-file-note">Driver license on file. This rental only needs a fresh insurance upload.</p>
             )}
-            <UploadedDocuments documents={documentsForActiveRental} currentRental={currentRental} openDocument={openDocument} replaceDocument={replaceDocument} />
+            <UploadedDocuments documents={documentsForActiveRental} currentRental={currentRental} openDocument={openDocument} replaceDocument={replaceDocument} busy={documentUploadBusy} />
           </>
         )}
 
@@ -2990,12 +3080,15 @@ async function verifyPhoneCode() {
               ))}
             </div>
             <form className="support-form" onSubmit={sendSupportMessage}>
+              <label className="sr-only" htmlFor="client-support-message">Message Rent Me CT</label>
               <input
+                id="client-support-message"
                 value={supportText}
                 onChange={(e) => setSupportText(e.target.value)}
                 placeholder="Ask about pickup, return, extension, documents, billing..."
+                disabled={supportSending}
               />
-              <button>Send</button>
+              <button disabled={supportSending || !supportText.trim()}>{supportSending ? 'Sending…' : 'Send'}</button>
             </form>
           </section>
         )}
@@ -3053,6 +3146,7 @@ async function verifyPhoneCode() {
           startIdentityVerification={startIdentityVerification}
           refreshIdentityVerification={refreshIdentityVerification}
           uploadDocument={uploadDocument}
+          documentUploadBusy={documentUploadBusy}
           licenseUploaded={licenseUploaded}
           insuranceUploaded={insuranceUploaded}
           agreementChecked={agreementChecked}
@@ -3125,6 +3219,7 @@ function WizardModal({
   startIdentityVerification,
   refreshIdentityVerification,
   uploadDocument,
+  documentUploadBusy,
   licenseUploaded,
   insuranceUploaded,
   agreementChecked,
@@ -3146,17 +3241,18 @@ function WizardModal({
   const step = wizardSteps[wizardStep];
   const Icon = step.icon;
   const [vehicleReminder, setVehicleReminder] = useState(null);
+  const dialogRef = useDialogFocus(() => setWizardOpen(false));
 
   return (
-    <div className="wizard-backdrop">
-      <div className="wizard-modal">
+    <div className="wizard-backdrop" role="presentation">
+      <div ref={dialogRef} className="wizard-modal" role="dialog" aria-modal="true" aria-labelledby="guided-rental-step-title" tabIndex="-1">
         <div className="wizard-header">
           <div>
             <p className="eyebrow">Step {wizardStep + 1} of {wizardSteps.length}</p>
-            <h2><Icon size={24} /> {step.title}</h2>
+            <h2 id="guided-rental-step-title"><Icon size={24} /> {step.title}</h2>
             <span>{step.status}</span>
           </div>
-          <button className="wizard-close" onClick={() => setWizardOpen(false)}>
+          <button className="wizard-close" type="button" aria-label="Close guided steps" onClick={() => setWizardOpen(false)}>
             <X size={20} />
           </button>
         </div>
@@ -3196,11 +3292,12 @@ function WizardModal({
                 Add your renter details once, then verify your phone. Your passwordless account is already connected to this booking.
               </p>
 
-              <input
-                placeholder="Full legal name"
+              <label><span>Full legal name</span><input
+                autoComplete="name"
+                placeholder="Name as shown on your license"
                 value={profileForm.full_name}
                 onChange={(e) => setProfileForm({ ...profileForm, full_name: e.target.value })}
-              />
+              /></label>
 
               <label className="auth-date-field">
                 <span>Date of birth</span>
@@ -3229,14 +3326,16 @@ function WizardModal({
                 <small>{profileForm.intended_vehicle_use.length}/500 characters</small>
               </label>
 
-              <input
-                placeholder="Phone number, example 8605551234"
+              <label><span>Phone number</span><input
+                type="tel"
+                autoComplete="tel"
+                placeholder="Example: 8605551234"
                 value={profileForm.phone}
                 onChange={(e) => {
                   setWizardReminder(null);
                   setProfileForm({ ...profileForm, phone: e.target.value });
                 }}
-              />
+              /></label>
 
               <EmailMarketingPreference profileForm={profileForm} setProfileForm={setProfileForm} />
 
@@ -3246,7 +3345,7 @@ function WizardModal({
 
               {!phoneVerified && (
                 <>
-                  <input
+                  <label><span>Phone verification code</span><input
                     placeholder="Enter verification code"
                     inputMode="numeric"
                     autoComplete="one-time-code"
@@ -3255,7 +3354,7 @@ function WizardModal({
                       setWizardReminder(null);
                       setPhoneCode(e.target.value.replace(/\D/g, '').slice(0, 10));
                     }}
-                  />
+                  /></label>
 
                   <button className="secondary-btn" type="button" onClick={verifyPhoneCode} disabled={verifyingCode}>
                     {verifyingCode ? 'Verifying...' : 'Verify Phone'}
@@ -3500,15 +3599,16 @@ function WizardModal({
                   </div>
                 </div>
               ) : (
-                <label className="secondary-btn">
-                  Upload Driver License
+                <label className={`secondary-btn ${documentUploadBusy?.license ? 'is-busy' : ''}`}>
+                  {documentUploadBusy?.license ? 'Uploading license…' : 'Upload Driver License'}
                   <input
                     type="file"
-                    accept="image/*,.pdf"
+                    accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
                     onChange={(e) => {
                       setWizardReminder(null);
                       uploadDocument(e, 'license');
                     }}
+                    disabled={Boolean(documentUploadBusy?.license)}
                     style={{ display: 'none' }}
                   />
                 </label>
@@ -3533,15 +3633,16 @@ function WizardModal({
                   </div>
                 </div>
               ) : (
-                <label className="secondary-btn">
-                  Upload Insurance
+                <label className={`secondary-btn ${documentUploadBusy?.insurance ? 'is-busy' : ''}`}>
+                  {documentUploadBusy?.insurance ? 'Uploading insurance…' : 'Upload Insurance'}
                   <input
                     type="file"
-                    accept="image/*,.pdf"
+                    accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
                     onChange={(e) => {
                       setWizardReminder(null);
                       uploadDocument(e, 'insurance');
                     }}
+                    disabled={Boolean(documentUploadBusy?.insurance)}
                     style={{ display: 'none' }}
                   />
                 </label>
@@ -3617,15 +3718,16 @@ function AgreementModal({
   currentRental,
   onClose,
 }) {
+  const dialogRef = useDialogFocus(onClose);
   return (
-    <div className="modal-backdrop">
-      <div className="agreement-modal">
+    <div className="modal-backdrop" role="presentation">
+      <div ref={dialogRef} className="agreement-modal" role="dialog" aria-modal="true" aria-labelledby="agreement-modal-title" tabIndex="-1">
         <div className="modal-header">
           <div>
             <p className="eyebrow">Rental Agreement</p>
-            <h2>Review & Sign</h2>
+            <h2 id="agreement-modal-title">Review & Sign</h2>
           </div>
-          <button className="wizard-close" onClick={onClose}>
+          <button className="wizard-close" type="button" aria-label="Close rental agreement" onClick={onClose}>
             <X size={20} />
           </button>
         </div>
@@ -3644,23 +3746,26 @@ function AgreementModal({
             I have read and agree to the rental agreement.
           </label>
 
-          <input
-            className="signature-input"
-            placeholder="Type full legal name as signature"
-            value={signatureName}
-            onChange={(e) => setSignatureName(e.target.value)}
-          />
+          <label className="signature-field">
+            <span>Full legal name</span>
+            <input
+              className="signature-input"
+              placeholder="Type full legal name as signature"
+              value={signatureName}
+              onChange={(e) => setSignatureName(e.target.value)}
+            />
+          </label>
 
           <SignaturePad value={signatureImageData} onChange={setSignatureImageData} />
 
           <div className="button-row end-row">
-            <button className="secondary-btn" onClick={onClose}>Cancel</button>
+            <button className="secondary-btn" type="button" onClick={onClose}>Cancel</button>
             {currentRental?.agreement_snapshot && (
               <button className="secondary-btn" type="button" onClick={() => downloadAgreement(currentRental)}>
                 Download Agreement
               </button>
             )}
-            <button className="primary-btn" onClick={signAgreement} disabled={agreementSaving}>
+            <button className="primary-btn" type="button" onClick={signAgreement} disabled={agreementSaving}>
               <FileSignature size={17} /> {agreementSaving ? 'Signing...' : 'Sign Agreement'}
             </button>
           </div>
@@ -3782,7 +3887,7 @@ function ServiceFeesSummary({ serviceFees, total }) {
 
 function LoadingScreen() {
   return (
-    <div className="loading-screen">
+    <div className="loading-screen" role="status" aria-live="polite">
       <div className="road"><div className="loading-car">▰</div></div>
       <h1>Getting your rental ready...</h1>
     </div>
@@ -3790,12 +3895,110 @@ function LoadingScreen() {
 }
 
 function Notice({ notice, onDismiss }) {
+  const isError = notice.type === 'error';
   return (
-    <div className={`notice-banner ${notice.type || 'info'}`}>
+    <div className={`notice-banner ${notice.type || 'info'}`} role={isError ? 'alert' : 'status'} aria-live={isError ? 'assertive' : 'polite'} aria-atomic="true">
       <span>{notice.text}</span>
-      <button type="button" onClick={onDismiss}>Dismiss</button>
+      <button type="button" onClick={onDismiss} aria-label="Dismiss notification">Dismiss</button>
     </div>
   );
+}
+
+function PortalDataHealth({ health, onRetry }) {
+  if (!health?.errors?.length && !health?.refreshing) return null;
+  const lastUpdated = health.lastUpdated ? new Date(health.lastUpdated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+  if (!health.errors.length) {
+    return <div className="portal-data-health refreshing" role="status" aria-live="polite"><Clock size={18}/><span>Refreshing your rental information{lastUpdated ? ` • last updated ${lastUpdated}` : ''}…</span></div>;
+  }
+  return <section className="portal-data-health error" role="alert" aria-live="assertive">
+    <AlertTriangle size={20}/>
+    <div>
+      <strong>Some information could not refresh</strong>
+      <span>{health.errors.map((item) => item.label).join(', ')} may be incomplete. Your existing information has not been changed.</span>
+      <details><summary>View details</summary><ul>{health.errors.map((item) => <li key={item.label}><strong>{item.label}:</strong> {item.message}</li>)}</ul></details>
+    </div>
+    <button type="button" className="secondary-btn" onClick={onRetry} disabled={health.refreshing}>{health.refreshing ? 'Retrying…' : 'Try again'}</button>
+  </section>;
+}
+
+function userFacingPortalError(error, fallback = 'Something went wrong. Please try again.') {
+  const message = String(error?.message || error || '').trim();
+  if (!message) return fallback;
+  if (/failed to fetch|network|load failed|connection|timeout/i.test(message)) return 'The connection was interrupted. Check your internet connection and try again.';
+  if (/jwt|token|session|not authenticated/i.test(message)) return 'Your secure session needs to be refreshed. Sign in again and retry.';
+  if (/duplicate key|already exists/i.test(message)) return 'That update was already recorded. Refresh to see the latest status.';
+  return fallback;
+}
+
+function validateDocumentFile(file) {
+  if (file.size > MAX_DOCUMENT_BYTES) return 'Choose a document smaller than 10 MB.';
+  if (!ACCEPTED_DOCUMENT_TYPES.includes(file.type)) return 'Choose a PDF, JPEG, PNG, or WebP document.';
+  return '';
+}
+
+function useDialogFocus(onClose) {
+  const dialogRef = useRef(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return undefined;
+    const previousFocus = document.activeElement;
+    const previousOverflow = document.body.style.overflow;
+    const focusableSelector = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const firstFocusable = dialog.querySelector(focusableSelector);
+    window.requestAnimationFrame(() => (firstFocusable || dialog).focus());
+    document.body.style.overflow = 'hidden';
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeRef.current?.();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = [...dialog.querySelectorAll(focusableSelector)].filter((element) => element instanceof HTMLElement && element.offsetParent !== null);
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      if (previousFocus instanceof HTMLElement) previousFocus.focus();
+    };
+  }, []);
+  return dialogRef;
+}
+
+class PortalErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch(error) {
+    console.error('Client portal render failed', error);
+  }
+  render() {
+    if (this.state.failed) {
+      return <main className="portal-error-boundary"><div><AlertTriangle size={28}/><h1>We couldn’t display your portal</h1><p>Your rental information was not changed. Refresh the page to reconnect securely.</p><button type="button" className="primary-btn" onClick={() => window.location.reload()}>Refresh portal</button></div></main>;
+    }
+    return this.props.children;
+  }
 }
 
 function MobileFlowStatus({ items }) {
@@ -4050,6 +4253,7 @@ function PreviewCheckout({
   startIdentityVerification,
   refreshIdentityVerification,
   uploadDocument,
+  documentUploadBusy,
   licenseUploaded,
   insuranceUploaded,
   insuranceCoverage,
@@ -4137,10 +4341,10 @@ function PreviewCheckout({
 
           <PreviewCheckoutSection number="3" title="Driver documents" summary={documentsComplete ? 'License and insurance uploaded' : `${licenseUploaded ? 'License uploaded' : 'License required'} • ${insuranceUploaded ? 'Insurance uploaded' : 'Insurance required'}`} completed={documentsComplete} open={activeSection === 'documents'} onOpen={() => setActiveSection('documents')}>
             <div className="preview-upload-grid">
-              <PreviewUploadCard title="Driver license" text="Clear photo or PDF. Reused for future rentals." complete={licenseUploaded} onUpload={(event) => uploadDocument(event, 'license')} />
+              <PreviewUploadCard title="Driver license" text="PDF, JPEG, PNG, or WebP up to 10 MB. Reused for future rentals." complete={licenseUploaded} busy={Boolean(documentUploadBusy?.license)} onUpload={(event) => uploadDocument(event, 'license')} />
               <div>
                 <InsuranceOptionsPanel insuranceCoverage={insuranceCoverage} setInsuranceCoverage={setInsuranceCoverage} />
-                <PreviewUploadCard title="Proof of insurance" text="Current policy showing active coverage." complete={insuranceUploaded} onUpload={(event) => uploadDocument(event, 'insurance')} />
+                <PreviewUploadCard title="Proof of insurance" text="Current policy as PDF, JPEG, PNG, or WebP up to 10 MB." complete={insuranceUploaded} busy={Boolean(documentUploadBusy?.insurance)} onUpload={(event) => uploadDocument(event, 'insurance')} />
               </div>
             </div>
           </PreviewCheckoutSection>
@@ -4185,14 +4389,14 @@ function PreviewCheckoutSection({ number, title, summary, completed, open, onOpe
   );
 }
 
-function PreviewUploadCard({ title, text, complete, onUpload }) {
+function PreviewUploadCard({ title, text, complete, busy = false, onUpload }) {
   return (
     <label className={`preview-upload-card ${complete ? 'complete' : ''}`}>
       {complete ? <CheckCircle2 size={25} /> : <Upload size={25} />}
-      <strong>{complete ? `${title} uploaded` : title}</strong>
+      <strong>{busy ? `Uploading ${title.toLowerCase()}…` : complete ? `${title} uploaded` : title}</strong>
       <span>{complete ? 'Ready for review. Choose a file to replace it.' : text}</span>
-      <em>{complete ? 'Replace file' : 'Choose file'}</em>
-      <input type="file" accept="image/*,.pdf" onChange={onUpload} />
+      <em>{busy ? 'Please wait…' : complete ? 'Replace file' : 'Choose file'}</em>
+      <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp" onChange={onUpload} disabled={busy} />
     </label>
   );
 }
@@ -4254,24 +4458,31 @@ function AuthScreen({
           <CheckoutHoldTimer secondsRemaining={checkoutSecondsRemaining} expired={checkoutExpired} compact />
         )}
 
-        <input
-          type="email"
-          placeholder="Email"
-          value={authForm.email}
-          onChange={(e) => update('email', e.target.value)}
-          disabled={emailOtpSent || emailAuthBusy}
-          required
-        />
-
-        {emailOtpSent && (
+        <label>
+          <span>Email address</span>
           <input
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            placeholder="One-time email code"
-            value={emailOtp}
-            onChange={(e) => setEmailOtp(e.target.value.replace(/\D/g, '').slice(0, 8))}
+            type="email"
+            autoComplete="email"
+            placeholder="you@example.com"
+            value={authForm.email}
+            onChange={(e) => update('email', e.target.value)}
+            disabled={emailOtpSent || emailAuthBusy}
             required
           />
+        </label>
+
+        {emailOtpSent && (
+          <label>
+            <span>One-time email code</span>
+            <input
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              placeholder="Code from your email"
+              value={emailOtp}
+              onChange={(e) => setEmailOtp(e.target.value.replace(/\D/g, '').slice(0, 8))}
+              required
+            />
+          </label>
         )}
 
         <button className="primary-btn" type="submit" disabled={emailAuthBusy || checkoutExpired}>
@@ -4353,18 +4564,19 @@ function ChecklistItem({ icon: Icon, title, status, completed, onOpen }) {
   );
 }
 
-function UploadCard({ icon: Icon, title, text, onUpload }) {
+function UploadCard({ icon: Icon, title, text, busy = false, onUpload }) {
   return (
     <div className="panel action-card">
       <Icon size={28} />
       <h3>{title}</h3>
       <p className="muted">{text}</p>
       <label className="secondary-btn">
-        Start
+        {busy ? 'Uploading…' : 'Choose file'}
         <input
           type="file"
-          accept="image/*,.pdf"
+          accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
           onChange={onUpload}
+          disabled={busy}
           style={{ display: 'none' }}
         />
       </label>
@@ -4413,7 +4625,7 @@ function ActionCard({ icon: Icon, title, text, onClick }) {
   );
 }
 
-function UploadedDocuments({ documents, currentRental, openDocument, replaceDocument }) {
+function UploadedDocuments({ documents, currentRental, openDocument, replaceDocument, busy = {} }) {
   const sortedDocuments = [...documents].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
 
   return (
@@ -4433,12 +4645,13 @@ function UploadedDocuments({ documents, currentRental, openDocument, replaceDocu
               <button className="secondary-btn" type="button" onClick={() => openDocument(document)}>
                 <FileText size={16} /> Open
               </button>
-              <label className="secondary-btn">
-                <Upload size={16} /> Replace
+              <label className={`secondary-btn ${busy[`replace:${document.id}`] ? 'is-busy' : ''}`}>
+                <Upload size={16} /> {busy[`replace:${document.id}`] ? 'Replacing…' : 'Replace'}
                 <input
                   type="file"
-                  accept="image/*,.pdf"
+                  accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
                   onChange={(event) => replaceDocument(event, document)}
+                  disabled={Boolean(busy[`replace:${document.id}`])}
                   style={{ display: 'none' }}
                 />
               </label>
@@ -4710,7 +4923,7 @@ function vehicleImageKey(value) {
 }
 
 function isBookingFlowTestVehicle(vehicle) {
-  return vehicle?.id === BOOKING_FLOW_TEST_VEHICLE_ID;
+  return BOOKING_FLOW_TEST_ENABLED && vehicle?.id === BOOKING_FLOW_TEST_VEHICLE_ID;
 }
 
 const VEHICLE_IMAGES_BY_KEY = Object.fromEntries(
@@ -5074,4 +5287,4 @@ function escapeHtml(value) {
   })[char]);
 }
 
-createRoot(document.getElementById('root')).render(<App />);
+createRoot(document.getElementById('root')).render(<PortalErrorBoundary><App /></PortalErrorBoundary>);

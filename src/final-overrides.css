@@ -160,3 +160,135 @@
     grid-template-columns: 1fr;
   }
 }
+
+.portal-data-health {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid #d8e2dc;
+  border-radius: 12px;
+  background: #f6faf7;
+  color: #183b27;
+}
+
+.portal-data-health.error {
+  border-color: #e7b8b5;
+  background: #fff2f1;
+  color: #922d28;
+}
+
+.portal-data-health > div {
+  display: grid;
+  gap: 3px;
+}
+
+.portal-data-health span {
+  color: inherit;
+  font-size: 13px;
+}
+
+.portal-data-health details {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.portal-data-health ul {
+  margin: 7px 0 0;
+  padding-left: 18px;
+}
+
+.secondary-btn.is-busy,
+.preview-upload-card:has(input:disabled) {
+  cursor: wait !important;
+  opacity: .72;
+}
+
+.signature-field {
+  display: grid;
+  gap: 6px;
+}
+
+.signature-field > span {
+  color: #34433a;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.portal-error-boundary {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+  background: #f3f6f4;
+}
+
+.portal-error-boundary > div {
+  width: min(520px, 100%);
+  padding: 28px;
+  border: 1px solid #d8e0db;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 14px 42px rgba(15, 35, 22, .12);
+}
+
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 3px solid #24794a !important;
+  outline-offset: 3px !important;
+}
+
+@media (max-width: 760px) {
+  .portal-data-health {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .portal-data-health > button {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-height: 46px;
+  }
+
+  .wizard-modal,
+  .agreement-modal {
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px) !important;
+    max-height: calc(100dvh - 16px) !important;
+  }
+
+  .support-form button,
+  .preview-upload-card,
+  .document-actions .secondary-btn {
+    min-height: 46px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

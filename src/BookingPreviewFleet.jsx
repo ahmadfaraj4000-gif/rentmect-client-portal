@@ -5,6 +5,7 @@ import logoMobileUrl from './assets/logo-mobile.png';
 import './booking-preview-fleet.css';
 
 const TEST_VEHICLE_ID = '00000000-0000-4000-8000-000000000015';
+const TEST_VEHICLE_ENABLED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_BOOKING_FLOW_TEST === 'true';
 const PUBLIC_ASSET_BASE = (import.meta.env.VITE_PUBLIC_FLEET_ASSET_BASE_URL || 'https://rentmect.com/assets').replace(/\/$/, '');
 const FALLBACK_IMAGE = `${PUBLIC_ASSET_BASE}/Benz-CLS-AMG-550-224.webp`;
 const TIME_OPTIONS = Array.from({ length: 25 }, (_, index) => {
@@ -37,7 +38,7 @@ function list(value) {
 function vehicleImages(vehicle) {
   const uploaded = list(vehicle?.image_urls);
   if (uploaded.length) return uploaded;
-  if (vehicle?.id === TEST_VEHICLE_ID) {
+  if (TEST_VEHICLE_ENABLED && vehicle?.id === TEST_VEHICLE_ID) {
     return [FALLBACK_IMAGE, `${PUBLIC_ASSET_BASE}/fleet-2/224-1.webp`, `${PUBLIC_ASSET_BASE}/fleet-2/224-2.webp`];
   }
   const normalized = String(vehicle?.name || '')
@@ -78,13 +79,13 @@ export default function BookingPreviewFleet() {
   useEffect(() => {
     let active = true;
     async function loadVehicles() {
-      const { data, error: loadError } = await supabase
-        .from('vehicles')
-        .select('*')
-        .or(`published.eq.true,id.eq.${TEST_VEHICLE_ID}`)
-        .order('daily_rate', { ascending: true });
+      let query = supabase.from('vehicles').select('*');
+      query = TEST_VEHICLE_ENABLED
+        ? query.or(`published.eq.true,id.eq.${TEST_VEHICLE_ID}`)
+        : query.eq('published', true);
+      const { data, error: loadError } = await query.order('daily_rate', { ascending: true });
       if (!active) return;
-      if (loadError) setError(loadError.message);
+      if (loadError) setError(previewError(loadError, 'The fleet could not load. Refresh the page to try again.'));
       else setVehicles(data || []);
       setLoading(false);
     }
@@ -109,18 +110,18 @@ export default function BookingPreviewFleet() {
       });
       if (!active) return;
       if (availabilityError) {
-        setError(availabilityError.message);
+        setError(previewError(availabilityError, 'Live availability could not be verified. Please try again.'));
         setAvailability(new Map());
       } else {
         setError('');
         const nextAvailability = new Map((data || []).map((item) => [item.vehicle_id, item]));
-        // The fixed internal test lane intentionally bypasses production inventory
-        // so QA can run the full flow repeatedly without blocking a real vehicle.
-        nextAvailability.set(TEST_VEHICLE_ID, {
-          vehicle_id: TEST_VEHICLE_ID,
-          available: true,
-          reason: 'Internal test lane',
-        });
+        if (TEST_VEHICLE_ENABLED) {
+          nextAvailability.set(TEST_VEHICLE_ID, {
+            vehicle_id: TEST_VEHICLE_ID,
+            available: true,
+            reason: 'Internal test lane',
+          });
+        }
         setAvailability(nextAvailability);
       }
       setChecking(false);
@@ -167,7 +168,7 @@ export default function BookingPreviewFleet() {
       p_selected_vehicle_name: selectedVehicle.name,
     });
     if (bookingError || !bookingId) {
-      setError(bookingError?.message || 'The checkout session could not be created.');
+      setError(previewError(bookingError, 'The checkout session could not be created. Please retry.'));
       setStarting(false);
       return;
     }
@@ -197,7 +198,7 @@ export default function BookingPreviewFleet() {
         <section className="supabase-preview-gallery">
           <img className="featured" src={images[0]} alt={selectedVehicle.name} onError={(event) => { event.currentTarget.src = FALLBACK_IMAGE; }} />
           <div>{images.slice(1, 5).map((image, index) => <img key={`${image}-${index}`} src={image} alt={`${selectedVehicle.name} view ${index + 2}`} onError={(event) => { event.currentTarget.hidden = true; }} />)}</div>
-          {selectedVehicle.id === TEST_VEHICLE_ID && <span>Internal test vehicle</span>}
+          {TEST_VEHICLE_ENABLED && selectedVehicle.id === TEST_VEHICLE_ID && <span>Internal test vehicle</span>}
         </section>
         <div className="supabase-preview-detail-grid">
           <div className="supabase-preview-copy">
@@ -229,23 +230,29 @@ export default function BookingPreviewFleet() {
       <section className="supabase-preview-date-panel"><h2>Choose rental dates</h2><TripFields trip={trip} updateTrip={updateTrip} /></section>
       <section className="supabase-preview-filterbar">
         <div className="supabase-preview-search"><Search size={18}/><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search the fleet" /></div>
-        <button type="button" className={availableOnly ? 'active' : ''} onClick={() => setAvailableOnly((current) => !current)}>Available only</button>
+        <button type="button" className={availableOnly ? 'active' : ''} aria-pressed={availableOnly} onClick={() => setAvailableOnly((current) => !current)}>Available only</button>
       </section>
-      <nav className="supabase-preview-filters"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>All vehicles</button>{brands.map((brand) => <button key={brand} className={filter === brand.toLowerCase() ? 'active' : ''} onClick={() => setFilter(brand.toLowerCase())}>{brand}</button>)}{['suv', 'sedan', 'truck', 'van', 'luxury'].map((type) => <button key={type} className={filter === type ? 'active' : ''} onClick={() => setFilter(type)}>{type[0].toUpperCase() + type.slice(1)}</button>)}</nav>
-      {error && <p className="supabase-preview-error fleet-error">{error}</p>}
-      {loading ? <div className="supabase-preview-loading">Loading Supabase fleet…</div> : <section className="supabase-preview-grid">
+      <nav className="supabase-preview-filters" aria-label="Filter vehicles"><button type="button" aria-pressed={filter === 'all'} className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>All vehicles</button>{brands.map((brand) => <button type="button" aria-pressed={filter === brand.toLowerCase()} key={brand} className={filter === brand.toLowerCase() ? 'active' : ''} onClick={() => setFilter(brand.toLowerCase())}>{brand}</button>)}{['suv', 'sedan', 'truck', 'van', 'luxury'].map((type) => <button type="button" aria-pressed={filter === type} key={type} className={filter === type ? 'active' : ''} onClick={() => setFilter(type)}>{type[0].toUpperCase() + type.slice(1)}</button>)}</nav>
+      {error && <p className="supabase-preview-error fleet-error" role="alert">{error}</p>}
+      {loading ? <div className="supabase-preview-loading" role="status">Loading live fleet…</div> : <section className="supabase-preview-grid" aria-busy={checking}>
         {visibleVehicles.map((vehicle) => {
           const result = availability.get(vehicle.id);
           const available = result?.available === true;
           return <article className="supabase-preview-vehicle-card" key={vehicle.id}>
-            <div className="image"><img src={vehicleImages(vehicle)[0]} alt={vehicle.name} onError={(event) => { event.currentTarget.src = FALLBACK_IMAGE; }}/>{vehicle.id === TEST_VEHICLE_ID && <em>Test lane</em>}</div>
-            <div className="body"><span className={`status ${available ? 'available' : 'unavailable'}`}>{checking ? 'Checking…' : available ? 'Available' : result?.reason || 'Unavailable'}</span><h2>{vehicle.name}</h2><p>{[vehicle.vehicle_type, vehicle.brand, vehicle.model].filter(Boolean).join(' • ')}</p><ul><li>200 miles per day included</li><li>{money(vehicle.security_deposit || 300)} refundable deposit</li><li>Three-hour turnaround protected</li></ul><div className="price"><strong>{money(vehicle.daily_rate)}</strong><span>/ day</span></div><button type="button" onClick={() => setSelectedId(vehicle.id)}>View &amp; book<ChevronRight size={17}/></button></div>
+            <div className="image"><img src={vehicleImages(vehicle)[0]} alt={vehicle.name} onError={(event) => { event.currentTarget.src = FALLBACK_IMAGE; }}/>{TEST_VEHICLE_ENABLED && vehicle.id === TEST_VEHICLE_ID && <em>Test lane</em>}</div>
+            <div className="body"><span className={`status ${available ? 'available' : 'unavailable'}`}>{checking ? 'Checking…' : available ? 'Available' : result?.reason || 'Unavailable'}</span><h2>{vehicle.name}</h2><p>{[vehicle.vehicle_type, vehicle.brand, vehicle.model].filter(Boolean).join(' • ')}</p><ul><li>200 miles per day included</li><li>{money(vehicle.security_deposit || 300)} refundable deposit</li><li>Three-hour turnaround protected</li></ul><div className="price"><strong>{money(vehicle.daily_rate)}</strong><span>/ day</span></div><button type="button" disabled={checking || !available} onClick={() => setSelectedId(vehicle.id)}>{checking ? 'Checking dates…' : available ? 'View & book' : 'Unavailable'}{available && !checking ? <ChevronRight size={17}/> : null}</button></div>
           </article>;
         })}
         {!visibleVehicles.length && <p className="supabase-preview-empty">No vehicles match these filters and dates.</p>}
       </section>}
     </main>
   </div>;
+}
+
+function previewError(error, fallback) {
+  const message = String(error?.message || '').trim();
+  if (/failed to fetch|network|load failed|connection|timeout/i.test(message)) return 'The connection was interrupted. Check your internet connection and try again.';
+  return fallback;
 }
 
 function PreviewHeader({ onBack, label }) {

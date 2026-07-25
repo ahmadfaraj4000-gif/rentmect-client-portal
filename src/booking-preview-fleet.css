@@ -16,3 +16,25 @@
 .supabase-preview-booking-card{position:sticky;top:98px;display:grid;gap:16px;padding:20px;background:#fff;border:1px solid #d6dbdc;border-radius:16px;box-shadow:0 16px 40px rgba(20,25,27,.09)}.supabase-preview-booking-card .supabase-preview-trip-fields{grid-template-columns:1fr 1fr}.supabase-preview-price{display:flex;align-items:baseline;gap:5px}.supabase-preview-price strong{font-size:30px}.supabase-preview-availability{padding:11px 12px;border-radius:9px;font-size:13px;font-weight:850}.supabase-preview-availability.available{background:#e1f4e8;color:#12633a}.supabase-preview-availability.unavailable{background:#f2e3e0;color:#822a24}.supabase-preview-total{display:flex;justify-content:space-between;padding-top:13px;border-top:1px solid #ddd}.supabase-preview-booking-card>small{display:flex;align-items:flex-start;gap:6px;color:#687378;line-height:1.45}.supabase-preview-error{padding:10px;border-radius:8px;background:#f4dfdc;color:#81241e;font-weight:750}.supabase-preview-loading,.supabase-preview-empty{grid-column:1/-1;padding:50px;text-align:center;color:#687378}.fleet-error{margin-bottom:16px}
 @media(max-width:950px){.supabase-preview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.supabase-preview-detail-grid{grid-template-columns:1fr}.supabase-preview-booking-card{position:static}.supabase-preview-gallery{height:480px}}
 @media(max-width:680px){.supabase-preview-header>div{grid-template-columns:1fr auto;width:calc(100% - 22px)}.supabase-preview-header .secure{display:none}.supabase-preview-header img{justify-self:end;width:94px}.supabase-preview-fleet,.supabase-preview-detail{width:calc(100% - 22px);padding-top:24px}.supabase-preview-trip-fields,.supabase-preview-grid,.supabase-preview-features,.supabase-preview-policies{grid-template-columns:1fr}.supabase-preview-filterbar{align-items:stretch;flex-direction:column}.supabase-preview-search{width:auto}.supabase-preview-gallery{height:420px;min-height:0;grid-template-columns:1fr}.supabase-preview-gallery>div{grid-template-columns:1fr 1fr;height:135px}.supabase-preview-gallery .featured{height:277px}.supabase-preview-detail-grid{margin-top:20px}.supabase-preview-booking-card .supabase-preview-trip-fields{grid-template-columns:1fr 1fr}}
+.supabase-preview-shell button:focus-visible,
+.supabase-preview-shell input:focus-visible,
+.supabase-preview-shell select:focus-visible {
+  outline: 3px solid #24794a;
+  outline-offset: 3px;
+}
+
+.supabase-preview-vehicle-card button:disabled {
+  cursor: not-allowed;
+  opacity: .62;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .supabase-preview-shell *,
+  .supabase-preview-shell *::before,
+  .supabase-preview-shell *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
