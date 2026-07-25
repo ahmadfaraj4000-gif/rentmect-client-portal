@@ -485,7 +485,9 @@ function App() {
     const fleetChannel = supabase
       .channel('client-fleet-source-of-truth')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rentals' }, refreshFleetCalendar)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'pending_bookings' }, refreshFleetCalendar)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_availability_blocks' }, refreshFleetCalendar)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, () => loadPortalData(session.user.id))
       .subscribe();
     calendarPoll = window.setInterval(refreshFleetCalendar, 15 * 1000);
     window.addEventListener('focus', refreshOnFocus);
