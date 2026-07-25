@@ -360,7 +360,8 @@ function App() {
   const [under25Pricing, setUnder25Pricing] = useState(DEFAULT_UNDER_25_PRICING);
   const [supportText, setSupportText] = useState('');
   const [activeTab, setActiveTab] = useState('overview');
-  const [navCollapsed, setNavCollapsed] = useState(false);
+  const [isMobileClientNav, setIsMobileClientNav] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches);
+  const [navCollapsed, setNavCollapsed] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches);
   const [agreementModalOpen, setAgreementModalOpen] = useState(false);
   const [tripManagerOpen, setTripManagerOpen] = useState(false);
 
@@ -427,6 +428,32 @@ function App() {
       notify.timeout = window.setTimeout(() => setNotice(null), 5200);
     }
   }
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const mediaQuery = window.matchMedia('(max-width: 760px)');
+    const syncMobileNav = () => {
+      setIsMobileClientNav(mediaQuery.matches);
+      setNavCollapsed(mediaQuery.matches);
+    };
+    syncMobileNav();
+    mediaQuery.addEventListener('change', syncMobileNav);
+    return () => mediaQuery.removeEventListener('change', syncMobileNav);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileClientNav || navCollapsed) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setNavCollapsed(true);
+    };
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [isMobileClientNav, navCollapsed]);
 
   useEffect(() => {
     let mounted = true;
@@ -2406,6 +2433,11 @@ async function verifyPhoneCode() {
         { key: 'messages', label: 'Messages', icon: MessageCircle },
       ];
 
+  function selectClientTab(key) {
+    setActiveTab(key);
+    if (isMobileClientNav) setNavCollapsed(true);
+  }
+
   if (bookingPreviewFleetMode) return <BookingPreviewFleet />;
 
   if (loading) return <LoadingScreen />;
@@ -2528,24 +2560,49 @@ async function verifyPhoneCode() {
 
   return (
     <div className={`portal-shell compact-shell ${navCollapsed ? 'nav-collapsed' : ''}`}>
-      <aside className={`sidebar ${navCollapsed ? 'collapsed' : ''}`}>
+      {isMobileClientNav && navCollapsed && (
+        <button
+          type="button"
+          className="client-mobile-menu-trigger"
+          aria-label="Open client navigation"
+          aria-controls="client-primary-navigation"
+          aria-expanded="false"
+          onClick={() => setNavCollapsed(false)}
+        >
+          <Menu size={25} />
+        </button>
+      )}
+      {isMobileClientNav && !navCollapsed && (
+        <button
+          type="button"
+          className="client-mobile-nav-backdrop"
+          aria-label="Close client navigation"
+          onClick={() => setNavCollapsed(true)}
+        />
+      )}
+      <aside className={`sidebar ${navCollapsed ? 'collapsed' : ''}`} aria-label="Client navigation">
         <div className="brand-block">
           <picture>
             <source media="(max-width: 760px)" srcSet={logoMobileUrl} />
             <img className="brand-logo" src={logoUrl} alt="Rent Me CT" />
           </picture>
         </div>
-        <button className="nav-toggle" type="button" onClick={() => setNavCollapsed(!navCollapsed)} aria-label={navCollapsed ? 'Expand navigation' : 'Collapse navigation'}>
-          {navCollapsed ? <Menu size={17} /> : <X size={17} />}<span>{navCollapsed ? 'Expand' : 'Collapse'}</span>
+        <div className="client-mobile-nav-heading">
+          <span>Client Menu</span>
+          <strong>{tabs.find((tab) => tab.key === activeTab)?.label || 'Overview'}</strong>
+          <small>Manage your rental in one place.</small>
+        </div>
+        <button className="nav-toggle" type="button" onClick={() => setNavCollapsed(!navCollapsed)} aria-expanded={!navCollapsed} aria-controls="client-primary-navigation" aria-label={navCollapsed ? 'Open client navigation' : 'Close client navigation'}>
+          {navCollapsed ? <Menu size={17} /> : <X size={17} />}<span>{navCollapsed ? 'Expand' : 'Close'}</span>
         </button>
 
-        <nav className="side-nav tab-nav">
+        <nav className="side-nav tab-nav" id="client-primary-navigation">
           {tabs.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
               type="button"
               className={activeTab === key ? 'active' : ''}
-              onClick={() => setActiveTab(key)}
+              onClick={() => selectClientTab(key)}
               aria-current={activeTab === key ? 'page' : undefined}
             >
               <Icon size={18} /> <span>{label}</span>
