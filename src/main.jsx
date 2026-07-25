@@ -2560,18 +2560,6 @@ async function verifyPhoneCode() {
 
   return (
     <div className={`portal-shell compact-shell ${navCollapsed ? 'nav-collapsed' : ''}`}>
-      {isMobileClientNav && navCollapsed && (
-        <button
-          type="button"
-          className="client-mobile-menu-trigger"
-          aria-label="Open client navigation"
-          aria-controls="client-primary-navigation"
-          aria-expanded="false"
-          onClick={() => setNavCollapsed(false)}
-        >
-          <Menu size={25} />
-        </button>
-      )}
       {isMobileClientNav && !navCollapsed && (
         <button
           type="button"
@@ -2582,10 +2570,7 @@ async function verifyPhoneCode() {
       )}
       <aside className={`sidebar ${navCollapsed ? 'collapsed' : ''}`} aria-label="Client navigation">
         <div className="brand-block">
-          <picture>
-            <source media="(max-width: 760px)" srcSet={logoMobileUrl} />
-            <img className="brand-logo" src={logoUrl} alt="Rent Me CT" />
-          </picture>
+          <img className="brand-logo" src={logoUrl} alt="Rent Me CT" />
         </div>
         <div className="client-mobile-nav-heading">
           <span>Client Menu</span>
@@ -2618,7 +2603,19 @@ async function verifyPhoneCode() {
       <main className="portal-main compact-main">
         {notice && <Notice notice={notice} onDismiss={() => setNotice(null)} />}
         <header className="portal-header compact-header">
-          <div>
+          {isMobileClientNav && navCollapsed && (
+            <button
+              type="button"
+              className="client-mobile-menu-trigger"
+              aria-label="Open client navigation"
+              aria-controls="client-primary-navigation"
+              aria-expanded="false"
+              onClick={() => setNavCollapsed(false)}
+            >
+              <Menu size={22} />
+            </button>
+          )}
+          <div className="client-header-copy">
             <p className="eyebrow">Welcome back</p>
             <h1>{clientFirstName}</h1>
             <span>{userEmail} • {emailVerified ? 'Email verified' : 'Email verification pending'}</span>
