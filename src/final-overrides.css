@@ -132,6 +132,29 @@
   box-shadow: 0 0 0 3px rgba(31, 141, 67, 0.1);
 }
 
+.manage-trip-btn {
+  margin-top: 16px;
+}
+
+.payment-terms-details {
+  margin-top: 14px;
+  border: 1px solid #d9e3dc;
+  border-radius: 12px;
+  background: #f8fbf9;
+}
+
+.payment-terms-details summary {
+  padding: 14px 16px;
+  color: #24342a;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.payment-terms-details .payment-summary-grid {
+  margin: 0;
+  padding: 0 16px 16px;
+}
+
 @media (max-width: 720px) {
   .trip-change-options {
     grid-template-columns: 1fr;

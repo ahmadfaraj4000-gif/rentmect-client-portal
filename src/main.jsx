@@ -355,6 +355,7 @@ function App() {
   const [activeTab, setActiveTab] = useState('overview');
   const [navCollapsed, setNavCollapsed] = useState(false);
   const [agreementModalOpen, setAgreementModalOpen] = useState(false);
+  const [tripManagerOpen, setTripManagerOpen] = useState(false);
 
   const [reservationForm, setReservationForm] = useState({
     vehicleId: '',
@@ -786,6 +787,7 @@ function App() {
   );
   const canManageTrip = ['active', 'overdue', 'return_initiated'].includes(currentRental?.status);
   const effectiveTripChangeChoice = tripChangeChoice || currentRental?.trip_change_intent || '';
+  const showTripManager = Boolean(canManageTrip && (tripManagerOpen || returnConfirmationSent || pendingExtension || approvedUnpaidExtension));
   const showApprovedSwitchVehicle = Boolean(returnConfirmationSent && approvedSwitchExtension && approvedSwitchVehicle);
   const mobileStatusItems = [
     currentRental
@@ -2307,15 +2309,19 @@ async function verifyPhoneCode() {
     signatureImageData,
   });
 
-  const tabs = [
-    { key: 'overview', label: 'Overview', icon: CalendarDays },
-    { key: 'guided', label: 'Guided Steps', icon: CheckCircle2 },
-    { key: 'documents', label: 'Documents', icon: Upload },
-    { key: 'agreement', label: 'Agreement', icon: FileSignature },
-    { key: 'payment', label: 'Payment', icon: CreditCard },
-    { key: 'history', label: 'Rental History', icon: FileText },
-    { key: 'messages', label: 'Messages', icon: MessageCircle },
-  ];
+  const tabs = paymentPaid
+    ? [
+        { key: 'overview', label: 'Overview', icon: CalendarDays },
+        { key: 'records', label: 'Records', icon: FileText },
+        { key: 'payment', label: 'Billing', icon: CreditCard },
+        { key: 'history', label: 'Rental History', icon: Clock },
+        { key: 'messages', label: 'Messages', icon: MessageCircle },
+      ]
+    : [
+        { key: 'overview', label: 'Overview', icon: CalendarDays },
+        { key: 'guided', label: 'Guided Steps', icon: CheckCircle2 },
+        { key: 'messages', label: 'Messages', icon: MessageCircle },
+      ];
 
   if (bookingPreviewFleetMode) return <BookingPreviewFleet />;
 
@@ -2479,9 +2485,9 @@ async function verifyPhoneCode() {
             <button className="return-btn" onClick={openMaps}>
               <MapPin size={18} /> Location
             </button>
-            <button className="primary-btn" onClick={beginWizard}>
-              <CheckCircle2 size={18} /> {allGuidedStepsComplete ? 'Guided Steps Complete' : 'Start Guided Steps'}
-            </button>
+            {!paymentPaid && <button className="primary-btn" onClick={beginWizard}>
+              <CheckCircle2 size={18} /> Continue Guided Steps
+            </button>}
           </div>
         </header>
 
@@ -2530,13 +2536,6 @@ async function verifyPhoneCode() {
               </div>
             </section>
 
-            <section className="metric-grid compact-metrics">
-              <Metric icon={Clock} label="Pickup" value={formatRentalDate(overviewPickupDate, overviewPickupTime)} />
-              <Metric icon={Clock} label="Return" value={formatRentalDate(overviewReturnDate, overviewReturnTime)} />
-              <Metric icon={CalendarDays} label="Rental Days" value={getRentalDaysSafe(overviewPickupDate, overviewReturnDate)} />
-              <Metric icon={CreditCard} label="Deposit" value={currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'} />
-            </section>
-
             {currentRental && (
               <section className="panel return-panel">
                 <p className="eyebrow">Return Status</p>
@@ -2546,6 +2545,10 @@ async function verifyPhoneCode() {
                   <SummaryItem label="Time Left" value={returnCountdown.value} />
                   <SummaryItem label="Return Location" value={RENTMECT_ADDRESS} />
                 </div>
+                {canManageTrip && <button className="secondary-btn manage-trip-btn" type="button" onClick={() => setTripManagerOpen((open) => !open)}>
+                  <Car size={18}/> {showTripManager ? 'Hide Trip Options' : 'Manage This Trip'}
+                </button>}
+                {showTripManager && <>
                 {canManageTrip && (
                   <div className="trip-change-chooser" aria-label="What would you like to do with this rental?">
                     <div>
@@ -2719,6 +2722,7 @@ async function verifyPhoneCode() {
                   </>}
                   </form>}
                 </div>
+                </>}
               </section>
             )}
 
@@ -2736,36 +2740,7 @@ async function verifyPhoneCode() {
               </section>
             )}
 
-            <section className="panel large-panel checklist-panel">
-              <div className="panel-heading split-heading">
-                <div>
-                  <p className="eyebrow">Rental Checklist</p>
-                  <h3>Complete Before Pickup</h3>
-                </div>
-                <button className="secondary-btn" onClick={beginWizard} disabled={allGuidedStepsComplete}>{allGuidedStepsComplete ? 'All Steps Complete' : 'Open Guided Flow'}</button>
-              </div>
-
-              <div className="checklist compact-checklist">
-                <ChecklistItem icon={ShieldCheck} title="Email Verification" status={emailVerified ? 'Verified' : 'Check email'} completed={emailVerified} onOpen={() => notify('Check your inbox for the Supabase verification email.')} />
-                <ChecklistItem icon={ShieldCheck} title="Renter Details & Phone" status={contactStepCompleted ? 'Completed' : 'Required'} completed={contactStepCompleted} onOpen={() => openWizardAtStep(0)} />
-                <ChecklistItem icon={Car} title="Dates & Vehicle" status={vehicleStepCompleted ? 'Selected' : 'Required'} completed={vehicleStepCompleted} onOpen={() => openWizardAtStep(1)} />
-                <ChecklistItem icon={ShieldCheck} title="Stripe Identity" status={identityVerified ? 'Verified' : identityStatus === 'processing' ? 'Processing' : 'Required'} completed={identityVerified} onOpen={() => openWizardAtStep(2)} />
-                <ChecklistItem icon={Upload} title="Driver License Upload" status={licenseUploaded ? 'Uploaded' : 'Required'} completed={licenseUploaded} onOpen={() => openWizardAtStep(3)} />
-                <ChecklistItem icon={FileText} title="Insurance Upload" status={insuranceUploaded ? 'Uploaded' : 'Required'} completed={insuranceUploaded} onOpen={() => openWizardAtStep(4)} />
-                <ChecklistItem icon={FileSignature} title="Rental Agreement" status={agreementSigned ? 'Signed' : 'Required'} completed={agreementSigned} onOpen={() => openWizardAtStep(5)} />
-                <ChecklistItem icon={CreditCard} title="Deposit & Rental Payment" status={paymentPaid ? 'Paid' : 'Final Step'} completed={paymentPaid} onOpen={() => openWizardAtStep(6)} />
-              </div>
-              {(missingRequiredDocuments || documentsRejected) && (
-                <DocumentRequirementNotice
-                  licenseUploaded={licenseUploaded}
-                  insuranceUploaded={insuranceUploaded}
-                  licenseRejected={licenseRejected}
-                  insuranceRejected={insuranceRejected}
-                />
-              )}
-            </section>
-
-            <section className="panel" id="profile">
+            {paymentPaid && <section className="panel" id="profile">
               <p className="eyebrow">Profile</p>
               <h3>Customer Information</h3>
               <form className="portal-form" onSubmit={saveProfile}>
@@ -2832,7 +2807,7 @@ async function verifyPhoneCode() {
                      )}
                   </div>
               </form>
-            </section>
+            </section>}
           </>
         )}
 
@@ -2847,7 +2822,7 @@ async function verifyPhoneCode() {
           </section>
         )}
 
-        {activeTab === 'documents' && (
+        {activeTab === 'records' && (
           <>
             {(missingRequiredDocuments || documentsRejected) && (
               <section className="content-grid two compact-cards">
@@ -2879,7 +2854,7 @@ async function verifyPhoneCode() {
           </>
         )}
 
-        {activeTab === 'agreement' && (
+        {activeTab === 'records' && (
           <section className="panel centered-panel agreement-card-clean">
             <p className="eyebrow">Agreement</p>
             <h3>Rental Agreement</h3>
@@ -2919,12 +2894,17 @@ async function verifyPhoneCode() {
               <div className="invoice-row"><span>CT Sales Tax</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Security Deposit</span><strong>{currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
               <ServiceFeesSummary serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
-              <div className="invoice-row"><span>Mileage Included</span><strong>{MILEAGE_POLICY}</strong></div>
-              <div className="invoice-row"><span>Pickup Address</span><strong>{RENTMECT_ADDRESS}</strong></div>
-              <div className="invoice-row"><span>Required Before Pickup</span><strong>Phone, agreement, payment, saved driver license, and insurance for this rental</strong></div>
-              <div className="invoice-row"><span>Cancellation</span><strong>{CANCELLATION_TERMS}</strong></div>
               <div className="invoice-row total-row"><span>Total Due Today</span><strong>{currentRental ? money(Number(currentRental.rental_total || 0) + Number(currentRental.service_fee_total || 0) + Number(currentRental.tax_amount || 0) + Number(currentRental.security_deposit || 0)) : estimate && !estimate.invalid ? money(estimate.checkoutTotal + estimate.securityDeposit) : 'Pending'}</strong></div>
             </div>
+            <details className="payment-terms-details">
+              <summary>Rental terms and pickup requirements</summary>
+              <div className="payment-summary-grid">
+                <div className="invoice-row"><span>Mileage Included</span><strong>{MILEAGE_POLICY}</strong></div>
+                <div className="invoice-row"><span>Pickup Address</span><strong>{RENTMECT_ADDRESS}</strong></div>
+                <div className="invoice-row"><span>Required Before Pickup</span><strong>Phone, agreement, payment, saved driver license, and insurance for this rental</strong></div>
+                <div className="invoice-row"><span>Cancellation</span><strong>{CANCELLATION_TERMS}</strong></div>
+              </div>
+            </details>
             {currentRentalAdditionalCharges.length > 0 && (
               <div className="additional-charge-list">
                 <h4>Additional rental charges</h4>
