@@ -62,7 +62,7 @@ const BOOKING_FLOW_TEST_VEHICLE_ID = '00000000-0000-4000-8000-000000000015';
 const AGREEMENT_VERSION = 'rentmect-master-v2026-05-20';
 const MILEAGE_POLICY = '200 miles/day included; excess mileage $0.35/mile';
 const CANCELLATION_TERMS = 'Contact Rent Me CT before pickup for cancellation or schedule changes.';
-const BLOCKING_RENTAL_STATUSES = ['pending', 'documents_needed', 'document_review', 'ready_for_pickup', 'approved', 'active', 'overdue', 'return_initiated', 'calendar_block'];
+const BLOCKING_RENTAL_STATUSES = ['pending', 'documents_needed', 'document_review', 'ready_for_pickup', 'approved', 'active', 'overdue', 'return_initiated', 'checkout_hold', 'calendar_block'];
 const AVAILABILITY_RENTAL_STATUSES = [...BLOCKING_RENTAL_STATUSES, 'completed'];
 const BLOCKING_VEHICLE_STATUSES = ['maintenance', 'unavailable', 'inactive'];
 const TURNAROUND_BUFFER_MINUTES = 180;
@@ -325,6 +325,7 @@ function App() {
   const [extensionSaving, setExtensionSaving] = useState(false);
   const [extensionPreview, setExtensionPreview] = useState(null);
   const [extensionMode, setExtensionMode] = useState('extend');
+  const [tripChangeChoice, setTripChangeChoice] = useState('');
   const [portalDataReady, setPortalDataReady] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [checkoutNow, setCheckoutNow] = useState(() => Date.now());
@@ -502,7 +503,7 @@ function App() {
       const { error } = await supabase.rpc('claim_customer_pending_booking', {
         p_booking_id: pendingBookingId,
         p_customer_phone: profileForm.phone || null,
-        p_vehicle_id: pendingVehicleId || reservationForm.vehicleId || null,
+        p_vehicle_id: reservationForm.vehicleId || pendingVehicleId || null,
       });
 
       if (error) {
@@ -770,7 +771,7 @@ function App() {
     : null;
   const checkoutExpired = checkoutSecondsRemaining === 0 && !paymentPaid;
   const checkoutHoldActive = Boolean(
-    checkoutIntent && checkoutDeadline && !paymentPaid && !currentRental?.stripe_checkout_session_id
+    checkoutIntent && checkoutDeadline && !paymentPaid
   );
   const identityStatus = profile?.identity_verification_status || 'unverified';
   const identityVerified = identityStatus === 'verified';
@@ -783,6 +784,8 @@ function App() {
       String(message.message || '').includes('RETURN CONFIRMATION')
     )
   );
+  const canManageTrip = ['active', 'overdue', 'return_initiated'].includes(currentRental?.status);
+  const effectiveTripChangeChoice = tripChangeChoice || currentRental?.trip_change_intent || '';
   const showApprovedSwitchVehicle = Boolean(returnConfirmationSent && approvedSwitchExtension && approvedSwitchVehicle);
   const mobileStatusItems = [
     currentRental
@@ -832,13 +835,13 @@ function App() {
   useEffect(() => {
     if (!checkoutExpired || !session?.user?.id) return;
     const bookingId = pendingBookingId || getBookingIdFromUrl();
-    if (!bookingId || currentRental?.stripe_checkout_session_id) return;
-    const expiryKey = `${bookingId}:${currentRental?.id || 'pending'}`;
+    if (!bookingId && !currentRental?.id) return;
+    const expiryKey = `${bookingId || 'direct'}:${currentRental?.id || 'pending'}`;
     if (checkoutExpiryHandledRef.current === expiryKey) return;
     checkoutExpiryHandledRef.current = expiryKey;
 
     supabase.rpc('expire_customer_checkout_hold', {
-      p_booking_id: bookingId,
+      p_booking_id: bookingId || null,
       p_rental_id: currentRental?.id || null,
     }).then(({ error }) => {
       if (error) {
@@ -851,10 +854,26 @@ function App() {
         ));
         setFleetRentals((current) => current.filter((rental) => rental.id !== currentRental.id));
       }
+      setCheckoutIntent(false);
+      setCheckoutWizardStarted(false);
+      setPendingBookingId('');
+      setPendingVehicleId('');
+      setPendingVehicleName('');
+      setCheckoutExpiresAt(null);
+      try {
+        localStorage.removeItem('rentmect_pending_booking');
+        localStorage.removeItem('rentMeCtBooking');
+        localStorage.removeItem('pendingBooking');
+        const url = new URL(window.location.href);
+        url.searchParams.delete('booking');
+        window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+      } catch {
+        // The database release still succeeded even if local cleanup is blocked.
+      }
       setWizardOpen(false);
       notify('Your 25-minute vehicle hold expired. Return to the fleet page to start a new booking.');
     });
-  }, [checkoutExpired, session?.user?.id, pendingBookingId, currentRental?.id, currentRental?.stripe_checkout_session_id]);
+  }, [checkoutExpired, session?.user?.id, pendingBookingId, currentRental?.id]);
 function getBookingIdFromUrl() {
     return new URLSearchParams(window.location.search).get('booking') || '';
   }
@@ -1349,6 +1368,7 @@ async function verifyPhoneCode() {
     }
 
     setReservationSaving(true);
+    const bookingId = pendingBookingId || getBookingIdFromUrl();
     const reservationParams = {
       p_pickup_date: reservationForm.pickupDate,
       p_return_date: reservationForm.returnDate,
@@ -1357,10 +1377,15 @@ async function verifyPhoneCode() {
     };
     const { data: lockedRental, error } = bookingFlowTestMode
       ? await supabase.rpc('create_booking_flow_test_rental', reservationParams)
-      : await supabase.rpc('create_rental_with_lock', {
-        p_vehicle_id: selectedVehicle.id,
-        ...reservationParams,
-      });
+      : bookingId
+        ? await supabase.rpc('convert_website_hold_to_rental', {
+          p_booking_id: bookingId,
+          p_customer_phone: profileForm.phone || null,
+        })
+        : await supabase.rpc('create_rental_with_lock', {
+          p_vehicle_id: selectedVehicle.id,
+          ...reservationParams,
+        });
     setReservationSaving(false);
 
     if (error) {
@@ -1378,31 +1403,11 @@ async function verifyPhoneCode() {
       ? { ...lockedRental, vehicles: selectedVehicle }
       : reloadedRental;
 
-    let rentalData = data;
-    const bookingId = pendingBookingId || getBookingIdFromUrl();
-    if (bookingId) {
-      const { data: attachedRental, error: holdError } = await supabase.rpc('attach_customer_checkout_hold', {
-        p_booking_id: bookingId,
-        p_rental_id: data.id,
-      });
-
-      if (holdError) {
-        await supabase.rpc('cancel_customer_unattached_rental', {
-          p_rental_id: data.id,
-        });
-        notify(holdError.message || 'Could not attach the checkout hold.');
-        return null;
-      }
-
-      if (attachedRental) {
-        rentalData = { ...data, ...attachedRental, vehicles: data.vehicles };
-        if (attachedRental.checkout_expires_at) setCheckoutExpiresAt(attachedRental.checkout_expires_at);
-      }
-
-      if (String(rentalData.status || '').toLowerCase() === 'cancelled') {
-        notify('Your 25-minute vehicle hold expired. Return to the fleet page to start a new booking.');
-        return null;
-      }
+    const rentalData = data;
+    if (rentalData.checkout_expires_at) setCheckoutExpiresAt(rentalData.checkout_expires_at);
+    if (String(rentalData.status || '').toLowerCase() === 'cancelled') {
+      notify('Your 25-minute vehicle hold expired. Return to the fleet page to start a new booking.');
+      return null;
     }
 
     setRentals([rentalData, ...rentals]);
@@ -1415,18 +1420,6 @@ async function verifyPhoneCode() {
       return_time: rentalData.return_time,
       status: rentalData.status,
     }, ...prev]);
-
-    if (bookingId) {
-      const { error: pendingUpdateError } = await supabase.rpc('convert_customer_pending_booking', {
-        p_booking_id: bookingId,
-        p_customer_phone: profileForm.phone || null,
-        p_vehicle_id: selectedVehicle.id,
-      });
-
-      if (pendingUpdateError) {
-        notify(pendingUpdateError.message || 'Could not mark pending booking as converted.');
-      }
-    }
 
     try {
       localStorage.removeItem('rentmect_pending_booking');
@@ -1853,6 +1846,27 @@ async function verifyPhoneCode() {
     setRentals((prev) => prev.map((item) => (item.id === updatedRental.id ? updatedRental : item)));
     setFleetRentals((prev) => prev.map((item) => (item.id === updatedRental.id ? { ...item, status: updatedRental.status } : item)));
     notify('Return initiated. Rent Me CT will inspect and close out your rental.', 'success');
+  }
+
+  async function chooseTripChange(choice) {
+    if (!currentRental?.id || !['return', 'extend', 'exchange'].includes(choice)) return;
+    setTripChangeChoice(choice);
+    if (choice === 'extend') setExtensionMode('extend');
+    if (choice === 'exchange') setExtensionMode('switch');
+
+    const { data, error } = await supabase.rpc('set_customer_trip_change_intent', {
+      p_rental_id: currentRental.id,
+      p_intent: choice,
+    });
+    if (error) {
+      notify(error.message);
+      return;
+    }
+    if (data) {
+      setRentals((current) => current.map((rental) =>
+        rental.id === data.id ? { ...rental, trip_change_intent: data.trip_change_intent } : rental
+      ));
+    }
   }
 
   async function requestExtension(event) {
@@ -2532,8 +2546,27 @@ async function verifyPhoneCode() {
                   <SummaryItem label="Time Left" value={returnCountdown.value} />
                   <SummaryItem label="Return Location" value={RENTMECT_ADDRESS} />
                 </div>
+                {canManageTrip && (
+                  <div className="trip-change-chooser" aria-label="What would you like to do with this rental?">
+                    <div>
+                      <strong>What happens next?</strong>
+                      <span>Choose one path. You can change it until a return or paid continuation is finalized.</span>
+                    </div>
+                    <div className="trip-change-options">
+                      <button type="button" className={effectiveTripChangeChoice === 'return' ? 'active' : ''} onClick={() => chooseTripChange('return')}>
+                        <CheckCircle2 size={18}/> Return this car
+                      </button>
+                      <button type="button" className={effectiveTripChangeChoice === 'extend' ? 'active' : ''} onClick={() => chooseTripChange('extend')}>
+                        <Clock size={18}/> Extend this car
+                      </button>
+                      <button type="button" className={effectiveTripChangeChoice === 'exchange' ? 'active' : ''} onClick={() => chooseTripChange('exchange')}>
+                        <Car size={18}/> Exchange cars
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <div className="return-workflow-grid">
-                  <div className="return-action-block">
+                  {(!canManageTrip || effectiveTripChangeChoice === 'return' || returnConfirmationSent) && <div className="return-action-block">
                     <p className="muted">
                       Send return confirmation after dropoff. Rent Me CT inspects mileage, fuel, and condition before closing the rental and deposit.
                     </p>
@@ -2575,8 +2608,8 @@ async function verifyPhoneCode() {
                         Extension payment recorded. This rental now returns {formatRentalDate(currentRental.return_date, currentRental.return_time)}.
                       </p>
                     )}
-                  </div>
-                  <form className="portal-form extension-form" onSubmit={requestExtension}>
+                  </div>}
+                  {(!canManageTrip || ['extend', 'exchange'].includes(effectiveTripChangeChoice) || pendingExtension || approvedUnpaidExtension) && <form className="portal-form extension-form" onSubmit={requestExtension}>
                     <div className="extension-heading">
                       <strong>Need more time?</strong>
                       <span>{extensionWindow.open
@@ -2621,7 +2654,7 @@ async function verifyPhoneCode() {
                     </p>
                     <button className="secondary-btn" type="button" onClick={cancelExtensionRequest} disabled={extensionSaving}>Cancel Extension Request</button>
                   </div>}
-                  {approvedUnpaidExtension && <p className="auth-message">Approved extension is waiting for payment before the new return date becomes active.</p>}
+                  {approvedUnpaidExtension && <p className="auth-message">Approved extension is waiting for payment before the new return date becomes active.{approvedUnpaidExtension.payment_due_at ? ` Pay by ${new Date(approvedUnpaidExtension.payment_due_at).toLocaleString()} or the hold is released automatically.` : ''}</p>}
                   <input
                     type="date"
                     min={currentRental.return_date}
@@ -2684,7 +2717,7 @@ async function verifyPhoneCode() {
                     </div>
                   )}
                   </>}
-                  </form>
+                  </form>}
                 </div>
               </section>
             )}
@@ -4752,7 +4785,7 @@ function getReturnCountdown(date, time, now = Date.now()) {
   const value = days > 0 ? `${days}d ${hours}h` : `${hours}h ${minutes}m`;
 
   if (ms <= 0) return { label: 'Return Is Due', value: ms < 0 ? `${value} overdue` : 'Due now', canConfirm: true };
-  return { label: 'Return Countdown', value, canConfirm: false };
+  return { label: 'Return Countdown', value, canConfirm: true };
 }
 
 function getExtensionRequestWindow(rental, now = Date.now()) {

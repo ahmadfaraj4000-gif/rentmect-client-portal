@@ -81,3 +81,59 @@
   font-size: 12px;
   font-weight: 500;
 }
+/* Explicit end-of-rental decision keeps return, extension, and exchange from
+   competing for attention in the same panel. */
+.trip-change-chooser {
+  display: grid;
+  gap: 14px;
+  margin: 20px 0;
+  padding: 18px;
+  border: 1px solid #d9e3dc;
+  border-radius: 16px;
+  background: #f8fbf9;
+}
+
+.trip-change-chooser > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.trip-change-chooser span {
+  color: #5f6f66;
+  font-size: 0.9rem;
+}
+
+.trip-change-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.trip-change-options button {
+  display: inline-flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 12px 14px;
+  border: 1px solid #cbd8cf;
+  border-radius: 12px;
+  background: #fff;
+  color: #233128;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.trip-change-options button:hover,
+.trip-change-options button.active {
+  border-color: #1f8d43;
+  background: #eaf7ee;
+  color: #166b33;
+  box-shadow: 0 0 0 3px rgba(31, 141, 67, 0.1);
+}
+
+@media (max-width: 720px) {
+  .trip-change-options {
+    grid-template-columns: 1fr;
+  }
+}
