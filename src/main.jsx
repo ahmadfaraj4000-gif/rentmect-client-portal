@@ -2563,42 +2563,49 @@ async function verifyPhoneCode() {
       {isMobileClientNav && !navCollapsed && (
         <button
           type="button"
-          className="client-mobile-nav-backdrop"
+          className="mobile-drawer-scrim"
           aria-label="Close client navigation"
           onClick={() => setNavCollapsed(true)}
         />
       )}
-      <aside className={`sidebar ${navCollapsed ? 'collapsed' : ''}`} aria-label="Client navigation">
-        <div className="brand-block">
-          <img className="brand-logo" src={logoUrl} alt="Rent Me CT" />
-        </div>
-        <div className="client-mobile-nav-heading">
-          <span>Client Menu</span>
-          <strong>{tabs.find((tab) => tab.key === activeTab)?.label || 'Overview'}</strong>
-          <small>Manage your rental in one place.</small>
-        </div>
-        <button className="nav-toggle" type="button" onClick={() => setNavCollapsed(!navCollapsed)} aria-expanded={!navCollapsed} aria-controls="client-primary-navigation" aria-label={navCollapsed ? 'Open client navigation' : 'Close client navigation'}>
-          {navCollapsed ? <Menu size={17} /> : <X size={17} />}<span>{navCollapsed ? 'Expand' : 'Close'}</span>
-        </button>
-
-        <nav className="side-nav tab-nav" id="client-primary-navigation">
-          {tabs.map(({ key, label, icon: Icon }) => (
-            <button
-              key={key}
-              type="button"
-              className={activeTab === key ? 'active' : ''}
-              onClick={() => selectClientTab(key)}
-              aria-current={activeTab === key ? 'page' : undefined}
-            >
-              <Icon size={18} /> <span>{label}</span>
-            </button>
-          ))}
-        </nav>
-
-        <button className="logout-btn" onClick={signOut}>
-          <LogOut size={17} /> <span>Log Out</span>
-        </button>
-      </aside>
+      {isMobileClientNav && (
+        <aside className={`mobile-drawer client-mobile-drawer ${navCollapsed ? '' : 'open'}`} aria-label="Client navigation">
+          <div className="mobile-drawer-brand">
+            <img src={logoUrl} alt="Rent Me CT" />
+          </div>
+          <button className="mobile-drawer-close" type="button" onClick={() => setNavCollapsed(true)} aria-label="Close client navigation">
+            <X size={22} />
+          </button>
+          <nav className="mobile-drawer-nav" id="client-mobile-drawer-navigation">
+            {tabs.map(({ key, label, icon: Icon }) => (
+              <button key={key} type="button" className={activeTab === key ? 'active' : ''} onClick={() => selectClientTab(key)} aria-current={activeTab === key ? 'page' : undefined}>
+                <Icon size={20}/><span>{label}</span>
+              </button>
+            ))}
+          </nav>
+          <div className="mobile-drawer-footer">
+            <button type="button" onClick={signOut}><LogOut size={19}/><span>Log Out</span></button>
+          </div>
+        </aside>
+      )}
+      {!isMobileClientNav && (
+        <aside className={`sidebar ${navCollapsed ? 'collapsed' : ''}`} aria-label="Client navigation">
+          <div className="brand-block">
+            <img className="brand-logo" src={logoUrl} alt="Rent Me CT" />
+          </div>
+          <button className="nav-toggle" type="button" onClick={() => setNavCollapsed(!navCollapsed)} aria-expanded={!navCollapsed} aria-controls="client-primary-navigation" aria-label={navCollapsed ? 'Expand client navigation' : 'Collapse client navigation'}>
+            {navCollapsed ? <Menu size={17} /> : <X size={17} />}<span>{navCollapsed ? 'Expand' : 'Collapse'}</span>
+          </button>
+          <nav className="side-nav tab-nav" id="client-primary-navigation">
+            {tabs.map(({ key, label, icon: Icon }) => (
+              <button key={key} type="button" className={activeTab === key ? 'active' : ''} onClick={() => selectClientTab(key)} aria-current={activeTab === key ? 'page' : undefined}>
+                <Icon size={18}/><span>{label}</span>
+              </button>
+            ))}
+          </nav>
+          <button className="logout-btn" onClick={signOut}><LogOut size={17}/><span>Log Out</span></button>
+        </aside>
+      )}
 
       <main className="portal-main compact-main">
         {notice && <Notice notice={notice} onDismiss={() => setNotice(null)} />}
@@ -2606,9 +2613,9 @@ async function verifyPhoneCode() {
           {isMobileClientNav && navCollapsed && (
             <button
               type="button"
-              className="client-mobile-menu-trigger"
+              className="mobile-drawer-trigger"
               aria-label="Open client navigation"
-              aria-controls="client-primary-navigation"
+              aria-controls="client-mobile-drawer-navigation"
               aria-expanded="false"
               onClick={() => setNavCollapsed(false)}
             >
