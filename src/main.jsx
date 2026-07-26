@@ -66,6 +66,11 @@ const ACCEPTED_DOCUMENT_TYPES = ['application/pdf', 'image/jpeg', 'image/png', '
 const AGREEMENT_VERSION = 'rentmect-master-v2026-05-20';
 const MILEAGE_POLICY = '200 miles/day included; excess mileage $0.35/mile';
 const CANCELLATION_TERMS = 'Contact Rent Me CT before pickup for cancellation or schedule changes.';
+const SMS_CONSENT_VERSION = '2026-07-26';
+const SMS_CONSENT_SOURCE = 'client_portal';
+const SMS_CONSENT_TEXT = 'I agree to receive automated transactional SMS messages from Rent Me CT about bookings, payments, documents, pickup, returns, extensions, and customer support. Message frequency varies. Message and data rates may apply. Reply STOP to unsubscribe or HELP for help. Consent is not a condition of purchase.';
+const SMS_TERMS_URL = 'https://rentmect.com/terms.html#sms-terms';
+const SMS_PRIVACY_URL = 'https://rentmect.com/privacy-policy.html#sms-privacy';
 const BLOCKING_RENTAL_STATUSES = ['pending', 'documents_needed', 'document_review', 'ready_for_pickup', 'approved', 'active', 'overdue', 'return_initiated', 'checkout_hold', 'calendar_block'];
 const AVAILABILITY_RENTAL_STATUSES = [...BLOCKING_RENTAL_STATUSES, 'completed'];
 const BLOCKING_VEHICLE_STATUSES = ['maintenance', 'unavailable', 'inactive'];
@@ -396,6 +401,7 @@ function App() {
     address: '',
     intended_vehicle_use: '',
     email_marketing_opt_in: false,
+    sms_transactional_opt_in: false,
   });
   const profileComplete = Boolean(
     profileForm.full_name.trim() &&
@@ -1173,6 +1179,7 @@ function loadSavedBookingFromWebsite() {
         address: profileResult.data.address || '',
         intended_vehicle_use: profileResult.data.intended_vehicle_use || '',
         email_marketing_opt_in: Boolean(profileResult.data.email_marketing_opt_in && !profileResult.data.email_marketing_unsubscribed_at),
+        sms_transactional_opt_in: Boolean(profileResult.data.sms_transactional_opt_in && !profileResult.data.sms_transactional_opted_out_at),
       });
       setPhoneVerified(Boolean(profileResult.data.phone_verified));
     }
@@ -1292,15 +1299,27 @@ function loadSavedBookingFromWebsite() {
       p_opt_in: Boolean(profileForm.email_marketing_opt_in),
     });
 
-    const savedProfile = preferenceError ? data : (preferenceData || data);
+    let savedProfile = preferenceError ? data : (preferenceData || data);
     if (preferenceError) {
       setProfileForm((current) => ({ ...current, email_marketing_opt_in: false }));
       notify(`Your contact details were saved, but the optional email preference was not: ${preferenceError.message}`);
     }
 
+    const { data: smsPreferenceData, error: smsPreferenceError } = await supabase.rpc('set_sms_transactional_preference', {
+      p_opt_in: Boolean(profileForm.sms_transactional_opt_in),
+      p_source: SMS_CONSENT_SOURCE,
+      p_consent_version: SMS_CONSENT_VERSION,
+      p_consent_text: SMS_CONSENT_TEXT,
+    });
+
+    if (smsPreferenceData) savedProfile = smsPreferenceData;
+    if (smsPreferenceError) {
+      notify(`Your contact details were saved, but the SMS preference was not: ${smsPreferenceError.message}`);
+    }
+
     setProfile(savedProfile);
     setPhoneVerified(Boolean(savedProfile.phone_verified));
-    if (showSuccess && !preferenceError) notify('Profile saved.');
+    if (showSuccess && !preferenceError && !smsPreferenceError) notify('Profile and communication preferences saved.');
     return savedProfile;
   }
 
@@ -2914,7 +2933,7 @@ async function verifyPhoneCode() {
                   autoComplete="tel"
                   placeholder="Example: 8605551234"
                   value={profileForm.phone}
-                  onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value })}
+                  onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value, sms_transactional_opt_in: false })}
                 /></label>
                 <AddressAutocomplete
                   value={profileForm.address}
@@ -2932,6 +2951,8 @@ async function verifyPhoneCode() {
                   <small>{profileForm.intended_vehicle_use.length}/500 characters</small>
                 </label>
                 <EmailMarketingPreference profileForm={profileForm} setProfileForm={setProfileForm} />
+                <SmsTransactionalPreference profileForm={profileForm} setProfileForm={setProfileForm} />
+                <SmsVerificationDisclosure />
                <div className="phone-verify-box">
                 <div className="button-row">
                   <button className="primary-btn" type="submit">Save Profile</button>
@@ -3246,6 +3267,31 @@ function EmailMarketingPreference({ profileForm, setProfileForm }) {
   );
 }
 
+function SmsTransactionalPreference({ profileForm, setProfileForm }) {
+  return (
+    <div className="sms-consent-preference">
+      <label>
+        <input
+          type="checkbox"
+          checked={Boolean(profileForm.sms_transactional_opt_in)}
+          onChange={(event) => setProfileForm((current) => ({ ...current, sms_transactional_opt_in: event.target.checked }))}
+        />
+        <span>
+          <strong>Text me about my rental and Rent Me CT account.</strong>
+          <small>This optional checkbox is for recurring transactional messages, not marketing.</small>
+        </span>
+      </label>
+      <p>
+        By checking this box, you agree to receive automated transactional texts from Rent Me CT about bookings, payments, documents, pickup, returns, extensions, and customer support. Message frequency varies. Message and data rates may apply. Reply <strong>STOP</strong> to unsubscribe or <strong>HELP</strong> for help. Consent is not a condition of purchase. Read the <a href={SMS_TERMS_URL} target="_blank" rel="noopener noreferrer">SMS Terms</a> and <a href={SMS_PRIVACY_URL} target="_blank" rel="noopener noreferrer">Privacy Policy</a>.
+      </p>
+    </div>
+  );
+}
+
+function SmsVerificationDisclosure() {
+  return <p className="sms-verification-disclosure">Selecting the verification-code button requests one automated security text from Rent Me CT. Message and data rates may apply.</p>;
+}
+
 function WizardModal({
   wizardSteps,
   wizardStep,
@@ -3394,11 +3440,13 @@ function WizardModal({
                 value={profileForm.phone}
                 onChange={(e) => {
                   setWizardReminder(null);
-                  setProfileForm({ ...profileForm, phone: e.target.value });
+                  setProfileForm({ ...profileForm, phone: e.target.value, sms_transactional_opt_in: false });
                 }}
               /></label>
 
               <EmailMarketingPreference profileForm={profileForm} setProfileForm={setProfileForm} />
+              <SmsTransactionalPreference profileForm={profileForm} setProfileForm={setProfileForm} />
+              <SmsVerificationDisclosure />
 
               <button className="primary-btn" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>
                 {phoneVerified ? 'Phone Verified' : sendingCode ? 'Sending...' : 'Send Verification Code'}
@@ -4386,8 +4434,10 @@ function PreviewCheckout({
               <label className="preview-full-field"><span>Email</span><input value={userEmail} disabled /></label>
               <div className="preview-full-field"><AddressAutocomplete value={profileForm.address} onChange={(address) => setProfileForm((current) => ({ ...current, address }))} /></div>
               <label className="preview-full-field"><span>What will you use the vehicle for?</span><textarea maxLength="500" value={profileForm.intended_vehicle_use} onChange={(event) => setProfileForm({ ...profileForm, intended_vehicle_use: event.target.value })} placeholder="Personal transportation, work, family trip…" /></label>
-              <label className="preview-full-field"><span>Mobile number</span><input value={profileForm.phone} onChange={(event) => setProfileForm({ ...profileForm, phone: event.target.value })} placeholder="(860) 555-0123" /></label>
+              <label className="preview-full-field"><span>Mobile number</span><input value={profileForm.phone} onChange={(event) => setProfileForm({ ...profileForm, phone: event.target.value, sms_transactional_opt_in: false })} placeholder="(860) 555-0123" /></label>
               <div className="preview-full-field"><EmailMarketingPreference profileForm={profileForm} setProfileForm={setProfileForm} /></div>
+              <div className="preview-full-field"><SmsTransactionalPreference profileForm={profileForm} setProfileForm={setProfileForm} /></div>
+              <div className="preview-full-field"><SmsVerificationDisclosure /></div>
             </div>
             <div className="preview-inline-actions">
               <button className="preview-secondary-button" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>{phoneVerified ? 'Phone verified' : sendingCode ? 'Saving & sending…' : 'Save details & send code'}</button>
@@ -4556,6 +4606,8 @@ function AuthScreen({
           setEmailOtp('');
           setEmailOtpSent(false);
         }}>Use a different email</button>}
+
+        <p className="auth-legal-links">By continuing, you acknowledge the <a href="https://rentmect.com/terms.html" target="_blank" rel="noopener noreferrer">Website and SMS Terms</a> and <a href="https://rentmect.com/privacy-policy.html" target="_blank" rel="noopener noreferrer">Privacy Policy</a>.</p>
       </form>
     </div>
   );

@@ -81,6 +81,106 @@
   font-size: 12px;
   font-weight: 500;
 }
+
+.sms-consent-preference {
+  display: grid !important;
+  gap: 9px !important;
+  padding: 14px !important;
+  border: 1px solid #bed6c9 !important;
+  border-radius: 12px !important;
+  background: #f5faf7 !important;
+}
+
+.sms-consent-preference > label {
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 11px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  cursor: pointer !important;
+}
+
+.sms-consent-preference input {
+  flex: 0 0 auto !important;
+  width: 19px !important;
+  min-width: 19px !important;
+  height: 19px !important;
+  min-height: 19px !important;
+  margin: 2px 0 0 !important;
+  padding: 0 !important;
+  accent-color: #176d45 !important;
+}
+
+.sms-consent-preference label > span {
+  display: grid !important;
+  gap: 3px !important;
+  color: #12241b !important;
+  font-size: 13px !important;
+  font-weight: 650 !important;
+  letter-spacing: 0 !important;
+  line-height: 1.4 !important;
+  text-transform: none !important;
+}
+
+.sms-consent-preference label small {
+  color: #607069 !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+}
+
+.sms-consent-preference > p,
+.sms-verification-disclosure {
+  margin: 0 !important;
+  color: #53635b !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0 !important;
+  line-height: 1.55 !important;
+  text-transform: none !important;
+}
+
+.sms-consent-preference > p {
+  padding-left: 30px !important;
+}
+
+.sms-consent-preference a {
+  color: #0f6840 !important;
+  font-weight: 750 !important;
+  text-decoration: underline !important;
+  text-underline-offset: 2px !important;
+}
+
+.sms-verification-disclosure {
+  padding: 10px 12px !important;
+  border-left: 3px solid #96b9a6 !important;
+  background: #f8faf9 !important;
+}
+
+.auth-legal-links {
+  margin: 2px 0 0 !important;
+  color: #68736d !important;
+  font-size: 11px !important;
+  line-height: 1.5 !important;
+  text-align: center !important;
+}
+
+.auth-legal-links a {
+  color: #176d45 !important;
+  font-weight: 750 !important;
+  text-decoration: underline !important;
+  text-underline-offset: 2px !important;
+}
+
+@media (max-width: 560px) {
+  .sms-consent-preference {
+    padding: 12px !important;
+  }
+
+  .sms-consent-preference > p {
+    padding-left: 0 !important;
+  }
+}
+
 /* Explicit end-of-rental decision keeps return, extension, and exchange from
    competing for attention in the same panel. */
 .trip-change-chooser {
