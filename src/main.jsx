@@ -16,6 +16,7 @@ import {
   Menu,
   MessageCircle,
   ShieldCheck,
+  Tag,
   Upload,
   X,
 } from 'lucide-react';
@@ -66,6 +67,11 @@ const ACCEPTED_DOCUMENT_TYPES = ['application/pdf', 'image/jpeg', 'image/png', '
 const AGREEMENT_VERSION = 'rentmect-master-v2026-05-20';
 const MILEAGE_POLICY = '200 miles/day included; excess mileage $0.35/mile';
 const CANCELLATION_TERMS = 'Contact Rent Me CT before pickup for cancellation or schedule changes.';
+const SMS_CONSENT_VERSION = '2026-07-26';
+const SMS_CONSENT_SOURCE = 'client_portal';
+const SMS_CONSENT_TEXT = 'I agree to receive automated transactional SMS messages from Rent Me CT about bookings, payments, documents, pickup, returns, extensions, and customer support. Message frequency varies. Message and data rates may apply. Reply STOP to unsubscribe or HELP for help. Consent is not a condition of purchase.';
+const SMS_TERMS_URL = 'https://rentmect.com/terms.html#sms-terms';
+const SMS_PRIVACY_URL = 'https://rentmect.com/privacy-policy.html#sms-privacy';
 const BLOCKING_RENTAL_STATUSES = ['pending', 'documents_needed', 'document_review', 'ready_for_pickup', 'approved', 'active', 'overdue', 'return_initiated', 'checkout_hold', 'calendar_block'];
 const AVAILABILITY_RENTAL_STATUSES = [...BLOCKING_RENTAL_STATUSES, 'completed'];
 const BLOCKING_VEHICLE_STATUSES = ['maintenance', 'unavailable', 'inactive'];
@@ -324,6 +330,8 @@ function App() {
   const [reservationSaving, setReservationSaving] = useState(false);
   const [agreementSaving, setAgreementSaving] = useState(false);
   const [paymentSaving, setPaymentSaving] = useState(false);
+  const [discountSaving, setDiscountSaving] = useState(false);
+  const [discountInput, setDiscountInput] = useState('');
   const [identitySaving, setIdentitySaving] = useState(false);
   const [returnSaving, setReturnSaving] = useState(false);
   const [extensionSaving, setExtensionSaving] = useState(false);
@@ -360,7 +368,8 @@ function App() {
   const [under25Pricing, setUnder25Pricing] = useState(DEFAULT_UNDER_25_PRICING);
   const [supportText, setSupportText] = useState('');
   const [activeTab, setActiveTab] = useState('overview');
-  const [navCollapsed, setNavCollapsed] = useState(false);
+  const [isMobileClientNav, setIsMobileClientNav] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches);
+  const [navCollapsed, setNavCollapsed] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches);
   const [agreementModalOpen, setAgreementModalOpen] = useState(false);
   const [tripManagerOpen, setTripManagerOpen] = useState(false);
 
@@ -395,6 +404,7 @@ function App() {
     address: '',
     intended_vehicle_use: '',
     email_marketing_opt_in: false,
+    sms_transactional_opt_in: false,
   });
   const profileComplete = Boolean(
     profileForm.full_name.trim() &&
@@ -427,6 +437,32 @@ function App() {
       notify.timeout = window.setTimeout(() => setNotice(null), 5200);
     }
   }
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const mediaQuery = window.matchMedia('(max-width: 760px)');
+    const syncMobileNav = () => {
+      setIsMobileClientNav(mediaQuery.matches);
+      setNavCollapsed(mediaQuery.matches);
+    };
+    syncMobileNav();
+    mediaQuery.addEventListener('change', syncMobileNav);
+    return () => mediaQuery.removeEventListener('change', syncMobileNav);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileClientNav || navCollapsed) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setNavCollapsed(true);
+    };
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [isMobileClientNav, navCollapsed]);
 
   useEffect(() => {
     let mounted = true;
@@ -1146,6 +1182,7 @@ function loadSavedBookingFromWebsite() {
         address: profileResult.data.address || '',
         intended_vehicle_use: profileResult.data.intended_vehicle_use || '',
         email_marketing_opt_in: Boolean(profileResult.data.email_marketing_opt_in && !profileResult.data.email_marketing_unsubscribed_at),
+        sms_transactional_opt_in: Boolean(profileResult.data.sms_transactional_opt_in && !profileResult.data.sms_transactional_opted_out_at),
       });
       setPhoneVerified(Boolean(profileResult.data.phone_verified));
     }
@@ -1265,15 +1302,27 @@ function loadSavedBookingFromWebsite() {
       p_opt_in: Boolean(profileForm.email_marketing_opt_in),
     });
 
-    const savedProfile = preferenceError ? data : (preferenceData || data);
+    let savedProfile = preferenceError ? data : (preferenceData || data);
     if (preferenceError) {
       setProfileForm((current) => ({ ...current, email_marketing_opt_in: false }));
       notify(`Your contact details were saved, but the optional email preference was not: ${preferenceError.message}`);
     }
 
+    const { data: smsPreferenceData, error: smsPreferenceError } = await supabase.rpc('set_sms_transactional_preference', {
+      p_opt_in: Boolean(profileForm.sms_transactional_opt_in),
+      p_source: SMS_CONSENT_SOURCE,
+      p_consent_version: SMS_CONSENT_VERSION,
+      p_consent_text: SMS_CONSENT_TEXT,
+    });
+
+    if (smsPreferenceData) savedProfile = smsPreferenceData;
+    if (smsPreferenceError) {
+      notify(`Your contact details were saved, but the SMS preference was not: ${smsPreferenceError.message}`);
+    }
+
     setProfile(savedProfile);
     setPhoneVerified(Boolean(savedProfile.phone_verified));
-    if (showSuccess && !preferenceError) notify('Profile saved.');
+    if (showSuccess && !preferenceError && !smsPreferenceError) notify('Profile and communication preferences saved.');
     return savedProfile;
   }
 
@@ -2262,6 +2311,24 @@ async function verifyPhoneCode() {
     window.location.assign(data.url);
   }
 
+  async function applyCustomerDiscount() {
+    const code = String(discountInput || '').trim().toUpperCase().replace(/[^A-Z0-9-]/g, '');
+    if (!currentRental?.id) return notify('Create the reservation before applying a discount code.');
+    if (!code) return notify('Enter the discount code from the promotion.');
+    setDiscountSaving(true);
+    const { data, error } = await supabase.rpc('apply_customer_discount_to_rental', {
+      p_rental_id: currentRental.id,
+      p_code: code,
+    });
+    setDiscountSaving(false);
+    if (error || !data) return notify(error?.message || 'That discount code could not be applied.');
+    setRentals((current) => current.map((rental) =>
+      rental.id === data.id ? { ...rental, ...data, vehicles: rental.vehicles } : rental
+    ));
+    setDiscountInput('');
+    notify(`${data.discount_code} applied. You saved ${money(data.discount_amount)}.`, 'success');
+  }
+
   async function nextWizardStep() {
     if (wizardStep === 0 && !contactStepCompleted) {
       notify('Save your renter details and verify your phone number before continuing.');
@@ -2406,6 +2473,11 @@ async function verifyPhoneCode() {
         { key: 'messages', label: 'Messages', icon: MessageCircle },
       ];
 
+  function selectClientTab(key) {
+    setActiveTab(key);
+    if (isMobileClientNav) setNavCollapsed(true);
+  }
+
   if (bookingPreviewFleetMode) return <BookingPreviewFleet />;
 
   if (loading) return <LoadingScreen />;
@@ -2528,40 +2600,69 @@ async function verifyPhoneCode() {
 
   return (
     <div className={`portal-shell compact-shell ${navCollapsed ? 'nav-collapsed' : ''}`}>
-      <aside className={`sidebar ${navCollapsed ? 'collapsed' : ''}`}>
-        <div className="brand-block">
-          <picture>
-            <source media="(max-width: 760px)" srcSet={logoMobileUrl} />
+      {isMobileClientNav && !navCollapsed && (
+        <button
+          type="button"
+          className="mobile-drawer-scrim"
+          aria-label="Close client navigation"
+          onClick={() => setNavCollapsed(true)}
+        />
+      )}
+      {isMobileClientNav && (
+        <aside className={`mobile-drawer client-mobile-drawer ${navCollapsed ? '' : 'open'}`} aria-label="Client navigation">
+          <div className="mobile-drawer-brand">
+            <img src={logoUrl} alt="Rent Me CT" />
+          </div>
+          <button className="mobile-drawer-close" type="button" onClick={() => setNavCollapsed(true)} aria-label="Close client navigation">
+            <X size={22} />
+          </button>
+          <nav className="mobile-drawer-nav" id="client-mobile-drawer-navigation">
+            {tabs.map(({ key, label, icon: Icon }) => (
+              <button key={key} type="button" className={activeTab === key ? 'active' : ''} onClick={() => selectClientTab(key)} aria-current={activeTab === key ? 'page' : undefined}>
+                <Icon size={20}/><span>{label}</span>
+              </button>
+            ))}
+          </nav>
+          <div className="mobile-drawer-footer">
+            <button type="button" onClick={signOut}><LogOut size={19}/><span>Log Out</span></button>
+          </div>
+        </aside>
+      )}
+      {!isMobileClientNav && (
+        <aside className={`sidebar ${navCollapsed ? 'collapsed' : ''}`} aria-label="Client navigation">
+          <div className="brand-block">
             <img className="brand-logo" src={logoUrl} alt="Rent Me CT" />
-          </picture>
-        </div>
-        <button className="nav-toggle" type="button" onClick={() => setNavCollapsed(!navCollapsed)} aria-label={navCollapsed ? 'Expand navigation' : 'Collapse navigation'}>
-          {navCollapsed ? <Menu size={17} /> : <X size={17} />}<span>{navCollapsed ? 'Expand' : 'Collapse'}</span>
-        </button>
-
-        <nav className="side-nav tab-nav">
-          {tabs.map(({ key, label, icon: Icon }) => (
-            <button
-              key={key}
-              type="button"
-              className={activeTab === key ? 'active' : ''}
-              onClick={() => setActiveTab(key)}
-              aria-current={activeTab === key ? 'page' : undefined}
-            >
-              <Icon size={18} /> <span>{label}</span>
-            </button>
-          ))}
-        </nav>
-
-        <button className="logout-btn" onClick={signOut}>
-          <LogOut size={17} /> <span>Log Out</span>
-        </button>
-      </aside>
+          </div>
+          <button className="nav-toggle" type="button" onClick={() => setNavCollapsed(!navCollapsed)} aria-expanded={!navCollapsed} aria-controls="client-primary-navigation" aria-label={navCollapsed ? 'Expand client navigation' : 'Collapse client navigation'}>
+            {navCollapsed ? <Menu size={17} /> : <X size={17} />}<span>{navCollapsed ? 'Expand' : 'Collapse'}</span>
+          </button>
+          <nav className="side-nav tab-nav" id="client-primary-navigation">
+            {tabs.map(({ key, label, icon: Icon }) => (
+              <button key={key} type="button" className={activeTab === key ? 'active' : ''} onClick={() => selectClientTab(key)} aria-current={activeTab === key ? 'page' : undefined}>
+                <Icon size={18}/><span>{label}</span>
+              </button>
+            ))}
+          </nav>
+          <button className="logout-btn" onClick={signOut}><LogOut size={17}/><span>Log Out</span></button>
+        </aside>
+      )}
 
       <main className="portal-main compact-main">
         {notice && <Notice notice={notice} onDismiss={() => setNotice(null)} />}
         <header className="portal-header compact-header">
-          <div>
+          {isMobileClientNav && navCollapsed && (
+            <button
+              type="button"
+              className="mobile-drawer-trigger"
+              aria-label="Open client navigation"
+              aria-controls="client-mobile-drawer-navigation"
+              aria-expanded="false"
+              onClick={() => setNavCollapsed(false)}
+            >
+              <Menu size={22} />
+            </button>
+          )}
+          <div className="client-header-copy">
             <p className="eyebrow">Welcome back</p>
             <h1>{clientFirstName}</h1>
             <span>{userEmail} • {emailVerified ? 'Email verified' : 'Email verification pending'}</span>
@@ -2853,7 +2954,7 @@ async function verifyPhoneCode() {
                   autoComplete="tel"
                   placeholder="Example: 8605551234"
                   value={profileForm.phone}
-                  onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value })}
+                  onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value, sms_transactional_opt_in: false })}
                 /></label>
                 <AddressAutocomplete
                   value={profileForm.address}
@@ -2871,6 +2972,8 @@ async function verifyPhoneCode() {
                   <small>{profileForm.intended_vehicle_use.length}/500 characters</small>
                 </label>
                 <EmailMarketingPreference profileForm={profileForm} setProfileForm={setProfileForm} />
+                <SmsTransactionalPreference profileForm={profileForm} setProfileForm={setProfileForm} />
+                <SmsVerificationDisclosure />
                <div className="phone-verify-box">
                 <div className="button-row">
                   <button className="primary-btn" type="submit">Save Profile</button>
@@ -2982,12 +3085,17 @@ async function verifyPhoneCode() {
               <div className="invoice-row"><span>Rental Days</span><strong>{currentRental ? getRentalDaysSafe(currentRental.pickup_date, currentRental.return_date) : estimate ? `${estimate.days} days` : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Base Rental</span><strong>{currentRental ? money(currentRental.base_rental_total ?? currentRental.rental_total) : estimate ? money(estimate.baseRentalTotal) : 'Pending'}</strong></div>
               {Number(currentRental?.under_25_markup_amount || estimate?.markupAmount || 0) > 0 && <div className="invoice-row"><span>Under-25 Rental Markup ({Number(currentRental?.under_25_markup_percentage ?? estimate?.markupPercentage ?? 0)}%)</span><strong>{money(currentRental?.under_25_markup_amount ?? estimate?.markupAmount)}</strong></div>}
+              {Number(currentRental?.discount_amount || 0) > 0 && <div className="invoice-row discount-row"><span>Discount ({currentRental.discount_code})</span><strong>−{money(currentRental.discount_amount)}</strong></div>}
               <div className="invoice-row"><span>Rental Total</span><strong>{currentRental ? money(currentRental.rental_total) : estimate ? money(estimate.rentalTotal) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>CT Sales Tax</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Security Deposit</span><strong>{currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
               <ServiceFeesSummary serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
               <div className="invoice-row total-row"><span>Total Due Today</span><strong>{currentRental ? money(Number(currentRental.rental_total || 0) + Number(currentRental.service_fee_total || 0) + Number(currentRental.tax_amount || 0) + Number(currentRental.security_deposit || 0)) : estimate && !estimate.invalid ? money(estimate.checkoutTotal + estimate.securityDeposit) : 'Pending'}</strong></div>
             </div>
+            {currentRental && !paymentPaid && <div className="discount-code-card">
+              <div><Tag size={19}/><span><strong>{currentRental.discount_code ? `${currentRental.discount_code} applied` : 'Have a promotion code?'}</strong><small>{currentRental.discount_code ? `Your customer total includes ${money(currentRental.discount_amount)} in savings.` : 'Paste the code from the website banner or popup. Your exact total and Stripe payment update immediately.'}</small></span></div>
+              {!currentRental.discount_code && <div className="discount-code-entry"><input aria-label="Discount code" value={discountInput} maxLength="24" placeholder="DISCOUNT CODE" onChange={(event) => setDiscountInput(event.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, ''))}/><button type="button" className="secondary-btn" disabled={discountSaving || !discountInput.trim()} onClick={applyCustomerDiscount}>{discountSaving ? 'Applying…' : 'Apply code'}</button></div>}
+            </div>}
             <details className="payment-terms-details">
               <summary>Rental terms and pickup requirements</summary>
               <div className="payment-summary-grid">
@@ -3185,6 +3293,31 @@ function EmailMarketingPreference({ profileForm, setProfileForm }) {
   );
 }
 
+function SmsTransactionalPreference({ profileForm, setProfileForm }) {
+  return (
+    <div className="sms-consent-preference">
+      <label>
+        <input
+          type="checkbox"
+          checked={Boolean(profileForm.sms_transactional_opt_in)}
+          onChange={(event) => setProfileForm((current) => ({ ...current, sms_transactional_opt_in: event.target.checked }))}
+        />
+        <span>
+          <strong>Text me about my rental and Rent Me CT account.</strong>
+          <small>This optional checkbox is for recurring transactional messages, not marketing.</small>
+        </span>
+      </label>
+      <p>
+        By checking this box, you agree to receive automated transactional texts from Rent Me CT about bookings, payments, documents, pickup, returns, extensions, and customer support. Message frequency varies. Message and data rates may apply. Reply <strong>STOP</strong> to unsubscribe or <strong>HELP</strong> for help. Consent is not a condition of purchase. Read the <a href={SMS_TERMS_URL} target="_blank" rel="noopener noreferrer">SMS Terms</a> and <a href={SMS_PRIVACY_URL} target="_blank" rel="noopener noreferrer">Privacy Policy</a>.
+      </p>
+    </div>
+  );
+}
+
+function SmsVerificationDisclosure() {
+  return <p className="sms-verification-disclosure">Selecting the verification-code button requests one automated security text from Rent Me CT. Message and data rates may apply.</p>;
+}
+
 function WizardModal({
   wizardSteps,
   wizardStep,
@@ -3333,11 +3466,13 @@ function WizardModal({
                 value={profileForm.phone}
                 onChange={(e) => {
                   setWizardReminder(null);
-                  setProfileForm({ ...profileForm, phone: e.target.value });
+                  setProfileForm({ ...profileForm, phone: e.target.value, sms_transactional_opt_in: false });
                 }}
               /></label>
 
               <EmailMarketingPreference profileForm={profileForm} setProfileForm={setProfileForm} />
+              <SmsTransactionalPreference profileForm={profileForm} setProfileForm={setProfileForm} />
+              <SmsVerificationDisclosure />
 
               <button className="primary-btn" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>
                 {phoneVerified ? 'Phone Verified' : sendingCode ? 'Sending...' : 'Send Verification Code'}
@@ -3549,6 +3684,7 @@ function WizardModal({
               <div className="invoice-row"><span>Rental Days</span><strong>{currentRental ? getRentalDaysSafe(currentRental.pickup_date, currentRental.return_date) : estimate ? `${estimate.days} days` : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Base Rental</span><strong>{currentRental ? money(currentRental.base_rental_total ?? currentRental.rental_total) : estimate ? money(estimate.baseRentalTotal) : 'Pending'}</strong></div>
               {Number(currentRental?.under_25_markup_amount || estimate?.markupAmount || 0) > 0 && <div className="invoice-row"><span>Under-25 Rental Markup ({Number(currentRental?.under_25_markup_percentage ?? estimate?.markupPercentage ?? 0)}%)</span><strong>{money(currentRental?.under_25_markup_amount ?? estimate?.markupAmount)}</strong></div>}
+              {Number(currentRental?.discount_amount || 0) > 0 && <div className="invoice-row discount-row"><span>Discount ({currentRental.discount_code})</span><strong>−{money(currentRental.discount_amount)}</strong></div>}
               <div className="invoice-row"><span>Rental Total</span><strong>{currentRental ? money(currentRental.rental_total) : estimate ? money(estimate.rentalTotal) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Taxes</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Security Deposit</span><strong>{currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
@@ -3556,6 +3692,10 @@ function WizardModal({
               <div className="invoice-row"><span>Mileage</span><strong>{MILEAGE_POLICY}</strong></div>
               <div className="invoice-row"><span>Pickup</span><strong>{RENTMECT_ADDRESS}</strong></div>
               <div className="invoice-row"><span>Booking checklist</span><strong>Phone, Identity, license, insurance, and agreement are complete before payment unlocks.</strong></div>
+              {currentRental && !paymentPaid && <div className="discount-code-card">
+                <div><Tag size={19}/><span><strong>{currentRental.discount_code ? `${currentRental.discount_code} applied` : 'Promotion code'}</strong><small>{currentRental.discount_code ? `You saved ${money(currentRental.discount_amount)}.` : 'Apply the code before opening Stripe.'}</small></span></div>
+                {!currentRental.discount_code && <div className="discount-code-entry"><input aria-label="Discount code" value={discountInput} maxLength="24" placeholder="DISCOUNT CODE" onChange={(event) => setDiscountInput(event.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, ''))}/><button type="button" className="secondary-btn" disabled={discountSaving || !discountInput.trim()} onClick={applyCustomerDiscount}>{discountSaving ? 'Applying…' : 'Apply code'}</button></div>}
+              </div>}
 
               {paymentPaid && <p className="auth-message">Payment recorded. Deposit is marked as held.</p>}
               {(!identityVerified || !licenseUploaded || !insuranceUploaded) && (
@@ -4325,8 +4465,10 @@ function PreviewCheckout({
               <label className="preview-full-field"><span>Email</span><input value={userEmail} disabled /></label>
               <div className="preview-full-field"><AddressAutocomplete value={profileForm.address} onChange={(address) => setProfileForm((current) => ({ ...current, address }))} /></div>
               <label className="preview-full-field"><span>What will you use the vehicle for?</span><textarea maxLength="500" value={profileForm.intended_vehicle_use} onChange={(event) => setProfileForm({ ...profileForm, intended_vehicle_use: event.target.value })} placeholder="Personal transportation, work, family trip…" /></label>
-              <label className="preview-full-field"><span>Mobile number</span><input value={profileForm.phone} onChange={(event) => setProfileForm({ ...profileForm, phone: event.target.value })} placeholder="(860) 555-0123" /></label>
+              <label className="preview-full-field"><span>Mobile number</span><input value={profileForm.phone} onChange={(event) => setProfileForm({ ...profileForm, phone: event.target.value, sms_transactional_opt_in: false })} placeholder="(860) 555-0123" /></label>
               <div className="preview-full-field"><EmailMarketingPreference profileForm={profileForm} setProfileForm={setProfileForm} /></div>
+              <div className="preview-full-field"><SmsTransactionalPreference profileForm={profileForm} setProfileForm={setProfileForm} /></div>
+              <div className="preview-full-field"><SmsVerificationDisclosure /></div>
             </div>
             <div className="preview-inline-actions">
               <button className="preview-secondary-button" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>{phoneVerified ? 'Phone verified' : sendingCode ? 'Saving & sending…' : 'Save details & send code'}</button>
@@ -4495,6 +4637,8 @@ function AuthScreen({
           setEmailOtp('');
           setEmailOtpSent(false);
         }}>Use a different email</button>}
+
+        <p className="auth-legal-links">By continuing, you acknowledge the <a href="https://rentmect.com/terms.html" target="_blank" rel="noopener noreferrer">Website and SMS Terms</a> and <a href="https://rentmect.com/privacy-policy.html" target="_blank" rel="noopener noreferrer">Privacy Policy</a>.</p>
       </form>
     </div>
   );
@@ -4865,7 +5009,8 @@ function customerAge(dateOfBirth, today = new Date()) {
   return age;
 }
 function isValidBirthDate(dateOfBirth) {
-  return customerAge(dateOfBirth) !== null;
+  const age = customerAge(dateOfBirth);
+  return age !== null && age >= 21;
 }
 function isCustomerUnder25(dateOfBirth) {
   const age = customerAge(dateOfBirth);
