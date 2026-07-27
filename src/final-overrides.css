@@ -1040,3 +1040,47 @@ summary:focus-visible {
   from { opacity: 0; }
   to { opacity: 1; }
 }
+.discount-code-card {
+  display: grid;
+  gap: 0.8rem;
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid #d9c58f;
+  border-radius: 16px;
+  background: #fffaf0;
+}
+
+.discount-code-card > div:first-child {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+}
+
+.discount-code-card span {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.discount-code-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.65rem;
+}
+
+.discount-code-entry input {
+  min-width: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 800;
+}
+
+.invoice-row.discount-row {
+  color: #19713b;
+  background: #effaf2;
+}
+
+@media (max-width: 560px) {
+  .discount-code-entry {
+    grid-template-columns: 1fr;
+  }
+}

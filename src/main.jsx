@@ -16,6 +16,7 @@ import {
   Menu,
   MessageCircle,
   ShieldCheck,
+  Tag,
   Upload,
   X,
 } from 'lucide-react';
@@ -329,6 +330,8 @@ function App() {
   const [reservationSaving, setReservationSaving] = useState(false);
   const [agreementSaving, setAgreementSaving] = useState(false);
   const [paymentSaving, setPaymentSaving] = useState(false);
+  const [discountSaving, setDiscountSaving] = useState(false);
+  const [discountInput, setDiscountInput] = useState('');
   const [identitySaving, setIdentitySaving] = useState(false);
   const [returnSaving, setReturnSaving] = useState(false);
   const [extensionSaving, setExtensionSaving] = useState(false);
@@ -2308,6 +2311,24 @@ async function verifyPhoneCode() {
     window.location.assign(data.url);
   }
 
+  async function applyCustomerDiscount() {
+    const code = String(discountInput || '').trim().toUpperCase().replace(/[^A-Z0-9-]/g, '');
+    if (!currentRental?.id) return notify('Create the reservation before applying a discount code.');
+    if (!code) return notify('Enter the discount code from the promotion.');
+    setDiscountSaving(true);
+    const { data, error } = await supabase.rpc('apply_customer_discount_to_rental', {
+      p_rental_id: currentRental.id,
+      p_code: code,
+    });
+    setDiscountSaving(false);
+    if (error || !data) return notify(error?.message || 'That discount code could not be applied.');
+    setRentals((current) => current.map((rental) =>
+      rental.id === data.id ? { ...rental, ...data, vehicles: rental.vehicles } : rental
+    ));
+    setDiscountInput('');
+    notify(`${data.discount_code} applied. You saved ${money(data.discount_amount)}.`, 'success');
+  }
+
   async function nextWizardStep() {
     if (wizardStep === 0 && !contactStepCompleted) {
       notify('Save your renter details and verify your phone number before continuing.');
@@ -3064,12 +3085,17 @@ async function verifyPhoneCode() {
               <div className="invoice-row"><span>Rental Days</span><strong>{currentRental ? getRentalDaysSafe(currentRental.pickup_date, currentRental.return_date) : estimate ? `${estimate.days} days` : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Base Rental</span><strong>{currentRental ? money(currentRental.base_rental_total ?? currentRental.rental_total) : estimate ? money(estimate.baseRentalTotal) : 'Pending'}</strong></div>
               {Number(currentRental?.under_25_markup_amount || estimate?.markupAmount || 0) > 0 && <div className="invoice-row"><span>Under-25 Rental Markup ({Number(currentRental?.under_25_markup_percentage ?? estimate?.markupPercentage ?? 0)}%)</span><strong>{money(currentRental?.under_25_markup_amount ?? estimate?.markupAmount)}</strong></div>}
+              {Number(currentRental?.discount_amount || 0) > 0 && <div className="invoice-row discount-row"><span>Discount ({currentRental.discount_code})</span><strong>−{money(currentRental.discount_amount)}</strong></div>}
               <div className="invoice-row"><span>Rental Total</span><strong>{currentRental ? money(currentRental.rental_total) : estimate ? money(estimate.rentalTotal) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>CT Sales Tax</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Security Deposit</span><strong>{currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
               <ServiceFeesSummary serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
               <div className="invoice-row total-row"><span>Total Due Today</span><strong>{currentRental ? money(Number(currentRental.rental_total || 0) + Number(currentRental.service_fee_total || 0) + Number(currentRental.tax_amount || 0) + Number(currentRental.security_deposit || 0)) : estimate && !estimate.invalid ? money(estimate.checkoutTotal + estimate.securityDeposit) : 'Pending'}</strong></div>
             </div>
+            {currentRental && !paymentPaid && <div className="discount-code-card">
+              <div><Tag size={19}/><span><strong>{currentRental.discount_code ? `${currentRental.discount_code} applied` : 'Have a promotion code?'}</strong><small>{currentRental.discount_code ? `Your customer total includes ${money(currentRental.discount_amount)} in savings.` : 'Paste the code from the website banner or popup. Your exact total and Stripe payment update immediately.'}</small></span></div>
+              {!currentRental.discount_code && <div className="discount-code-entry"><input aria-label="Discount code" value={discountInput} maxLength="24" placeholder="DISCOUNT CODE" onChange={(event) => setDiscountInput(event.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, ''))}/><button type="button" className="secondary-btn" disabled={discountSaving || !discountInput.trim()} onClick={applyCustomerDiscount}>{discountSaving ? 'Applying…' : 'Apply code'}</button></div>}
+            </div>}
             <details className="payment-terms-details">
               <summary>Rental terms and pickup requirements</summary>
               <div className="payment-summary-grid">
@@ -3658,6 +3684,7 @@ function WizardModal({
               <div className="invoice-row"><span>Rental Days</span><strong>{currentRental ? getRentalDaysSafe(currentRental.pickup_date, currentRental.return_date) : estimate ? `${estimate.days} days` : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Base Rental</span><strong>{currentRental ? money(currentRental.base_rental_total ?? currentRental.rental_total) : estimate ? money(estimate.baseRentalTotal) : 'Pending'}</strong></div>
               {Number(currentRental?.under_25_markup_amount || estimate?.markupAmount || 0) > 0 && <div className="invoice-row"><span>Under-25 Rental Markup ({Number(currentRental?.under_25_markup_percentage ?? estimate?.markupPercentage ?? 0)}%)</span><strong>{money(currentRental?.under_25_markup_amount ?? estimate?.markupAmount)}</strong></div>}
+              {Number(currentRental?.discount_amount || 0) > 0 && <div className="invoice-row discount-row"><span>Discount ({currentRental.discount_code})</span><strong>−{money(currentRental.discount_amount)}</strong></div>}
               <div className="invoice-row"><span>Rental Total</span><strong>{currentRental ? money(currentRental.rental_total) : estimate ? money(estimate.rentalTotal) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Taxes</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Security Deposit</span><strong>{currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
@@ -3665,6 +3692,10 @@ function WizardModal({
               <div className="invoice-row"><span>Mileage</span><strong>{MILEAGE_POLICY}</strong></div>
               <div className="invoice-row"><span>Pickup</span><strong>{RENTMECT_ADDRESS}</strong></div>
               <div className="invoice-row"><span>Booking checklist</span><strong>Phone, Identity, license, insurance, and agreement are complete before payment unlocks.</strong></div>
+              {currentRental && !paymentPaid && <div className="discount-code-card">
+                <div><Tag size={19}/><span><strong>{currentRental.discount_code ? `${currentRental.discount_code} applied` : 'Promotion code'}</strong><small>{currentRental.discount_code ? `You saved ${money(currentRental.discount_amount)}.` : 'Apply the code before opening Stripe.'}</small></span></div>
+                {!currentRental.discount_code && <div className="discount-code-entry"><input aria-label="Discount code" value={discountInput} maxLength="24" placeholder="DISCOUNT CODE" onChange={(event) => setDiscountInput(event.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, ''))}/><button type="button" className="secondary-btn" disabled={discountSaving || !discountInput.trim()} onClick={applyCustomerDiscount}>{discountSaving ? 'Applying…' : 'Apply code'}</button></div>}
+              </div>}
 
               {paymentPaid && <p className="auth-message">Payment recorded. Deposit is marked as held.</p>}
               {(!identityVerified || !licenseUploaded || !insuranceUploaded) && (
@@ -4978,7 +5009,8 @@ function customerAge(dateOfBirth, today = new Date()) {
   return age;
 }
 function isValidBirthDate(dateOfBirth) {
-  return customerAge(dateOfBirth) !== null;
+  const age = customerAge(dateOfBirth);
+  return age !== null && age >= 21;
 }
 function isCustomerUnder25(dateOfBirth) {
   const age = customerAge(dateOfBirth);
