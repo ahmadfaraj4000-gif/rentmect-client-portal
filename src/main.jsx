@@ -268,10 +268,6 @@ This Addendum is incorporated into and governed by the Master Vehicle Rental Agr
 RENTER INFORMATION
 Full Legal Name: _____________________________________________
 
-Address: ____________________________________________________
-
-City/State/Zip: ______________________________________________
-
 Phone: ______________________________________________________
 
 Email: ______________________________________________________
@@ -373,7 +369,6 @@ function App() {
     dateOfBirth: '',
     email: '',
     phone: '',
-    address: '',
     billingSame: true,
   });
 
@@ -427,15 +422,13 @@ function App() {
     full_name: '',
     date_of_birth: '',
     phone: '',
-    address: '',
     intended_vehicle_use: '',
     email_marketing_opt_in: false,
     sms_transactional_opt_in: false,
   });
   const profileComplete = Boolean(
-    profileForm.full_name.trim() &&
+    hasFirstAndLastName(profileForm.full_name) &&
     profileForm.phone.trim() &&
-    profileForm.address.trim() &&
     profileForm.intended_vehicle_use.trim() &&
     isValidBirthDate(profileForm.date_of_birth)
   );
@@ -857,6 +850,20 @@ function App() {
   const pendingExtension = currentRentalExtensions.find((request) => request.status === 'pending');
   const pendingSameVehicleExtension = pendingExtension?.request_kind !== 'switch_car_continuation' ? pendingExtension : null;
   const approvedUnpaidExtension = currentRentalExtensions.find((request) => request.status === 'approved_pending_payment');
+  const extensionInsuranceRequest = approvedUnpaidExtension || pendingExtension;
+  const extensionInsuranceDocument = useMemo(() => {
+    if (!extensionInsuranceRequest?.created_at) return null;
+    const requestedAt = new Date(extensionInsuranceRequest.created_at).getTime();
+    return latestDocument(
+      currentRentalDocuments.filter((document) =>
+        document.document_type === 'insurance' &&
+        new Date(document.created_at || 0).getTime() >= requestedAt
+      ),
+      'insurance'
+    );
+  }, [currentRentalDocuments, extensionInsuranceRequest?.id, extensionInsuranceRequest?.created_at]);
+  const extensionInsuranceUploaded = isUsableDocument(extensionInsuranceDocument);
+  const extensionInsuranceRequired = Boolean(extensionInsuranceRequest && !extensionInsuranceUploaded);
   const approvedSwitchExtension = currentRentalExtensions.find((request) =>
     request.status === 'approved_pending_payment' &&
     request.request_kind === 'switch_car_continuation'
@@ -896,6 +903,7 @@ function App() {
     checkoutIntent && checkoutDeadline && !paymentPaid
   );
   const identityStatus = profile?.identity_verification_status || 'unverified';
+  const identityErrorCode = profile?.identity_verification_error_code || '';
   const identityVerified = identityStatus === 'verified';
   const returnCountdown = getReturnCountdown(currentRental?.return_date, currentRental?.return_time, now);
   const returnConfirmationSent = Boolean(
@@ -1287,7 +1295,6 @@ function loadSavedBookingFromWebsite() {
         full_name: profileResult.data.full_name || '',
         date_of_birth: profileResult.data.date_of_birth || '',
         phone: profileResult.data.phone || '',
-        address: profileResult.data.address || '',
         intended_vehicle_use: profileResult.data.intended_vehicle_use || '',
         email_marketing_opt_in: Boolean(profileResult.data.email_marketing_opt_in && !profileResult.data.email_marketing_unsubscribed_at),
         sms_transactional_opt_in: Boolean(profileResult.data.sms_transactional_opt_in && !profileResult.data.sms_transactional_opted_out_at),
@@ -1379,8 +1386,8 @@ function loadSavedBookingFromWebsite() {
   async function saveProfileDetails(showSuccess = true) {
     if (!session?.user?.id) return;
 
-    if (!profileForm.full_name.trim() || !profileForm.address.trim() || !profileForm.intended_vehicle_use.trim()) {
-      notify('Add your full legal name, home address, and intended vehicle use before continuing.');
+    if (!hasFirstAndLastName(profileForm.full_name) || !profileForm.intended_vehicle_use.trim()) {
+      notify('Add your full legal first and last name exactly as shown on your government ID, plus the intended vehicle use.');
       return null;
     }
 
@@ -1391,7 +1398,7 @@ function loadSavedBookingFromWebsite() {
     const { data, error } = await supabase.rpc('save_customer_profile_contact_details', {
       p_full_name: profileForm.full_name,
       p_phone: profileForm.phone,
-      p_address: profileForm.address,
+      p_address: null,
       p_date_of_birth: profileForm.date_of_birth,
       p_intended_vehicle_use: profileForm.intended_vehicle_use.trim(),
     });
@@ -1441,9 +1448,8 @@ function loadSavedBookingFromWebsite() {
 
   async function sendPhoneCode() {
   const missingContactFields = [
-    !profileForm.full_name.trim() && 'full legal name',
+    !hasFirstAndLastName(profileForm.full_name) && 'full legal first and last name exactly as shown on your government ID',
     !isValidBirthDate(profileForm.date_of_birth) && 'valid date of birth',
-    !profileForm.address.trim() && 'home address',
     !profileForm.intended_vehicle_use.trim() && 'intended vehicle use',
     !profileForm.phone.trim() && 'phone number',
   ].filter(Boolean);
@@ -1711,7 +1717,10 @@ async function verifyPhoneCode() {
         return;
       }
 
-    const existingDocument = documentType === 'license'
+    const requiresNewExtensionInsuranceRow = documentType === 'insurance' && extensionInsuranceRequired;
+    const existingDocument = requiresNewExtensionInsuranceRow
+      ? null
+      : documentType === 'license'
       ? latestDocument(documents, 'license')
       : latestDocument(documents.filter((document) => document.rental_id === rental.id), 'insurance');
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
@@ -2306,9 +2315,15 @@ async function verifyPhoneCode() {
         notify(data?.error || `Identity verification could not be loaded (${response.status}).`);
         return null;
       }
-      setProfile((current) => current ? { ...current, identity_verification_status: data.status } : current);
+      setProfile((current) => current ? {
+        ...current,
+        identity_verification_status: data.status,
+        identity_verification_error_code: data.errorCode ?? (data.verified ? null : current.identity_verification_error_code),
+      } : current);
       if (data.verified) {
         await loadPortalData(session.user.id);
+      } else if (data.errorCode === 'name_mismatch') {
+        notify('NOT VERIFIED — the name on the government ID does not match the renter’s full legal name. Correct the renter name and retry.', 'error');
       } else if (redirectToStripe && data.url) {
         window.sessionStorage.setItem('rentmect_identity_return_pending', '1');
         window.location.assign(data.url);
@@ -2344,6 +2359,12 @@ async function verifyPhoneCode() {
     setPaymentSaving(true);
     const targetExtension = approvedUnpaidExtension;
     let rental = currentRental;
+
+    if (targetExtension && extensionInsuranceRequired) {
+      setPaymentSaving(false);
+      notify('Upload new proof of insurance for this extension before opening Stripe.', 'error');
+      return;
+    }
 
     if (!targetExtension && checkoutExpired) {
       setPaymentSaving(false);
@@ -2730,6 +2751,7 @@ async function verifyPhoneCode() {
           currentRental={currentRental}
           vehicle={selectedVehicle || currentRental?.vehicles}
           identityStatus={identityStatus}
+          identityErrorCode={identityErrorCode}
           identityVerified={identityVerified}
           identitySaving={identitySaving}
           startIdentityVerification={startIdentityVerification}
@@ -3038,6 +3060,27 @@ async function verifyPhoneCode() {
                     <button className="secondary-btn" type="button" onClick={cancelExtensionRequest} disabled={extensionSaving}>Cancel Extension Request</button>
                   </div>}
                   {approvedUnpaidExtension && <p className="auth-message">Approved extension is waiting for payment before the new return date becomes active.{approvedUnpaidExtension.payment_due_at ? ` Pay by ${new Date(approvedUnpaidExtension.payment_due_at).toLocaleString()} or the hold is released automatically.` : ''}</p>}
+                  {extensionInsuranceRequest && (
+                    <div className={`extension-insurance-refresh ${extensionInsuranceUploaded ? 'complete' : 'required'}`}>
+                      {extensionInsuranceUploaded ? <CheckCircle2 size={21} /> : <ShieldCheck size={21} />}
+                      <div>
+                        <strong>{extensionInsuranceUploaded ? 'New insurance uploaded for this extension' : 'New proof of insurance required'}</strong>
+                        <span>{extensionInsuranceUploaded ? 'This extension-specific upload is ready for Rent Me CT review.' : 'Your driver license and Stripe Identity stay on file. Upload current insurance specifically for this extension before payment.'}</span>
+                      </div>
+                      {!extensionInsuranceUploaded && (
+                        <label className={`secondary-btn ${documentUploadBusy?.insurance ? 'is-busy' : ''}`}>
+                          {documentUploadBusy?.insurance ? 'Uploading…' : 'Upload New Insurance'}
+                          <input
+                            type="file"
+                            accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
+                            onChange={(event) => uploadDocument(event, 'insurance')}
+                            disabled={Boolean(documentUploadBusy?.insurance)}
+                            style={{ display: 'none' }}
+                          />
+                        </label>
+                      )}
+                    </div>
+                  )}
                   <input
                     type="date"
                     min={currentRental.return_date}
@@ -3126,10 +3169,12 @@ async function verifyPhoneCode() {
               <form className="portal-form" onSubmit={saveProfile}>
                 <label><span>Full legal name</span><input
                   autoComplete="name"
-                  placeholder="Name as shown on your license"
+                  placeholder="First and last name as shown on your government ID"
                   value={profileForm.full_name}
                   onChange={(e) => setProfileForm({ ...profileForm, full_name: e.target.value })}
+                  readOnly={identityVerified}
                 /></label>
+                {identityVerified && <small className="identity-name-lock-note">Identity verified. This legal name is locked so returning rentals can reuse the approved Stripe Identity check.</small>}
                 <label className="profile-date-field">
                   <span>Date of birth</span>
                   <input
@@ -3148,10 +3193,6 @@ async function verifyPhoneCode() {
                   value={profileForm.phone}
                   onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value, sms_transactional_opt_in: false })}
                 /></label>
-                <AddressAutocomplete
-                  value={profileForm.address}
-                  onChange={(address) => setProfileForm((current) => ({ ...current, address }))}
-                />
                 <label>
                   <span>What will you use the vehicle for?</span>
                   <textarea
@@ -3331,12 +3372,12 @@ async function verifyPhoneCode() {
                 <span>Extension due: {money(approvedUnpaidExtension.extension_total_amount)}</span>
                 {approvedUnpaidExtension.request_kind === 'switch_car_continuation' && <span>{money(approvedUnpaidExtension.deposit_carried_amount || 0)} deposit carries forward{Number(approvedUnpaidExtension.deposit_increase_amount || 0) > 0 ? `; ${money(approvedUnpaidExtension.deposit_increase_amount)} additional deposit is included` : ''}{Number(approvedUnpaidExtension.deposit_decrease_amount || 0) > 0 ? `; ${money(approvedUnpaidExtension.deposit_decrease_amount)} will be refunded after the original vehicle passes inspection` : ''}.</span>}
                 {approvedUnpaidExtension.request_kind !== 'switch_car_continuation' && <span>Your existing security deposit remains held; no second deposit is charged.</span>}
-                <small>Pay securely with Stripe before the longer return window activates.</small>
+                <small>{extensionInsuranceRequired ? 'Upload new insurance for this extension before Stripe payment unlocks.' : 'New insurance is on file. Pay securely with Stripe before the longer return window activates.'}</small>
               </div>
             )}
-            <button className="primary-btn big-action" onClick={startStripeCheckout} disabled={paymentSaving || checkoutExpired || (paymentPaid && !approvedUnpaidExtension)}>
+            <button className="primary-btn big-action" onClick={startStripeCheckout} disabled={paymentSaving || checkoutExpired || extensionInsuranceRequired || (paymentPaid && !approvedUnpaidExtension)}>
               <CreditCard size={18} /> {approvedUnpaidExtension
-                ? paymentSaving ? 'Opening Stripe...' : 'Pay Approved Extension'
+                ? extensionInsuranceRequired ? 'Upload New Insurance First' : paymentSaving ? 'Opening Stripe...' : 'Pay Approved Extension'
                 : paymentPaid ? 'Payment Complete' : paymentSaving ? 'Opening Stripe...' : 'Pay With Stripe'}
             </button>
           </section>
@@ -3444,6 +3485,7 @@ async function verifyPhoneCode() {
           paymentSaving={paymentSaving}
           paymentPaid={paymentPaid}
           identityStatus={identityStatus}
+          identityErrorCode={identityErrorCode}
           identityVerified={identityVerified}
           identitySaving={identitySaving}
           startIdentityVerification={startIdentityVerification}
@@ -3543,6 +3585,7 @@ function WizardModal({
   paymentSaving,
   paymentPaid,
   identityStatus,
+  identityErrorCode,
   identityVerified,
   identitySaving,
   startIdentityVerification,
@@ -3623,10 +3666,12 @@ function WizardModal({
 
               <label><span>Full legal name</span><input
                 autoComplete="name"
-                placeholder="Name as shown on your license"
+                placeholder="First and last name as shown on your government ID"
                 value={profileForm.full_name}
                 onChange={(e) => setProfileForm({ ...profileForm, full_name: e.target.value })}
+                readOnly={identityVerified}
               /></label>
+              {identityVerified && <small className="identity-name-lock-note">Identity already verified. This name stays locked and the approved check is reused for returning rentals.</small>}
 
               <label className="auth-date-field">
                 <span>Date of birth</span>
@@ -3637,11 +3682,6 @@ function WizardModal({
                   onChange={(e) => setProfileForm({ ...profileForm, date_of_birth: e.target.value })}
                 />
               </label>
-
-              <AddressAutocomplete
-                value={profileForm.address}
-                onChange={(address) => setProfileForm((current) => ({ ...current, address }))}
-              />
 
               <label>
                 <span>What will you use the vehicle for?</span>
@@ -3933,6 +3973,7 @@ function WizardModal({
           {wizardStep === 2 && (
             <IdentityVerificationPanel
               status={identityStatus}
+              errorCode={identityErrorCode}
               verified={identityVerified}
               saving={identitySaving}
               onStart={startIdentityVerification}
@@ -4740,6 +4781,7 @@ function PreviewCheckout({
   currentRental,
   vehicle,
   identityStatus,
+  identityErrorCode,
   identityVerified,
   identitySaving,
   startIdentityVerification,
@@ -4824,10 +4866,10 @@ function PreviewCheckout({
 
           <PreviewCheckoutSection number="1" title="Contact information" summary={contactStepCompleted ? `${profileForm.full_name} • Phone verified` : 'Tell us who will be driving'} completed={contactStepCompleted} open={activeSection === 'contact'} onOpen={() => setActiveSection('contact')}>
             <div className="preview-form-grid">
-              <label><span>Full legal name</span><input value={profileForm.full_name} onChange={(event) => setProfileForm({ ...profileForm, full_name: event.target.value })} placeholder="Name as shown on license" /></label>
+              <label><span>Full legal name</span><input value={profileForm.full_name} onChange={(event) => setProfileForm({ ...profileForm, full_name: event.target.value })} placeholder="First and last name as shown on your government ID" readOnly={identityVerified} /></label>
+              {identityVerified && <small className="preview-full-field identity-name-lock-note">Identity already verified. This name is locked and reused for future rentals.</small>}
               <label><span>Date of birth</span><input type="date" max={getTodayDateInputValue()} value={profileForm.date_of_birth} onChange={(event) => setProfileForm({ ...profileForm, date_of_birth: event.target.value })} /></label>
               <label className="preview-full-field"><span>Email</span><input value={userEmail} disabled /></label>
-              <div className="preview-full-field"><AddressAutocomplete value={profileForm.address} onChange={(address) => setProfileForm((current) => ({ ...current, address }))} /></div>
               <label className="preview-full-field"><span>What will you use the vehicle for?</span><textarea maxLength="500" value={profileForm.intended_vehicle_use} onChange={(event) => setProfileForm({ ...profileForm, intended_vehicle_use: event.target.value })} placeholder="Personal transportation, work, family trip…" /></label>
               <label className="preview-full-field"><span>Mobile number</span><input value={profileForm.phone} onChange={(event) => setProfileForm({ ...profileForm, phone: event.target.value, sms_transactional_opt_in: false })} placeholder="(860) 555-0123" /></label>
               <div className="preview-full-field"><EmailMarketingPreference profileForm={profileForm} setProfileForm={setProfileForm} /></div>
@@ -4841,8 +4883,8 @@ function PreviewCheckout({
             <button className="preview-primary-button" type="button" onClick={continueContact} disabled={reservationSaving || checkoutExpired}>{reservationSaving ? 'Saving…' : currentRental ? 'Continue' : 'Save & continue'} <ChevronRight size={18} /></button>
           </PreviewCheckoutSection>
 
-          <PreviewCheckoutSection number="2" title="Identity verification" summary={identityVerified ? 'Identity verified securely by Stripe' : identityStatus === 'processing' ? 'Verification processing' : 'Government ID and selfie'} completed={identityVerified} open={activeSection === 'identity'} onOpen={() => setActiveSection('identity')}>
-            <IdentityVerificationPanel status={identityStatus} verified={identityVerified} saving={identitySaving} onStart={startIdentityVerification} onRefresh={() => refreshIdentityVerification(true)} />
+          <PreviewCheckoutSection number="2" title="Identity verification" summary={identityVerified ? 'Verified once and saved for returning rentals' : identityStatus === 'processing' ? 'Verification processing' : 'Government ID and selfie'} completed={identityVerified} open={activeSection === 'identity'} onOpen={() => setActiveSection('identity')}>
+            <IdentityVerificationPanel status={identityStatus} errorCode={identityErrorCode} verified={identityVerified} saving={identitySaving} onStart={startIdentityVerification} onRefresh={() => refreshIdentityVerification(true)} />
           </PreviewCheckoutSection>
 
           <PreviewCheckoutSection number="3" title="Driver documents" summary={documentsComplete ? 'License and insurance uploaded' : `${licenseUploaded ? 'License uploaded' : 'License required'} • ${insuranceUploaded ? 'Insurance uploaded' : 'Insurance required'}`} completed={documentsComplete} open={activeSection === 'documents'} onOpen={() => setActiveSection('documents')}>
@@ -5155,19 +5197,22 @@ function Metric({ icon: Icon, label, value }) {
   );
 }
 
-function IdentityVerificationPanel({ status, verified, saving, onStart, onRefresh }) {
+function IdentityVerificationPanel({ status, errorCode, verified, saving, onStart, onRefresh }) {
   const requiresInput = ['unverified', 'requires_input', 'canceled', 'redacted'].includes(status);
   const failed = ['requires_input', 'canceled', 'redacted'].includes(status);
+  const nameMismatch = errorCode === 'name_mismatch';
   const statusLabel = verified ? 'VERIFIED' : status === 'processing' ? 'PROCESSING' : failed ? 'NOT VERIFIED' : 'ACTION REQUIRED';
   return <div className={`identity-verification-panel ${verified ? 'verified' : status}`} role="status" aria-live="polite">
     {failed ? <AlertTriangle size={30} /> : verified ? <CheckCircle2 size={30} /> : <ShieldCheck size={30} />}
     <div>
       <span className="identity-status-label">{statusLabel}</span>
-      <strong>{verified ? 'Stripe successfully confirmed your identity' : status === 'processing' ? 'Stripe received your submission and is checking it' : failed ? 'Stripe could not verify this attempt' : 'Verify your government ID and selfie'}</strong>
+      <strong>{verified ? 'Stripe successfully confirmed your identity' : status === 'processing' ? 'Stripe received your submission and is checking it' : nameMismatch ? 'Government ID name does not match the renter name' : failed ? 'Stripe could not verify this attempt' : 'Verify your government ID and selfie'}</strong>
       <span>{verified
-        ? 'This step is complete. Continue to your driver-license and insurance uploads.'
+        ? 'This customer-level check is complete and will be reused for future rentals. You will not be asked to repeat it unless the legal name changes.'
         : status === 'processing'
           ? 'Do not submit another check while this says PROCESSING. Press Refresh Status in a moment.'
+          : nameMismatch
+            ? 'Enter the renter’s full first and last name exactly as shown on the government ID, then retry Stripe Identity.'
           : failed
             ? 'Press Retry With Stripe Identity and complete every requested screen. You will return here for a clear result.'
             : 'You will continue to Stripe’s secure hosted verification. Complete every screen; we will bring you back to the next required step.'}</span>
@@ -5292,141 +5337,6 @@ function UploadedDocuments({ documents, currentRental, openDocument, replaceDocu
   );
 }
 
-let googleMapsLoader;
-
-function loadGoogleMaps() {
-  if (window.google?.maps?.importLibrary) return Promise.resolve(window.google.maps);
-  if (googleMapsLoader) return googleMapsLoader;
-
-  const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-  if (!apiKey) return Promise.reject(new Error('Google address autocomplete is not configured.'));
-
-  googleMapsLoader = new Promise((resolve, reject) => {
-    const callbackName = '__rentmectGoogleMapsReady';
-    const params = new URLSearchParams({ key: apiKey, v: 'weekly', loading: 'async', callback: callbackName });
-    window[callbackName] = () => {
-      delete window[callbackName];
-      resolve(window.google.maps);
-    };
-    const script = document.createElement('script');
-    script.src = `https://maps.googleapis.com/maps/api/js?${params.toString()}`;
-    script.async = true;
-    script.onerror = () => {
-      delete window[callbackName];
-      googleMapsLoader = null;
-      reject(new Error('Address suggestions could not be loaded.'));
-    };
-    document.head.appendChild(script);
-  });
-  return googleMapsLoader;
-}
-
-function AddressAutocomplete({ value, onChange }) {
-  const hostRef = useRef(null);
-  const onChangeRef = useRef(onChange);
-  const userEditingRef = useRef(false);
-  const [editing, setEditing] = useState(!value);
-  const [manualEntry, setManualEntry] = useState(false);
-  const [loadFailed, setLoadFailed] = useState(false);
-  const hasGoogleKey = Boolean(import.meta.env.VITE_GOOGLE_MAPS_API_KEY);
-
-  useEffect(() => {
-    onChangeRef.current = onChange;
-  }, [onChange]);
-
-  useEffect(() => {
-    if (value && !userEditingRef.current) setEditing(false);
-  }, [value]);
-
-  useEffect(() => {
-    if (!editing || manualEntry || !hasGoogleKey || !hostRef.current) return undefined;
-    let active = true;
-    let autocomplete;
-    let handleSelect;
-
-    loadGoogleMaps().then(async (maps) => {
-      const { PlaceAutocompleteElement } = await maps.importLibrary('places');
-      if (!active || !hostRef.current) return;
-      autocomplete = new PlaceAutocompleteElement();
-      autocomplete.placeholder = 'Start typing your U.S. home address';
-      autocomplete.includedRegionCodes = ['us'];
-      autocomplete.setAttribute('aria-label', 'Home address search');
-      handleSelect = async ({ placePrediction }) => {
-        try {
-          const place = placePrediction.toPlace();
-          await place.fetchFields({ fields: ['formattedAddress'] });
-          if (place.formattedAddress) {
-            onChangeRef.current(place.formattedAddress);
-            userEditingRef.current = false;
-            setEditing(false);
-          }
-        } catch {
-          setLoadFailed(true);
-          setManualEntry(true);
-        }
-      };
-      autocomplete.addEventListener('gmp-select', handleSelect);
-      hostRef.current.replaceChildren(autocomplete);
-    }).catch(() => {
-      if (active) {
-        setLoadFailed(true);
-        setManualEntry(true);
-      }
-    });
-
-    return () => {
-      active = false;
-      if (autocomplete && handleSelect) autocomplete.removeEventListener('gmp-select', handleSelect);
-      if (hostRef.current) hostRef.current.replaceChildren();
-    };
-  }, [editing, manualEntry, hasGoogleKey]);
-
-  if (value && !editing) {
-    return (
-      <div className="selected-address" aria-label="Selected home address">
-        <MapPin size={19} />
-        <span><small>Home address</small><strong>{value}</strong></span>
-        <button type="button" className="link-btn" onClick={() => {
-          userEditingRef.current = true;
-          setEditing(true);
-        }}>Change</button>
-      </div>
-    );
-  }
-
-  if (!hasGoogleKey || manualEntry) {
-    return (
-      <label className="address-manual-field">
-        <span>Home address</span>
-        <input
-          autoComplete="street-address"
-          placeholder="Street, city, state, ZIP"
-          maxLength="240"
-          value={value}
-          onChange={(event) => {
-            userEditingRef.current = true;
-            onChange(event.target.value);
-          }}
-          required
-        />
-        <small>Your home address is kept with your renter profile for rental records and agreement preparation.</small>
-        {loadFailed && <small>Address suggestions are unavailable right now. Enter the address manually.</small>}
-      </label>
-    );
-  }
-
-  return (
-    <div className="address-autocomplete-field">
-      <span>Home address</span>
-      <div className="google-address-widget" ref={hostRef} />
-      <small>Your home address is kept with your renter profile for rental records and agreement preparation.</small>
-      <button type="button" className="link-btn address-manual-toggle" onClick={() => setManualEntry(true)}>
-        Enter address manually
-      </button>
-    </div>
-  );
-}
-
 function normalizeUSPhone(phone) {
   const digits = String(phone || '').replace(/\D/g, '');
 
@@ -5496,6 +5406,9 @@ function customerAge(dateOfBirth, today = new Date()) {
 function isValidBirthDate(dateOfBirth) {
   const age = customerAge(dateOfBirth);
   return age !== null && age >= 21;
+}
+function hasFirstAndLastName(value) {
+  return String(value || '').trim().split(/\s+/).filter(Boolean).length >= 2;
 }
 function isCustomerUnder25(dateOfBirth) {
   const age = customerAge(dateOfBirth);
@@ -5891,7 +5804,6 @@ Agreement Version: ${AGREEMENT_VERSION}
 Signed Snapshot Generated: ${new Date().toISOString()}
 
 Renter Name: ${profile?.full_name || 'Pending'}
-Address: ${profile?.address || 'Pending'}
 Intended Vehicle Use: ${profile?.intended_vehicle_use || 'Pending'}
 Phone: ${profile?.phone || 'Pending'}
 Email: ${email || 'Pending'}
