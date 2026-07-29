@@ -3568,3 +3568,35 @@ body {
   font-size:12px;
   line-height:1.45
 }
+
+/* Keep mobile forms at the real viewport scale and inside their cards.
+   iOS Safari zooms focused controls whose text is smaller than 16px. */
+@media (max-width: 900px) {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body,
+  #root {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  input,
+  select,
+  textarea {
+    max-width: 100%;
+    min-width: 0;
+    font-size: 16px !important;
+  }
+
+  .preview-auth-section,
+  .preview-form-grid,
+  .preview-form-grid > *,
+  .preview-checkout-section,
+  .portal-form,
+  .portal-form > * {
+    max-width: 100%;
+    min-width: 0;
+  }
+}
