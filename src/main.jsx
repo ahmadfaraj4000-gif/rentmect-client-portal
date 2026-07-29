@@ -419,6 +419,8 @@ function App() {
   const paymentReturnHandledRef = useRef(false);
 
   const [profileForm, setProfileForm] = useState({
+    first_name: '',
+    last_name: '',
     full_name: '',
     date_of_birth: '',
     phone: '',
@@ -447,10 +449,11 @@ function App() {
   const [insuranceCoverage, setInsuranceCoverage] = useState({ collision: false, liability: false });
 
   function notify(text, type = 'info') {
-    const resolvedType = type === 'info' && /could not|failed|error|invalid|expired|cannot|must|required|choose|enter|complete|verify|unavailable/i.test(text)
+    const safeText = customerSafeMessage(text);
+    const resolvedType = type === 'info' && /could not|failed|error|invalid|expired|cannot|must|required|choose|enter|complete|verify|unavailable/i.test(safeText)
       ? 'error'
       : type;
-    setNotice({ text, type: resolvedType });
+    setNotice({ text: safeText, type: resolvedType });
     window.clearTimeout(notify.timeout);
     if (resolvedType !== 'error') {
       notify.timeout = window.setTimeout(() => setNotice(null), 5200);
@@ -622,7 +625,7 @@ function App() {
       });
 
       if (error) {
-        notify(error.message || 'Could not attach pending booking to your account.');
+        notify(userFacingPortalError(error, 'We could not connect this booking to your account yet. Please tap Save & continue again.'));
       }
     }
 
@@ -1290,8 +1293,11 @@ function loadSavedBookingFromWebsite() {
     }));
 
     if (profileResult.data) {
+      const legalName = splitLegalName(profileResult.data.full_name);
       setProfile(profileResult.data);
       setProfileForm({
+        first_name: legalName.firstName,
+        last_name: legalName.lastName,
         full_name: profileResult.data.full_name || '',
         date_of_birth: profileResult.data.date_of_birth || '',
         phone: profileResult.data.phone || '',
@@ -1404,7 +1410,7 @@ function loadSavedBookingFromWebsite() {
     });
 
     if (error) {
-      notify(error.message);
+      notify(userFacingPortalError(error, 'Your renter details could not be saved. Please try again.'));
       return null;
     }
 
@@ -2323,7 +2329,11 @@ async function verifyPhoneCode() {
       if (data.verified) {
         await loadPortalData(session.user.id);
       } else if (data.errorCode === 'name_mismatch') {
-        notify('NOT VERIFIED — the name on the government ID does not match the renter’s full legal name. Correct the renter name and retry.', 'error');
+        notify('NOT VERIFIED — the name on the government ID does not match the renter’s legal first and last name. Correct the renter name and retry.', 'error');
+      } else if (data.errorCode === 'date_of_birth_mismatch') {
+        notify('NOT VERIFIED — the birthday on the government ID does not match the renter’s date of birth. Correct the birthday and retry.', 'error');
+      } else if (data.errorCode === 'identity_details_mismatch') {
+        notify('NOT VERIFIED — both the legal name and birthday must match the government ID. Correct the renter details and retry.', 'error');
       } else if (redirectToStripe && data.url) {
         window.sessionStorage.setItem('rentmect_identity_return_pending', '1');
         window.location.assign(data.url);
@@ -3167,21 +3177,22 @@ async function verifyPhoneCode() {
               <p className="eyebrow">Profile</p>
               <h3>Customer Information</h3>
               <form className="portal-form" onSubmit={saveProfile}>
-                <label><span>Full legal name</span><input
-                  autoComplete="name"
-                  placeholder="First and last name as shown on your government ID"
-                  value={profileForm.full_name}
-                  onChange={(e) => setProfileForm({ ...profileForm, full_name: e.target.value })}
-                  readOnly={identityVerified}
-                /></label>
-                {identityVerified && <small className="identity-name-lock-note">Identity verified. This legal name is locked so returning rentals can reuse the approved Stripe Identity check.</small>}
+                <LegalNameFields
+                  profileForm={profileForm}
+                  setProfileForm={setProfileForm}
+                  identityVerified={identityVerified}
+                />
+                {identityVerified && <small className="identity-name-lock-note">Identity verified. Your legal name and birthday are locked so returning rentals can reuse the approved Stripe Identity check.</small>}
                 <label className="profile-date-field">
                   <span>Date of birth</span>
                   <input
                     type="date"
+                    name="bday"
+                    autoComplete="bday"
                     max={getTodayDateInputValue()}
                     value={profileForm.date_of_birth}
                     onChange={(e) => setProfileForm({ ...profileForm, date_of_birth: e.target.value })}
+                    disabled={identityVerified}
                     required
                   />
                   {profileForm.date_of_birth && <small>{isCustomerUnder25(profileForm.date_of_birth) ? 'Under 25: the configured deposit adjustment and rental markup apply.' : 'Age 25 or older: the selected vehicle deposit applies.'}</small>}
@@ -3515,6 +3526,52 @@ async function verifyPhoneCode() {
   );
 }
 
+function LegalNameFields({ profileForm, setProfileForm, identityVerified = false, className = '' }) {
+  const updateName = (field, value) => {
+    setProfileForm((current) => {
+      const next = { ...current, [field]: value };
+      next.full_name = [next.first_name, next.last_name]
+        .map((part) => String(part || '').trim())
+        .filter(Boolean)
+        .join(' ');
+      return next;
+    });
+  };
+
+  return (
+    <div className={`legal-name-fields ${className}`.trim()}>
+      <label>
+        <span>Legal first name</span>
+        <input
+          type="text"
+          name="given-name"
+          autoComplete="given-name"
+          autoCapitalize="words"
+          enterKeyHint="next"
+          placeholder="As shown on your government ID"
+          value={profileForm.first_name}
+          onChange={(event) => updateName('first_name', event.target.value)}
+          disabled={identityVerified}
+        />
+      </label>
+      <label>
+        <span>Legal last name</span>
+        <input
+          type="text"
+          name="family-name"
+          autoComplete="family-name"
+          autoCapitalize="words"
+          enterKeyHint="next"
+          placeholder="As shown on your government ID"
+          value={profileForm.last_name}
+          onChange={(event) => updateName('last_name', event.target.value)}
+          disabled={identityVerified}
+        />
+      </label>
+    </div>
+  );
+}
+
 function EmailMarketingPreference({ profileForm, setProfileForm }) {
   return (
     <label className="email-marketing-preference">
@@ -3664,22 +3721,23 @@ function WizardModal({
                 Add your renter details once, then verify your phone. Your passwordless account is already connected to this booking.
               </p>
 
-              <label><span>Full legal name</span><input
-                autoComplete="name"
-                placeholder="First and last name as shown on your government ID"
-                value={profileForm.full_name}
-                onChange={(e) => setProfileForm({ ...profileForm, full_name: e.target.value })}
-                readOnly={identityVerified}
-              /></label>
-              {identityVerified && <small className="identity-name-lock-note">Identity already verified. This name stays locked and the approved check is reused for returning rentals.</small>}
+              <LegalNameFields
+                profileForm={profileForm}
+                setProfileForm={setProfileForm}
+                identityVerified={identityVerified}
+              />
+              {identityVerified && <small className="identity-name-lock-note">Identity already verified. Your legal name and birthday stay locked and the approved check is reused for returning rentals.</small>}
 
               <label className="auth-date-field">
                 <span>Date of birth</span>
                 <input
                   type="date"
+                  name="bday"
+                  autoComplete="bday"
                   max={getTodayDateInputValue()}
                   value={profileForm.date_of_birth}
                   onChange={(e) => setProfileForm({ ...profileForm, date_of_birth: e.target.value })}
+                  disabled={identityVerified}
                 />
               </label>
 
@@ -4361,6 +4419,17 @@ function userFacingPortalError(error, fallback = 'Something went wrong. Please t
   return fallback;
 }
 
+function customerSafeMessage(message, fallback = 'Something went wrong. Please try again.') {
+  const text = String(message || '').trim();
+  if (!text) return fallback;
+  if (
+    /(?:insert|update|delete|select)\s+(?:on|from|into)\s+table|foreign key|constraint|violates|duplicate key|relation\s+["']|column\s+["']|schema cache|sqlstate|pgrst\d+|row-level security|permission denied for (?:table|schema|function)|null value in column|syntax error at or near/i.test(text)
+  ) {
+    return fallback;
+  }
+  return text;
+}
+
 function validateDocumentFile(file) {
   if (file.size > MAX_DOCUMENT_BYTES) return 'Choose a document smaller than 10 MB.';
   if (!ACCEPTED_DOCUMENT_TYPES.includes(file.type)) return 'Choose a PDF, JPEG, PNG, or WebP document.';
@@ -4866,9 +4935,14 @@ function PreviewCheckout({
 
           <PreviewCheckoutSection number="1" title="Contact information" summary={contactStepCompleted ? `${profileForm.full_name} • Phone verified` : 'Tell us who will be driving'} completed={contactStepCompleted} open={activeSection === 'contact'} onOpen={() => setActiveSection('contact')}>
             <div className="preview-form-grid">
-              <label><span>Full legal name</span><input value={profileForm.full_name} onChange={(event) => setProfileForm({ ...profileForm, full_name: event.target.value })} placeholder="First and last name as shown on your government ID" readOnly={identityVerified} /></label>
-              {identityVerified && <small className="preview-full-field identity-name-lock-note">Identity already verified. This name is locked and reused for future rentals.</small>}
-              <label><span>Date of birth</span><input type="date" max={getTodayDateInputValue()} value={profileForm.date_of_birth} onChange={(event) => setProfileForm({ ...profileForm, date_of_birth: event.target.value })} /></label>
+              <LegalNameFields
+                className="preview-full-field"
+                profileForm={profileForm}
+                setProfileForm={setProfileForm}
+                identityVerified={identityVerified}
+              />
+              {identityVerified && <small className="preview-full-field identity-name-lock-note">Identity already verified. Your legal name and birthday are locked and reused for future rentals.</small>}
+              <label><span>Date of birth</span><input type="date" name="bday" autoComplete="bday" max={getTodayDateInputValue()} value={profileForm.date_of_birth} onChange={(event) => setProfileForm({ ...profileForm, date_of_birth: event.target.value })} disabled={identityVerified} /></label>
               <label className="preview-full-field"><span>Email</span><input value={userEmail} disabled /></label>
               <label className="preview-full-field"><span>What will you use the vehicle for?</span><textarea maxLength="500" value={profileForm.intended_vehicle_use} onChange={(event) => setProfileForm({ ...profileForm, intended_vehicle_use: event.target.value })} placeholder="Personal transportation, work, family trip…" /></label>
               <label className="preview-full-field"><span>Mobile number</span><input value={profileForm.phone} onChange={(event) => setProfileForm({ ...profileForm, phone: event.target.value, sms_transactional_opt_in: false })} placeholder="(860) 555-0123" /></label>
@@ -5201,18 +5275,25 @@ function IdentityVerificationPanel({ status, errorCode, verified, saving, onStar
   const requiresInput = ['unverified', 'requires_input', 'canceled', 'redacted'].includes(status);
   const failed = ['requires_input', 'canceled', 'redacted'].includes(status);
   const nameMismatch = errorCode === 'name_mismatch';
+  const birthDateMismatch = errorCode === 'date_of_birth_mismatch';
+  const detailsMismatch = errorCode === 'identity_details_mismatch';
+  const identityDetailsMismatch = nameMismatch || birthDateMismatch || detailsMismatch;
   const statusLabel = verified ? 'VERIFIED' : status === 'processing' ? 'PROCESSING' : failed ? 'NOT VERIFIED' : 'ACTION REQUIRED';
   return <div className={`identity-verification-panel ${verified ? 'verified' : status}`} role="status" aria-live="polite">
     {failed ? <AlertTriangle size={30} /> : verified ? <CheckCircle2 size={30} /> : <ShieldCheck size={30} />}
     <div>
       <span className="identity-status-label">{statusLabel}</span>
-      <strong>{verified ? 'Stripe successfully confirmed your identity' : status === 'processing' ? 'Stripe received your submission and is checking it' : nameMismatch ? 'Government ID name does not match the renter name' : failed ? 'Stripe could not verify this attempt' : 'Verify your government ID and selfie'}</strong>
+      <strong>{verified ? 'Stripe confirmed your legal name and birthday' : status === 'processing' ? 'Stripe received your submission and is checking it' : detailsMismatch ? 'Government ID name and birthday do not match' : birthDateMismatch ? 'Government ID birthday does not match' : nameMismatch ? 'Government ID name does not match the renter name' : failed ? 'Stripe could not verify this attempt' : 'Verify your government ID and selfie'}</strong>
       <span>{verified
-        ? 'This customer-level check is complete and will be reused for future rentals. You will not be asked to repeat it unless the legal name changes.'
+        ? 'Your legal name and date of birth both match the government ID. This check will be reused for future rentals.'
         : status === 'processing'
           ? 'Do not submit another check while this says PROCESSING. Press Refresh Status in a moment.'
-          : nameMismatch
-            ? 'Enter the renter’s full first and last name exactly as shown on the government ID, then retry Stripe Identity.'
+          : identityDetailsMismatch
+            ? birthDateMismatch
+              ? 'Enter the renter’s date of birth exactly as shown on the government ID, then retry Stripe Identity.'
+              : detailsMismatch
+                ? 'Enter both the legal first and last name and date of birth exactly as shown on the government ID, then retry Stripe Identity.'
+                : 'Enter the renter’s legal first and last name exactly as shown on the government ID, then retry Stripe Identity.'
           : failed
             ? 'Press Retry With Stripe Identity and complete every requested screen. You will return here for a clear result.'
             : 'You will continue to Stripe’s secure hosted verification. Complete every screen; we will bring you back to the next required step.'}</span>
@@ -5409,6 +5490,13 @@ function isValidBirthDate(dateOfBirth) {
 }
 function hasFirstAndLastName(value) {
   return String(value || '').trim().split(/\s+/).filter(Boolean).length >= 2;
+}
+function splitLegalName(value) {
+  const parts = String(value || '').trim().split(/\s+/).filter(Boolean);
+  return {
+    firstName: parts.shift() || '',
+    lastName: parts.join(' '),
+  };
 }
 function isCustomerUnder25(dateOfBirth) {
   const age = customerAge(dateOfBirth);
