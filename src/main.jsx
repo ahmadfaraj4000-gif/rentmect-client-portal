@@ -1265,7 +1265,7 @@ function loadSavedBookingFromWebsite() {
     }
 
     setEmailOtpSent(true);
-    setMessage("Check your email for a secure sign-in link or one-time code. If you don't see it, check your spam or junk folder. First-time customers get an account automatically.");
+    setMessage(`Verification email sent to ${email}. Enter the one-time code from that email. If it is not in your inbox, open your SPAM folder now.`);
   }
 
   async function verifyEmailOtp(event) {
@@ -4378,7 +4378,7 @@ function PreviewGuestExperience({
                     required
                   />
                 </label>
-                {emailOtpSent && (
+                {emailOtpSent && <>
                   <label>
                     <span>One-time email code</span>
                     <input
@@ -4390,7 +4390,8 @@ function PreviewGuestExperience({
                       required
                     />
                   </label>
-                )}
+                  <EmailVerificationSpamNotice email={authForm.email} />
+                </>}
                 <button className="preview-primary-button" type="submit" disabled={emailAuthBusy || checkoutExpired}>
                   {emailAuthBusy ? 'Please wait…' : emailOtpSent ? 'Verify email & continue' : 'Continue with email'}
                   <ChevronRight size={18} />
@@ -4791,7 +4792,7 @@ function AuthScreen({
           />
         </label>
 
-        {emailOtpSent && (
+        {emailOtpSent && <>
           <label>
             <span>One-time email code</span>
             <input
@@ -4803,7 +4804,8 @@ function AuthScreen({
               required
             />
           </label>
-        )}
+          <EmailVerificationSpamNotice email={authForm.email} />
+        </>}
 
         <button className="primary-btn" type="submit" disabled={emailAuthBusy || checkoutExpired}>
           {emailAuthBusy ? 'Please wait…' : emailOtpSent ? 'Verify & Open Booking' : 'Email My Secure Sign-In'}
@@ -4818,6 +4820,21 @@ function AuthScreen({
 
         <p className="auth-legal-links">By continuing, you acknowledge the <a href="https://rentmect.com/terms.html" target="_blank" rel="noopener noreferrer">Website and SMS Terms</a> and <a href="https://rentmect.com/privacy-policy.html" target="_blank" rel="noopener noreferrer">Privacy Policy</a>.</p>
       </form>
+    </div>
+  );
+}
+
+function EmailVerificationSpamNotice({ email }) {
+  return (
+    <div className="email-verification-spam-notice" role="alert">
+      <AlertTriangle size={22} />
+      <div>
+        <strong>CHECK YOUR SPAM FOLDER</strong>
+        <span>
+          We sent the Rent Me CT verification email to <b>{email}</b>. Enter the one-time code from that email.
+          If it is not in your inbox, open your <b>SPAM</b> folder now.
+        </span>
+      </div>
     </div>
   );
 }
