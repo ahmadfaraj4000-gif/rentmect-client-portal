@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowLeft,
   CalendarDays,
   Car,
@@ -418,6 +419,9 @@ function App() {
   const [previewCheckoutSection, setPreviewCheckoutSection] = useState('contact');
   const [previewPortalOpen, setPreviewPortalOpen] = useState(false);
   const checkoutExpiryHandledRef = useRef('');
+  const identityReturnHandledRef = useRef(false);
+  const paymentReturnPendingRef = useRef(false);
+  const paymentReturnHandledRef = useRef(false);
 
   const [profileForm, setProfileForm] = useState({
     full_name: '',
@@ -532,13 +536,43 @@ function App() {
   }, [session]);
 
   useEffect(() => {
-    if (!portalDataReady || !session?.access_token) return;
+    if (!portalDataReady || !session?.access_token || identityReturnHandledRef.current) return;
     const url = new URL(window.location.href);
-    if (url.searchParams.get('identity') !== 'return') return;
+    const returningFromStripe = url.searchParams.get('identity') === 'return'
+      || window.sessionStorage.getItem('rentmect_identity_return_pending') === '1';
+    if (!returningFromStripe) return;
+
+    identityReturnHandledRef.current = true;
+    window.sessionStorage.removeItem('rentmect_identity_return_pending');
     url.searchParams.delete('identity');
+    url.searchParams.delete('guided');
     window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
-    refreshIdentityVerification(true);
-  }, [portalDataReady, session?.access_token]);
+
+    setActiveTab('overview');
+    setPreviewCheckoutSection('identity');
+    if (!bookingPreviewCheckoutMode) {
+      setWizardStep(2);
+      setWizardOpen(true);
+    }
+
+    refreshIdentityVerification(false).then((data) => {
+      if (!data) return;
+      if (data.verified) {
+        setPreviewCheckoutSection('documents');
+        if (!bookingPreviewCheckoutMode) {
+          setWizardStep(3);
+          setWizardOpen(true);
+        }
+        notify('Identity verified successfully. Continue with your driver documents.', 'success');
+        return;
+      }
+      if (data.status === 'processing') {
+        notify('Stripe received your identity check and is still reviewing it. This page will show VERIFIED when it is approved.');
+        return;
+      }
+      notify('Identity was not verified. Open the identity step to see the status and retry with Stripe.', 'error');
+    });
+  }, [portalDataReady, session?.access_token, bookingPreviewCheckoutMode]);
 
   useEffect(() => {
     if (!session?.user?.id) return undefined;
@@ -920,6 +954,54 @@ function App() {
   const extensionWindow = getExtensionRequestWindow(currentRental, now);
   const vehicleStepCompleted = Boolean(currentRental?.vehicles || (!currentRental && selectedVehicle));
   const allGuidedStepsComplete = Boolean(contactStepCompleted && vehicleStepCompleted && identityVerified && licenseUploaded && insuranceUploaded && agreementSigned && paymentPaid);
+
+  useEffect(() => {
+    if (!portalDataReady || !session?.user?.id || paymentReturnHandledRef.current) return undefined;
+    const url = new URL(window.location.href);
+    const paymentReturn = url.searchParams.get('payment');
+    if (!paymentReturn) return undefined;
+
+    paymentReturnHandledRef.current = true;
+    url.searchParams.delete('payment');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+    setPreviewCheckoutSection('payment');
+    setActiveTab('overview');
+
+    if (paymentReturn === 'stripe_cancelled') {
+      if (!bookingPreviewCheckoutMode) {
+        setWizardStep(6);
+        setWizardOpen(true);
+      }
+      notify('Stripe payment was not completed. Your progress is saved; press Pay With Stripe when you are ready.', 'error');
+      return undefined;
+    }
+
+    if (paymentPaid) {
+      notify('Payment confirmed successfully. Your booking is sealed.', 'success');
+      return undefined;
+    }
+
+    paymentReturnPendingRef.current = true;
+    if (!bookingPreviewCheckoutMode) {
+      setWizardStep(6);
+      setWizardOpen(true);
+    }
+    notify('Stripe returned successfully. Confirming your payment now…');
+
+    const refreshOne = window.setTimeout(() => loadPortalData(session.user.id, { silent: true }), 1200);
+    const refreshTwo = window.setTimeout(() => loadPortalData(session.user.id, { silent: true }), 3500);
+    return () => {
+      window.clearTimeout(refreshOne);
+      window.clearTimeout(refreshTwo);
+    };
+  }, [portalDataReady, session?.user?.id, bookingPreviewCheckoutMode]);
+
+  useEffect(() => {
+    if (!paymentReturnPendingRef.current || !paymentPaid) return;
+    paymentReturnPendingRef.current = false;
+    setWizardOpen(false);
+    notify('Payment confirmed successfully. Your booking is sealed.', 'success');
+  }, [paymentPaid]);
 
   useEffect(() => {
     if (!checkoutExpired || !session?.user?.id) return;
@@ -1663,7 +1745,9 @@ async function verifyPhoneCode() {
       notify(`${documentTypeLabel(documentType)} replaced.`);
       if (event.target) event.target.value = '';
       if (wizardOpen && documentType === 'license' && wizardStep === 3) {
-        setWizardStep(3);
+        setWizardStep(4);
+      } else if (wizardOpen && documentType === 'insurance' && wizardStep === 4) {
+        setWizardStep(5);
       }
       return;
     }
@@ -1692,7 +1776,9 @@ async function verifyPhoneCode() {
     notify(`${documentTypeLabel(documentType)} uploaded.`);
 
     if (wizardOpen && documentType === 'license' && wizardStep === 3) {
-      setWizardStep(3);
+      setWizardStep(4);
+    } else if (wizardOpen && documentType === 'insurance' && wizardStep === 4) {
+      setWizardStep(5);
     }
       if (event.target) event.target.value = '';
     } finally {
@@ -1878,54 +1964,60 @@ async function verifyPhoneCode() {
     }
 
     setAgreementSaving(true);
-    const snapshot = buildAgreementWithDetails({
-      agreementText: AGREEMENT_TEXT,
-      profile: profileForm,
-      email: userEmail,
-      vehicle: selectedVehicle || rental?.vehicles,
-      reservation: {
-        pickupDate: reservationForm.pickupDate || rental.pickup_date,
-        returnDate: reservationForm.returnDate || rental.return_date,
-        pickupTime: reservationForm.pickupTime || rental.pickup_time,
-        returnTime: reservationForm.returnTime || rental.return_time,
-      },
-      rental,
-      signatureName: signatureName.trim(),
-      signatureImageData,
-    });
-    const agreementHash = await sha256(snapshot);
+    try {
+      const snapshot = buildAgreementWithDetails({
+        agreementText: AGREEMENT_TEXT,
+        profile: profileForm,
+        email: userEmail,
+        vehicle: selectedVehicle || rental?.vehicles,
+        reservation: {
+          pickupDate: reservationForm.pickupDate || rental.pickup_date,
+          returnDate: reservationForm.returnDate || rental.return_date,
+          pickupTime: reservationForm.pickupTime || rental.pickup_time,
+          returnTime: reservationForm.returnTime || rental.return_time,
+        },
+        rental,
+        signatureName: signatureName.trim(),
+        signatureImageData,
+      });
+      const agreementHash = await sha256(snapshot);
 
-    const { data: signedRental, error } = await supabase.rpc('sign_rental_agreement', {
-      p_rental_id: rental.id,
-      p_signature_name: signatureName.trim(),
-      p_agreement_version: AGREEMENT_VERSION,
-      p_agreement_snapshot: snapshot,
-      p_agreement_hash: agreementHash,
-      p_user_agent: navigator.userAgent,
-      p_signature_data: signatureImageData,
-    });
-    setAgreementSaving(false);
+      const { data: signedRental, error } = await supabase.rpc('sign_rental_agreement', {
+        p_rental_id: rental.id,
+        p_signature_name: signatureName.trim(),
+        p_agreement_version: AGREEMENT_VERSION,
+        p_agreement_snapshot: snapshot,
+        p_agreement_hash: agreementHash,
+        p_user_agent: navigator.userAgent,
+        p_signature_data: signatureImageData,
+      });
 
-    if (error) {
-      notify(error.message);
-      return;
+      if (error) throw error;
+      const signedRentalId = typeof signedRental === 'string' ? signedRental : signedRental?.id;
+      if (!signedRentalId) throw new Error('The signed agreement was saved, but its rental reference was missing.');
+
+      const { data: updatedRental, error: reloadError } = await supabase
+        .from('rentals')
+        .select('*, vehicles(*)')
+        .eq('id', signedRentalId)
+        .single();
+
+      if (reloadError) throw reloadError;
+
+      setRentals((prev) => prev.map((r) => (r.id === updatedRental.id ? updatedRental : r)));
+      setAgreementModalOpen(false);
+      setWizardReminder(null);
+      setPreviewCheckoutSection('payment');
+      if (wizardOpen) setWizardStep(6);
+      setActiveTab('overview');
+      notify('Agreement signed successfully. Payment is the final step.', 'success');
+      await maybeMarkReadyForPickup(updatedRental);
+    } catch (error) {
+      console.error('Agreement signing failed', error);
+      notify(error?.message || 'The agreement could not be signed. Your portal is still available; please try again.', 'error');
+    } finally {
+      setAgreementSaving(false);
     }
-
-    const { data: updatedRental, error: reloadError } = await supabase
-      .from('rentals')
-      .select('*, vehicles(*)')
-      .eq('id', signedRental.id)
-      .single();
-
-    if (reloadError) {
-      notify(reloadError.message);
-      return;
-    }
-
-    setRentals((prev) => prev.map((r) => (r.id === updatedRental.id ? updatedRental : r)));
-    await maybeMarkReadyForPickup(updatedRental);
-    setAgreementModalOpen(false);
-    notify('Agreement signed.');
   }
 
   async function sendSupportMessage(event) {
@@ -2189,34 +2281,46 @@ async function verifyPhoneCode() {
   async function callStripeIdentity(action, redirectToStripe = false) {
     if (!session?.access_token || identitySaving) return null;
     setIdentitySaving(true);
-    const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stripe-web-hook`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${session.access_token}`,
-      },
-      body: JSON.stringify({
-        action,
-        returnUrl: `${window.location.origin}${window.location.pathname}?identity=return`,
-      }),
-    });
-    const data = await response.json().catch(() => null);
-    setIdentitySaving(false);
-    if (!response.ok || data?.error) {
-      notify(data?.error || `Identity verification could not be loaded (${response.status}).`);
+    try {
+      const returnUrl = new URL(window.location.href);
+      returnUrl.hash = '';
+      returnUrl.searchParams.delete('payment');
+      returnUrl.searchParams.delete('charge');
+      returnUrl.searchParams.set('identity', 'return');
+      returnUrl.searchParams.set('guided', '1');
+
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stripe-web-hook`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          action,
+          returnUrl: returnUrl.toString(),
+        }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || data?.error) {
+        notify(data?.error || `Identity verification could not be loaded (${response.status}).`);
+        return null;
+      }
+      setProfile((current) => current ? { ...current, identity_verification_status: data.status } : current);
+      if (data.verified) {
+        await loadPortalData(session.user.id);
+      } else if (redirectToStripe && data.url) {
+        window.sessionStorage.setItem('rentmect_identity_return_pending', '1');
+        window.location.assign(data.url);
+      }
+      return data;
+    } catch (error) {
+      console.error('Stripe Identity request failed', error);
+      notify('Stripe Identity could not be reached. Check your connection and try again.', 'error');
       return null;
+    } finally {
+      setIdentitySaving(false);
     }
-    setProfile((current) => current ? { ...current, identity_verification_status: data.status } : current);
-    if (data.verified) {
-      notify('Stripe Identity verification is complete.', 'success');
-      await loadPortalData(session.user.id);
-    } else if (data.status === 'processing') {
-      notify('Stripe is processing your identity verification. Refresh again shortly.');
-    } else if (redirectToStripe && data.url) {
-      window.location.assign(data.url);
-    }
-    return data;
   }
 
   function startIdentityVerification() {
@@ -2226,7 +2330,10 @@ async function verifyPhoneCode() {
   function refreshIdentityVerification(showNotice = false) {
     const result = callStripeIdentity('get_identity_verification', false);
     if (showNotice) result.then((data) => {
-      if (data && !data.verified && data.status !== 'processing') notify('Identity verification still needs attention.');
+      if (!data) return;
+      if (data.verified) notify('VERIFIED — Stripe successfully confirmed your identity.', 'success');
+      else if (data.status === 'processing') notify('PROCESSING — Stripe received your submission and is still reviewing it.');
+      else notify('NOT VERIFIED — Stripe needs you to retry the identity check.', 'error');
     });
     return result;
   }
@@ -2280,23 +2387,30 @@ async function verifyPhoneCode() {
     const bookingId = pendingBookingId || getBookingIdFromUrl();
     const returnUrl = new URL(window.location.href);
     returnUrl.hash = '';
-    returnUrl.search = '';
+    returnUrl.searchParams.delete('identity');
+    returnUrl.searchParams.delete('guided');
+    returnUrl.searchParams.delete('payment');
+    returnUrl.searchParams.delete('charge');
     if (bookingId) returnUrl.searchParams.set('booking', bookingId);
+    const successUrl = new URL(returnUrl);
+    successUrl.searchParams.set('payment', 'stripe_success');
+    const cancelUrl = new URL(returnUrl);
+    cancelUrl.searchParams.set('payment', 'stripe_cancelled');
 
     const checkoutPayload = targetExtension
       ? {
           action: 'create_checkout',
           targetType: 'extension',
           extensionRequestId: targetExtension.id,
-          successUrl: `${returnUrl.toString()}${returnUrl.search ? '&' : '?'}payment=stripe_success`,
-          cancelUrl: `${returnUrl.toString()}${returnUrl.search ? '&' : '?'}payment=stripe_cancelled`,
+          successUrl: successUrl.toString(),
+          cancelUrl: cancelUrl.toString(),
         }
       : {
           action: 'create_checkout',
           targetType: 'rental',
           rentalId: rental.id,
-          successUrl: `${returnUrl.toString()}${returnUrl.search ? '&' : '?'}payment=stripe_success`,
-          cancelUrl: `${returnUrl.toString()}${returnUrl.search ? '&' : '?'}payment=stripe_cancelled`,
+          successUrl: successUrl.toString(),
+          cancelUrl: cancelUrl.toString(),
         };
 
     const checkoutResponse = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stripe-web-hook`, {
@@ -2434,7 +2548,11 @@ async function verifyPhoneCode() {
     }
 
     if (wizardStep === 5 && !agreementSigned) {
-      notify('Review and sign the rental agreement before continuing.');
+      setWizardReminder({
+        title: 'Sign the agreement before continuing',
+        text: 'Scroll through the agreement, check the acknowledgment, type your legal name, draw your signature, and press “Sign agreement & continue to payment.”',
+      });
+      notify('Scroll down and sign the rental agreement before pressing Next.');
       return;
     }
 
@@ -2639,20 +2757,22 @@ async function verifyPhoneCode() {
           openPortal={() => setPreviewPortalOpen(true)}
         />
         {agreementModalOpen && (
-          <AgreementModal
-            agreementText={agreementTextWithDetails}
-            agreementChecked={agreementChecked}
-            agreementSigned={agreementSigned}
-            setAgreementChecked={setAgreementChecked}
-            signatureName={signatureName}
-            setSignatureName={setSignatureName}
-            signatureImageData={signatureImageData}
-            setSignatureImageData={setSignatureImageData}
-            signAgreement={signAgreement}
-            agreementSaving={agreementSaving}
-            currentRental={currentRental}
-            onClose={() => setAgreementModalOpen(false)}
-          />
+          <FlowStepErrorBoundary label="rental agreement" onClose={() => setAgreementModalOpen(false)}>
+            <AgreementModal
+              agreementText={agreementTextWithDetails}
+              agreementChecked={agreementChecked}
+              agreementSigned={agreementSigned}
+              setAgreementChecked={setAgreementChecked}
+              signatureName={signatureName}
+              setSignatureName={setSignatureName}
+              signatureImageData={signatureImageData}
+              setSignatureImageData={setSignatureImageData}
+              signAgreement={signAgreement}
+              agreementSaving={agreementSaving}
+              currentRental={currentRental}
+              onClose={() => setAgreementModalOpen(false)}
+            />
+          </FlowStepErrorBoundary>
         )}
       </>
     );
@@ -2732,7 +2852,7 @@ async function verifyPhoneCode() {
               <MapPin size={18} /> Location
             </button>
             {!paymentPaid && <button className="primary-btn" onClick={beginWizard}>
-              <CheckCircle2 size={18} /> Continue Guided Steps
+              <CheckCircle2 size={18} /> Resume Guided Steps
             </button>}
           </div>
         </header>
@@ -2751,6 +2871,18 @@ async function verifyPhoneCode() {
 
         {activeTab === 'overview' && (
           <>
+            {!allGuidedStepsComplete && (
+              <section className="panel guided-resume-card" aria-label="Resume required rental steps">
+                <div>
+                  <p className="eyebrow">Your next required step</p>
+                  <h3>{wizardSteps[getNextGuidedStep()]?.title || 'Continue your rental'}</h3>
+                  <p className="muted">Your progress is saved. Resume here—there is no need to open the menu.</p>
+                </div>
+                <button className="primary-btn big-action" type="button" onClick={beginWizard}>
+                  <CheckCircle2 size={20} /> Resume Guided Steps
+                </button>
+              </section>
+            )}
             {currentEmergencyException && <section className={`customer-exception-notice ${new Date(currentEmergencyException.expires_at).getTime() <= Date.now() ? 'expired' : ''}`}>
               <AlertTriangle size={21}/>
               <div><strong>Rental released with temporary exceptions</strong><span>{(currentEmergencyException.exception_scopes || []).map(prettyStatus).join(', ')} remain incomplete. Complete them as soon as possible. Exception expires {new Date(currentEmergencyException.expires_at).toLocaleString()}.</span></div>
@@ -3068,9 +3200,9 @@ async function verifyPhoneCode() {
           <section className="panel centered-panel">
             <p className="eyebrow">Guided Rental Flow</p>
             <h3>One Step at a Time</h3>
-            <p className="muted">This opens the focused pop-up that walks the customer through the exact rental process without page clutter.</p>
+            <p className="muted">{allGuidedStepsComplete ? 'Every required rental step is complete.' : `Your progress is saved. Your next step is ${wizardSteps[getNextGuidedStep()]?.title || 'the rental checklist'}.`}</p>
             <button className="primary-btn big-action" onClick={beginWizard}>
-              <CheckCircle2 size={20} /> {allGuidedStepsComplete ? 'Guided Steps Complete' : 'Start Guided Steps'}
+              <CheckCircle2 size={20} /> {allGuidedStepsComplete ? 'Guided Steps Complete' : 'Resume Guided Steps'}
             </button>
           </section>
         )}
@@ -3263,26 +3395,29 @@ async function verifyPhoneCode() {
       </main>
 
       {agreementModalOpen && (
-        <AgreementModal
-          agreementText={agreementTextWithDetails}
-          agreementChecked={agreementChecked}
-          agreementSigned={agreementSigned}
-          setAgreementChecked={setAgreementChecked}
-          signatureName={signatureName}
-          setSignatureName={setSignatureName}
-          signatureImageData={signatureImageData}
-          setSignatureImageData={setSignatureImageData}
-          signAgreement={signAgreement}
-          agreementSaving={agreementSaving}
-          currentRental={currentRental}
-          onClose={() => setAgreementModalOpen(false)}
-        />
+        <FlowStepErrorBoundary label="rental agreement" onClose={() => setAgreementModalOpen(false)}>
+          <AgreementModal
+            agreementText={agreementTextWithDetails}
+            agreementChecked={agreementChecked}
+            agreementSigned={agreementSigned}
+            setAgreementChecked={setAgreementChecked}
+            signatureName={signatureName}
+            setSignatureName={setSignatureName}
+            signatureImageData={signatureImageData}
+            setSignatureImageData={setSignatureImageData}
+            signAgreement={signAgreement}
+            agreementSaving={agreementSaving}
+            currentRental={currentRental}
+            onClose={() => setAgreementModalOpen(false)}
+          />
+        </FlowStepErrorBoundary>
       )}
 
       {wizardOpen && (
-        <WizardModal
-          wizardSteps={wizardSteps}
-          wizardStep={wizardStep}
+        <FlowStepErrorBoundary label="guided rental steps" onClose={() => setWizardOpen(false)}>
+          <WizardModal
+            wizardSteps={wizardSteps}
+            wizardStep={wizardStep}
           setWizardOpen={setWizardOpen}
           wizardReminder={wizardReminder}
           setWizardReminder={setWizardReminder}
@@ -3305,7 +3440,7 @@ async function verifyPhoneCode() {
           estimate={estimate}
           createReservationIfNeeded={createReservationIfNeeded}
           reservationSaving={reservationSaving}
-          runTestStripePayment={startStripeCheckout}
+          startStripeCheckout={startStripeCheckout}
           paymentSaving={paymentSaving}
           paymentPaid={paymentPaid}
           identityStatus={identityStatus}
@@ -3329,9 +3464,10 @@ async function verifyPhoneCode() {
           serviceFees={serviceFees}
           insuranceCoverage={insuranceCoverage}
           setInsuranceCoverage={setInsuranceCoverage}
-          currentRental={currentRental}
-          fleetRentals={fleetRentals}
-        />
+            currentRental={currentRental}
+            fleetRentals={fleetRentals}
+          />
+        </FlowStepErrorBoundary>
       )}
     </div>
   );
@@ -3403,7 +3539,7 @@ function WizardModal({
   estimate,
   createReservationIfNeeded,
   reservationSaving,
-  runTestStripePayment,
+  startStripeCheckout,
   paymentSaving,
   paymentPaid,
   identityStatus,
@@ -3693,45 +3829,66 @@ function WizardModal({
           )}
 
           {wizardStep === 5 && (
-            <div>
-              <p className="muted">
-                Read the full agreement, check the box, and type your legal name to sign.
-              </p>
+            <div className="wizard-agreement-step">
+              {agreementSigned ? (
+                <div className="guided-step-success" role="status">
+                  <CheckCircle2 size={22} />
+                  <div>
+                    <strong>Agreement signed successfully</strong>
+                    <span>Press “Continue to secure payment” below.</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="agreement-guidance" role="note">
+                  <ArrowDown size={22} />
+                  <div>
+                    <strong>Scroll down to complete this step</strong>
+                    <span>Read the agreement, check the acknowledgment, type your legal name, draw your signature, then press the green sign button.</span>
+                  </div>
+                </div>
+              )}
 
               <div className="agreement-preview wizard-agreement">
                 <pre>{agreementText}</pre>
               </div>
 
-              <label className="checkbox-row">
-                <input
-                  type="checkbox"
-                  checked={agreementChecked}
-                  onChange={(e) => {
+              {!agreementSigned && (
+                <>
+                  <div className="agreement-end-marker"><ArrowDown size={18} /> End of agreement — complete the signature below</div>
+
+                  <label className="checkbox-row">
+                    <input
+                      type="checkbox"
+                      checked={agreementChecked}
+                      onChange={(e) => {
+                        setWizardReminder(null);
+                        setAgreementChecked(e.target.checked);
+                      }}
+                    />
+                    I have read and agree to the rental agreement.
+                  </label>
+
+                  <input
+                    className="signature-input"
+                    placeholder="Type full legal name as signature"
+                    value={signatureName}
+                    onChange={(e) => {
+                      setWizardReminder(null);
+                      setSignatureName(e.target.value);
+                    }}
+                  />
+
+                  <SignaturePad value={signatureImageData} onChange={setSignatureImageData} />
+
+                  <button className="primary-btn agreement-sign-continue" onClick={() => {
                     setWizardReminder(null);
-                    setAgreementChecked(e.target.checked);
-                  }}
-                />
-                I have read and agree to the rental agreement.
-              </label>
-
-              <input
-                className="signature-input"
-                placeholder="Type full legal name as signature"
-                value={signatureName}
-                onChange={(e) => {
-                  setWizardReminder(null);
-                  setSignatureName(e.target.value);
-                }}
-              />
-
-              <SignaturePad value={signatureImageData} onChange={setSignatureImageData} />
-
-              <button className="primary-btn" onClick={() => {
-                setWizardReminder(null);
-                signAgreement();
-              }} disabled={agreementSaving || agreementSigned}>
-                {agreementSigned ? 'Agreement Signed' : agreementSaving ? 'Signing...' : 'Sign Agreement'}
-              </button>
+                    signAgreement();
+                  }} disabled={agreementSaving}>
+                    <FileSignature size={18} />
+                    {agreementSaving ? 'Signing securely…' : 'Sign agreement & continue to payment'}
+                  </button>
+                </>
+              )}
             </div>
           )}
 
@@ -3767,7 +3924,7 @@ function WizardModal({
                   </div>
                 </div>
               )}
-              <button className="primary-btn" onClick={runTestStripePayment} disabled={paymentSaving || paymentPaid}>
+              <button className="primary-btn" onClick={startStripeCheckout} disabled={paymentSaving || paymentPaid}>
                 {paymentPaid ? 'Payment Complete' : paymentSaving ? 'Opening Stripe...' : 'Pay With Stripe'}
               </button>
             </div>
@@ -3866,7 +4023,9 @@ function WizardModal({
             onClick={nextWizardStep}
           >
             {wizardStep === wizardSteps.length - 1
-                ? 'Finish'
+              ? 'Finish'
+              : wizardStep === 5
+                ? agreementSigned ? 'Continue to secure payment' : 'Next — confirm signed agreement'
                 : 'Next'}
           </button>
         </div>
@@ -3908,6 +4067,7 @@ function WizardModal({
 function AgreementModal({
   agreementText,
   agreementChecked,
+  agreementSigned,
   setAgreementChecked,
   signatureName,
   setSignatureName,
@@ -3932,42 +4092,72 @@ function AgreementModal({
           </button>
         </div>
 
+        {agreementSigned ? (
+          <div className="agreement-complete-banner" role="status">
+            <CheckCircle2 size={22} />
+            <div>
+              <strong>Agreement signed successfully</strong>
+              <span>This requirement is complete. Continue to secure payment.</span>
+            </div>
+          </div>
+        ) : (
+          <div className="agreement-guidance modal-agreement-guidance" role="note">
+            <ArrowDown size={22} />
+            <div>
+              <strong>Scroll down to sign—your signature button is below the agreement</strong>
+              <span>Read the terms, then check the acknowledgment, type your legal name, draw your signature, and press the green button.</span>
+            </div>
+          </div>
+        )}
+
         <div className="agreement-scroll-box">
           <pre>{agreementText}</pre>
         </div>
 
         <div className="agreement-sign-box">
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={agreementChecked}
-              onChange={(e) => setAgreementChecked(e.target.checked)}
-            />
-            I have read and agree to the rental agreement.
-          </label>
+          {!agreementSigned && (
+            <>
+              <div className="agreement-end-marker"><ArrowDown size={18} /> End of agreement — sign below</div>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={agreementChecked}
+                  onChange={(e) => setAgreementChecked(e.target.checked)}
+                />
+                I have read and agree to the rental agreement.
+              </label>
 
-          <label className="signature-field">
-            <span>Full legal name</span>
-            <input
-              className="signature-input"
-              placeholder="Type full legal name as signature"
-              value={signatureName}
-              onChange={(e) => setSignatureName(e.target.value)}
-            />
-          </label>
+              <label className="signature-field">
+                <span>Full legal name</span>
+                <input
+                  className="signature-input"
+                  placeholder="Type full legal name as signature"
+                  value={signatureName}
+                  onChange={(e) => setSignatureName(e.target.value)}
+                />
+              </label>
 
-          <SignaturePad value={signatureImageData} onChange={setSignatureImageData} />
+              <SignaturePad value={signatureImageData} onChange={setSignatureImageData} />
+            </>
+          )}
 
-          <div className="button-row end-row">
+          <div className="button-row end-row agreement-sign-actions">
             <button className="secondary-btn" type="button" onClick={onClose}>Cancel</button>
             {currentRental?.agreement_snapshot && (
               <button className="secondary-btn" type="button" onClick={() => downloadAgreement(currentRental)}>
                 Download Agreement
               </button>
             )}
-            <button className="primary-btn" type="button" onClick={signAgreement} disabled={agreementSaving}>
-              <FileSignature size={17} /> {agreementSaving ? 'Signing...' : 'Sign Agreement'}
-            </button>
+            {!agreementSigned && (
+              <button className="primary-btn" type="button" onClick={signAgreement} disabled={agreementSaving}>
+                <FileSignature size={17} /> {agreementSaving ? 'Signing securely…' : 'Sign agreement & continue to payment'}
+              </button>
+            )}
+            {agreementSigned && (
+              <button className="primary-btn" type="button" onClick={onClose}>
+                Continue to secure payment <ChevronRight size={17} />
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -4196,6 +4386,37 @@ class PortalErrorBoundary extends React.Component {
   render() {
     if (this.state.failed) {
       return <main className="portal-error-boundary"><div><AlertTriangle size={28}/><h1>We couldn’t display your portal</h1><p>Your rental information was not changed. Refresh the page to reconnect securely.</p><button type="button" className="primary-btn" onClick={() => window.location.reload()}>Refresh portal</button></div></main>;
+    }
+    return this.props.children;
+  }
+}
+
+class FlowStepErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch(error) {
+    console.error(`${this.props.label || 'Guided step'} render failed`, error);
+  }
+  render() {
+    if (this.state.failed) {
+      return (
+        <div className="modal-backdrop" role="presentation">
+          <div className="flow-step-error" role="alert">
+            <AlertTriangle size={30} />
+            <h2>This step needs to reconnect</h2>
+            <p>Your rental progress was not erased. Close this step and resume it from the dashboard.</p>
+            <div className="button-row">
+              <button type="button" className="primary-btn" onClick={this.props.onClose}>Return to guided steps</button>
+              <button type="button" className="secondary-btn" onClick={() => window.location.reload()}>Refresh portal</button>
+            </div>
+          </div>
+        </div>
+      );
     }
     return this.props.children;
   }
@@ -4637,9 +4858,9 @@ function PreviewCheckout({
           <PreviewCheckoutSection number="4" title="Rental agreement" summary={agreementSigned ? 'Agreement signed' : 'Review the terms and add your signature'} completed={agreementSigned} open={activeSection === 'agreement'} onOpen={() => setActiveSection('agreement')}>
             <div className="preview-agreement-summary">
               <FileSignature size={28} />
-              <div><strong>Review the important rental terms</strong><p>Mileage, fuel, late-return, damage, toll, smoking, and payment authorizations are included in the full agreement.</p></div>
+              <div><strong>{agreementSigned ? 'Agreement signed successfully' : 'Open the agreement and scroll down to sign'}</strong><p>{agreementSigned ? 'This requirement is complete. Payment is your final step.' : 'The acknowledgment, typed name, signature pad, and green sign button are below the agreement text.'}</p></div>
             </div>
-            <button className="preview-primary-button" type="button" onClick={openAgreement} disabled={!documentsComplete}>{agreementSigned ? 'View signed agreement' : 'Review & sign agreement'} <ChevronRight size={18} /></button>
+            <button className="preview-primary-button" type="button" onClick={openAgreement} disabled={!documentsComplete}>{agreementSigned ? 'View signed agreement' : 'Review, scroll & sign agreement'} <ChevronRight size={18} /></button>
           </PreviewCheckoutSection>
 
           <PreviewCheckoutSection number="5" title="Payment" summary={paymentPaid ? 'Payment complete' : `Due today ${money(total)}`} completed={paymentPaid} open={activeSection === 'payment'} onOpen={() => setActiveSection('payment')}>
@@ -4936,15 +5157,20 @@ function Metric({ icon: Icon, label, value }) {
 
 function IdentityVerificationPanel({ status, verified, saving, onStart, onRefresh }) {
   const requiresInput = ['unverified', 'requires_input', 'canceled', 'redacted'].includes(status);
-  return <div className={`identity-verification-panel ${verified ? 'verified' : status}`}>
-    <ShieldCheck size={30} />
+  const failed = ['requires_input', 'canceled', 'redacted'].includes(status);
+  const statusLabel = verified ? 'VERIFIED' : status === 'processing' ? 'PROCESSING' : failed ? 'NOT VERIFIED' : 'ACTION REQUIRED';
+  return <div className={`identity-verification-panel ${verified ? 'verified' : status}`} role="status" aria-live="polite">
+    {failed ? <AlertTriangle size={30} /> : verified ? <CheckCircle2 size={30} /> : <ShieldCheck size={30} />}
     <div>
-      <strong>{verified ? 'Identity verified' : status === 'processing' ? 'Stripe is checking your submission' : 'Verify your government ID and selfie'}</strong>
+      <span className="identity-status-label">{statusLabel}</span>
+      <strong>{verified ? 'Stripe successfully confirmed your identity' : status === 'processing' ? 'Stripe received your submission and is checking it' : failed ? 'Stripe could not verify this attempt' : 'Verify your government ID and selfie'}</strong>
       <span>{verified
-        ? 'Stripe confirmed the document and selfie match. Rent Me CT stores only the verification status and session reference.'
+        ? 'This step is complete. Continue to your driver-license and insurance uploads.'
         : status === 'processing'
-          ? 'Most checks finish quickly. Use refresh if this page does not update automatically.'
-          : 'You will continue to Stripe’s secure hosted verification. Stripe captures the ID and selfie; do not email these images to us.'}</span>
+          ? 'Do not submit another check while this says PROCESSING. Press Refresh Status in a moment.'
+          : failed
+            ? 'Press Retry With Stripe Identity and complete every requested screen. You will return here for a clear result.'
+            : 'You will continue to Stripe’s secure hosted verification. Complete every screen; we will bring you back to the next required step.'}</span>
       <small>This identity check does not replace Rent Me CT’s separate driver-license validity and insurance review.</small>
       <div className="identity-verification-actions">
         {requiresInput && <button type="button" className="primary-btn" onClick={onStart} disabled={saving}>{saving ? 'Opening Stripe...' : status === 'requires_input' ? 'Retry With Stripe Identity' : 'Start Stripe Identity'}</button>}
