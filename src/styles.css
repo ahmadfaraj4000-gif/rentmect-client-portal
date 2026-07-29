@@ -350,6 +350,23 @@ select option {
 .preview-checkout-column { min-width: 0; }
 .preview-page-heading { margin-bottom: 26px; }
 .preview-page-heading > p { color: #66706b; line-height: 1.55; }
+.preview-change-booking-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+  color: #145c3a;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.preview-change-booking-button:hover { color: #0b3c26; }
+.preview-change-booking-button:disabled { cursor: wait; opacity: .55; }
 .preview-signed-in-heading { display: flex; justify-content: space-between; gap: 20px; align-items: start; }
 .preview-auth-section,
 .preview-checkout-section {

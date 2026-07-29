@@ -1486,7 +1486,8 @@ async function verifyPhoneCode() {
       return null;
     }
 
-    if (!isVehicleAvailableForDates(selectedVehicle, reservationForm, fleetRentals, currentRental?.id)) {
+    const bookingId = pendingBookingId || getBookingIdFromUrl();
+    if (!bookingId && !isVehicleAvailableForDates(selectedVehicle, reservationForm, fleetRentals, currentRental?.id)) {
       notify('This vehicle is not available for those dates. Please choose another vehicle or adjust your rental period.');
       setReservationForm((prev) => ({ ...prev, vehicleId: '' }));
       setWizardStep(1);
@@ -1499,7 +1500,6 @@ async function verifyPhoneCode() {
     }
 
     setReservationSaving(true);
-    const bookingId = pendingBookingId || getBookingIdFromUrl();
     const reservationParams = {
       p_pickup_date: reservationForm.pickupDate,
       p_return_date: reservationForm.returnDate,
@@ -1561,6 +1561,33 @@ async function verifyPhoneCode() {
     }
 
     return rentalData;
+  }
+
+  async function changeCheckoutDatesOrVehicle() {
+    const bookingId = pendingBookingId || getBookingIdFromUrl();
+    const abandonToken = new URLSearchParams(window.location.search).get('abandonToken') || '';
+    if (bookingId || currentRental?.id) {
+      setReservationSaving(true);
+      const { error } = await supabase.rpc('abandon_website_checkout', {
+        p_booking_id: bookingId || null,
+        p_abandon_token: abandonToken || null,
+        p_rental_id: currentRental?.id || null,
+      });
+      setReservationSaving(false);
+      if (error) {
+        notify(error.message || 'Your current checkout could not be released. Please retry.');
+        return;
+      }
+    }
+
+    try {
+      localStorage.removeItem('rentmect_pending_booking');
+      localStorage.removeItem('rentMeCtBooking');
+      localStorage.removeItem('pendingBooking');
+    } catch {
+      // The server-side hold is already released.
+    }
+    navigateToFleet(reservationForm);
   }
 
   function startNewReservation() {
@@ -2530,6 +2557,7 @@ async function verifyPhoneCode() {
           checkoutSecondsRemaining={checkoutSecondsRemaining}
           checkoutExpired={checkoutExpired}
           directCheckout={cars2BookingHandoff}
+          changeCheckoutDatesOrVehicle={changeCheckoutDatesOrVehicle}
         />
       );
     }
@@ -2606,6 +2634,7 @@ async function verifyPhoneCode() {
           applyCustomerDiscount={applyCustomerDiscount}
           checkoutSecondsRemaining={checkoutSecondsRemaining}
           checkoutExpired={checkoutExpired}
+          changeCheckoutDatesOrVehicle={changeCheckoutDatesOrVehicle}
           signOut={signOut}
           openPortal={() => setPreviewPortalOpen(true)}
         />
@@ -4298,6 +4327,7 @@ function PreviewGuestExperience({
   checkoutSecondsRemaining,
   checkoutExpired,
   directCheckout = false,
+  changeCheckoutDatesOrVehicle,
 }) {
   const days = Math.max(1, getRentalDays(reservationForm.pickupDate, reservationForm.returnDate));
   const displayVehicle = vehicle || { id: BOOKING_FLOW_TEST_VEHICLE_ID, name: 'Booking Flow Test Vehicle', brand: 'Rent Me CT', model: 'Checkout Preview', vehicle_type: 'Internal Test', daily_rate: 1, security_deposit: 300, description: 'Internal test vehicle for the booking flow.', features: TEST_VEHICLE_FEATURES };
@@ -4317,8 +4347,8 @@ function PreviewGuestExperience({
     return (
       <div className="preview-guest-shell">
         <PreviewTopbar
-          onBack={() => directCheckout ? window.history.back() : setPage('details')}
-          label={directCheckout ? 'Back to booking preview' : 'Back to vehicle details'}
+          onBack={() => directCheckout ? changeCheckoutDatesOrVehicle() : setPage('details')}
+          label={directCheckout ? 'Change dates or vehicle' : 'Back to vehicle details'}
         />
         <main className="preview-checkout-layout preview-guest-checkout">
           <section className="preview-checkout-column">
@@ -4510,6 +4540,7 @@ function PreviewCheckout({
   applyCustomerDiscount,
   checkoutSecondsRemaining,
   checkoutExpired,
+  changeCheckoutDatesOrVehicle,
   signOut,
   openPortal,
 }) {
@@ -4562,6 +4593,9 @@ function PreviewCheckout({
               <p className="eyebrow">Verify & pay</p>
               <h1>Complete your booking.</h1>
               <p>{completedCount} of 5 sections complete • Signed in as {userEmail}</p>
+              <button className="preview-change-booking-button" type="button" onClick={changeCheckoutDatesOrVehicle} disabled={reservationSaving}>
+                <ArrowLeft size={16} /> Change dates or choose another vehicle
+              </button>
             </div>
             <button className="preview-text-button" type="button" onClick={signOut}>Sign out</button>
           </div>
@@ -4834,6 +4868,10 @@ function restartExpiredBooking(reservationForm = {}) {
     // Continue to the fleet even when browser storage is unavailable.
   }
 
+  navigateToFleet(reservationForm);
+}
+
+function navigateToFleet(reservationForm = {}) {
   let target;
   try {
     const referrer = document.referrer ? new URL(document.referrer) : null;
