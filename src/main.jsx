@@ -4274,9 +4274,12 @@ function SignaturePad({ value, onChange }) {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
     const source = event.touches?.[0] || event;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
     return {
-      x: source.clientX - rect.left,
-      y: source.clientY - rect.top,
+      x: (source.clientX - rect.left) * scaleX,
+      y: (source.clientY - rect.top) * scaleY,
+      lineScale: (scaleX + scaleY) / 2,
     };
   }
 
@@ -4286,6 +4289,10 @@ function SignaturePad({ value, onChange }) {
     const context = canvas.getContext('2d');
     const point = getPoint(event);
     drawingRef.current = true;
+    context.lineWidth = 2.4 * point.lineScale;
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    context.strokeStyle = '#172033';
     context.beginPath();
     context.moveTo(point.x, point.y);
   }
@@ -4296,9 +4303,7 @@ function SignaturePad({ value, onChange }) {
     const canvas = canvasRef.current;
     const context = canvas.getContext('2d');
     const point = getPoint(event);
-    context.lineWidth = 2.4;
-    context.lineCap = 'round';
-    context.strokeStyle = '#172033';
+    context.lineWidth = 2.4 * point.lineScale;
     context.lineTo(point.x, point.y);
     context.stroke();
   }
