@@ -935,6 +935,37 @@ select option {
 .extension-pending-actions { display: grid; gap: 10px; }
 .extension-pending-actions .auth-message { margin: 0; }
 .extension-pending-actions .secondary-btn { justify-self: start; }
+.extension-insurance-refresh {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 14px;
+  border: 1px solid rgba(255,220,120,.35);
+  border-radius: 16px;
+  background: rgba(255,220,120,.08);
+}
+.extension-insurance-refresh.complete {
+  border-color: rgba(81,217,81,.32);
+  background: rgba(81,217,81,.09);
+}
+.extension-insurance-refresh > svg { color: #f0c85e; }
+.extension-insurance-refresh.complete > svg { color: #61c977; }
+.extension-insurance-refresh > div { display: grid; gap: 4px; }
+.extension-insurance-refresh span { color: var(--muted); line-height: 1.45; }
+.extension-insurance-refresh label { margin: 0; white-space: nowrap; }
+.identity-name-lock-note {
+  display: block;
+  margin: -4px 0 8px;
+  color: #176c3a;
+  font-weight: 750;
+  line-height: 1.45;
+}
+input[readonly] {
+  background: #f2f5f3;
+  color: #46534c;
+  cursor: not-allowed;
+}
 .extension-alternatives { display: grid; gap: 10px; }
 .extension-alternative-list {
   display: grid;
@@ -1899,6 +1930,13 @@ select option {
   .extension-pending-actions .secondary-btn {
     width: 100%;
     min-height: 52px;
+  }
+  .extension-insurance-refresh {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .extension-insurance-refresh label {
+    grid-column: 1 / -1;
+    width: 100%;
   }
   .next-vehicle-card {
     grid-template-columns: 82px minmax(0, 1fr);
