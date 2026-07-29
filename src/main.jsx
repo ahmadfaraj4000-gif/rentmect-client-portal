@@ -2328,6 +2328,8 @@ async function verifyPhoneCode() {
       } : current);
       if (data.verified) {
         await loadPortalData(session.user.id);
+      } else if (data.errorCode === 'identity_results_access_required') {
+        notify('Your Stripe submission was received. This is a Rent Me CT secure-results setup issue—not a failed ID check. Do not submit your ID again.', 'error');
       } else if (data.errorCode === 'name_mismatch') {
         notify('NOT VERIFIED — the name on the government ID does not match the renter’s legal first and last name. Correct the renter name and retry.', 'error');
       } else if (data.errorCode === 'date_of_birth_mismatch') {
@@ -4423,7 +4425,7 @@ function customerSafeMessage(message, fallback = 'Something went wrong. Please t
   const text = String(message || '').trim();
   if (!text) return fallback;
   if (
-    /(?:insert|update|delete|select)\s+(?:on|from|into)\s+table|foreign key|constraint|violates|duplicate key|relation\s+["']|column\s+["']|schema cache|sqlstate|pgrst\d+|row-level security|permission denied for (?:table|schema|function)|null value in column|syntax error at or near/i.test(text)
+    /(?:insert|update|delete|select)\s+(?:on|from|into)\s+table|foreign key|constraint|violates|duplicate key|relation\s+["']|column\s+["']|schema cache|sqlstate|pgrst\d+|row-level security|permission denied for (?:table|schema|function)|null value in column|syntax error at or near|sensitive verification results|restricted api key|access-verification-results|stripe\.com\/docs\/identity/i.test(text)
   ) {
     return fallback;
   }
@@ -5274,18 +5276,21 @@ function Metric({ icon: Icon, label, value }) {
 function IdentityVerificationPanel({ status, errorCode, verified, saving, onStart, onRefresh }) {
   const requiresInput = ['unverified', 'requires_input', 'canceled', 'redacted'].includes(status);
   const failed = ['requires_input', 'canceled', 'redacted'].includes(status);
+  const configurationRequired = status === 'configuration_required' || errorCode === 'identity_results_access_required';
   const nameMismatch = errorCode === 'name_mismatch';
   const birthDateMismatch = errorCode === 'date_of_birth_mismatch';
   const detailsMismatch = errorCode === 'identity_details_mismatch';
   const identityDetailsMismatch = nameMismatch || birthDateMismatch || detailsMismatch;
-  const statusLabel = verified ? 'VERIFIED' : status === 'processing' ? 'PROCESSING' : failed ? 'NOT VERIFIED' : 'ACTION REQUIRED';
+  const statusLabel = verified ? 'VERIFIED' : configurationRequired ? 'RENT ME CT SETUP REQUIRED' : status === 'processing' ? 'PROCESSING' : failed ? 'NOT VERIFIED' : 'ACTION REQUIRED';
   return <div className={`identity-verification-panel ${verified ? 'verified' : status}`} role="status" aria-live="polite">
     {failed ? <AlertTriangle size={30} /> : verified ? <CheckCircle2 size={30} /> : <ShieldCheck size={30} />}
     <div>
       <span className="identity-status-label">{statusLabel}</span>
-      <strong>{verified ? 'Stripe confirmed your legal name and birthday' : status === 'processing' ? 'Stripe received your submission and is checking it' : detailsMismatch ? 'Government ID name and birthday do not match' : birthDateMismatch ? 'Government ID birthday does not match' : nameMismatch ? 'Government ID name does not match the renter name' : failed ? 'Stripe could not verify this attempt' : 'Verify your government ID and selfie'}</strong>
+      <strong>{verified ? 'Stripe confirmed your legal name and birthday' : configurationRequired ? 'Your Stripe submission was received' : status === 'processing' ? 'Stripe received your submission and is checking it' : detailsMismatch ? 'Government ID name and birthday do not match' : birthDateMismatch ? 'Government ID birthday does not match' : nameMismatch ? 'Government ID name does not match the renter name' : failed ? 'Stripe could not verify this attempt' : 'Verify your government ID and selfie'}</strong>
       <span>{verified
         ? 'Your legal name and date of birth both match the government ID. This check will be reused for future rentals.'
+        : configurationRequired
+          ? 'This is a Rent Me CT secure-results configuration issue, not a failed customer verification. Do not upload your ID or selfie again. Your completed Stripe session is saved.'
         : status === 'processing'
           ? 'Do not submit another check while this says PROCESSING. Press Refresh Status in a moment.'
           : identityDetailsMismatch
@@ -5299,7 +5304,7 @@ function IdentityVerificationPanel({ status, errorCode, verified, saving, onStar
             : 'You will continue to Stripe’s secure hosted verification. Complete every screen; we will bring you back to the next required step.'}</span>
       <small>This identity check does not replace Rent Me CT’s separate driver-license validity and insurance review.</small>
       <div className="identity-verification-actions">
-        {requiresInput && <button type="button" className="primary-btn" onClick={onStart} disabled={saving}>{saving ? 'Opening Stripe...' : status === 'requires_input' ? 'Retry With Stripe Identity' : 'Start Stripe Identity'}</button>}
+        {requiresInput && !configurationRequired && <button type="button" className="primary-btn" onClick={onStart} disabled={saving}>{saving ? 'Opening Stripe...' : status === 'requires_input' ? 'Retry With Stripe Identity' : 'Start Stripe Identity'}</button>}
         {!verified && <button type="button" className="secondary-btn" onClick={onRefresh} disabled={saving}>{saving ? 'Checking...' : 'Refresh Status'}</button>}
       </div>
     </div>
