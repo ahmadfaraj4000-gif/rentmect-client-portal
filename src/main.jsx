@@ -329,8 +329,10 @@ Company Representative: ____________________ Date: __________
 `;
 
 function App() {
-  const previewRoute = new URLSearchParams(window.location.search).get('preview') || '';
-  const cars2BookingHandoff = new URLSearchParams(window.location.search).get('source') === 'cars2';
+  const initialUrlParams = new URLSearchParams(window.location.search);
+  const previewRoute = initialUrlParams.get('preview') || '';
+  const cars2BookingHandoff = initialUrlParams.get('source') === 'cars2';
+  const [returningFromStripeIdentity] = useState(() => initialUrlParams.get('identity') === 'return');
   const bookingPreviewFleetMode = previewRoute === 'fleet';
   const bookingPreviewCheckoutMode = previewRoute === '1';
   const [session, setSession] = useState(null);
@@ -853,20 +855,17 @@ function App() {
   const pendingExtension = currentRentalExtensions.find((request) => request.status === 'pending');
   const pendingSameVehicleExtension = pendingExtension?.request_kind !== 'switch_car_continuation' ? pendingExtension : null;
   const approvedUnpaidExtension = currentRentalExtensions.find((request) => request.status === 'approved_pending_payment');
-  const extensionInsuranceRequest = approvedUnpaidExtension || pendingExtension;
-  const extensionInsuranceDocument = useMemo(() => {
-    if (!extensionInsuranceRequest?.created_at) return null;
-    const requestedAt = new Date(extensionInsuranceRequest.created_at).getTime();
-    return latestDocument(
-      currentRentalDocuments.filter((document) =>
-        document.document_type === 'insurance' &&
-        new Date(document.created_at || 0).getTime() >= requestedAt
-      ),
-      'insurance'
-    );
-  }, [currentRentalDocuments, extensionInsuranceRequest?.id, extensionInsuranceRequest?.created_at]);
+  const openExtensionRequest = pendingExtension || approvedUnpaidExtension;
+  const extensionInsuranceDocument = openExtensionRequest
+    ? [...currentRentalDocuments]
+        .filter((document) =>
+          document.document_type === 'insurance' &&
+          document.extension_request_id === openExtensionRequest.id
+        )
+        .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))[0]
+    : null;
   const extensionInsuranceUploaded = isUsableDocument(extensionInsuranceDocument);
-  const extensionInsuranceRequired = Boolean(extensionInsuranceRequest && !extensionInsuranceUploaded);
+  const extensionInsuranceRequired = Boolean(openExtensionRequest && !extensionInsuranceUploaded);
   const approvedSwitchExtension = currentRentalExtensions.find((request) =>
     request.status === 'approved_pending_payment' &&
     request.request_kind === 'switch_car_continuation'
@@ -1704,9 +1703,10 @@ async function verifyPhoneCode() {
     notify('Start a new reservation by choosing dates and a vehicle.');
   }
 
-  async function uploadDocument(event, documentType) {
+  async function uploadDocument(event, documentType, { createNew = false, extensionRequestId = null } = {}) {
     const file = event.target.files?.[0];
     if (!file || !session?.user?.id) return;
+    const uploadBusyKey = extensionRequestId ? 'extensionInsurance' : documentType;
     const validationError = validateDocumentFile(file);
     if (validationError) {
       notify(validationError, 'error');
@@ -1714,7 +1714,7 @@ async function verifyPhoneCode() {
       return;
     }
 
-    setDocumentUploadBusy((current) => ({ ...current, [documentType]: true }));
+    setDocumentUploadBusy((current) => ({ ...current, [uploadBusyKey]: true }));
     try {
       const rental = currentRental || (await createReservationIfNeeded());
 
@@ -1723,12 +1723,11 @@ async function verifyPhoneCode() {
         return;
       }
 
-    const requiresNewExtensionInsuranceRow = documentType === 'insurance' && extensionInsuranceRequired;
-    const existingDocument = requiresNewExtensionInsuranceRow
+    const existingDocument = createNew
       ? null
       : documentType === 'license'
-      ? latestDocument(documents, 'license')
-      : latestDocument(documents.filter((document) => document.rental_id === rental.id), 'insurance');
+        ? latestDocument(documents, 'license')
+        : latestDocument(documents.filter((document) => document.rental_id === rental.id), 'insurance');
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
     const existingPath = existingDocument?.file_path || existingDocument?.storage_path || existingDocument?.path;
     const path = existingPath || `${session.user.id}/${documentType}/${Date.now()}-${safeName}`;
@@ -1775,6 +1774,7 @@ async function verifyPhoneCode() {
         document_type: documentType,
         file_path: path,
         status: 'pending_review',
+        extension_request_id: extensionRequestId || null,
       })
       .select()
       .single();
@@ -1797,7 +1797,7 @@ async function verifyPhoneCode() {
     }
       if (event.target) event.target.value = '';
     } finally {
-      setDocumentUploadBusy((current) => ({ ...current, [documentType]: false }));
+      setDocumentUploadBusy((current) => ({ ...current, [uploadBusyKey]: false }));
     }
   }
 
@@ -2886,7 +2886,7 @@ async function verifyPhoneCode() {
               <MapPin size={18} /> Location
             </button>
             {!paymentPaid && <button className="primary-btn" onClick={beginWizard}>
-              <CheckCircle2 size={18} /> Resume Guided Steps
+              <CheckCircle2 size={18} /> {returningFromStripeIdentity ? 'RESUME CHECKOUT' : 'Continue Guided Steps'}
             </button>}
           </div>
         </header>
@@ -2913,7 +2913,7 @@ async function verifyPhoneCode() {
                   <p className="muted">Your progress is saved. Resume here—there is no need to open the menu.</p>
                 </div>
                 <button className="primary-btn big-action" type="button" onClick={beginWizard}>
-                  <CheckCircle2 size={20} /> Resume Guided Steps
+                  <CheckCircle2 size={20} /> {returningFromStripeIdentity ? 'RESUME CHECKOUT' : 'Resume Guided Steps'}
                 </button>
               </section>
             )}
@@ -3072,27 +3072,33 @@ async function verifyPhoneCode() {
                     <button className="secondary-btn" type="button" onClick={cancelExtensionRequest} disabled={extensionSaving}>Cancel Extension Request</button>
                   </div>}
                   {approvedUnpaidExtension && <p className="auth-message">Approved extension is waiting for payment before the new return date becomes active.{approvedUnpaidExtension.payment_due_at ? ` Pay by ${new Date(approvedUnpaidExtension.payment_due_at).toLocaleString()} or the hold is released automatically.` : ''}</p>}
-                  {extensionInsuranceRequest && (
-                    <div className={`extension-insurance-refresh ${extensionInsuranceUploaded ? 'complete' : 'required'}`}>
-                      {extensionInsuranceUploaded ? <CheckCircle2 size={21} /> : <ShieldCheck size={21} />}
-                      <div>
-                        <strong>{extensionInsuranceUploaded ? 'New insurance uploaded for this extension' : 'New proof of insurance required'}</strong>
-                        <span>{extensionInsuranceUploaded ? 'This extension-specific upload is ready for Rent Me CT review.' : 'Your driver license and Stripe Identity stay on file. Upload current insurance specifically for this extension before payment.'}</span>
-                      </div>
-                      {!extensionInsuranceUploaded && (
-                        <label className={`secondary-btn ${documentUploadBusy?.insurance ? 'is-busy' : ''}`}>
-                          {documentUploadBusy?.insurance ? 'Uploading…' : 'Upload New Insurance'}
-                          <input
-                            type="file"
-                            accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
-                            onChange={(event) => uploadDocument(event, 'insurance')}
-                            disabled={Boolean(documentUploadBusy?.insurance)}
-                            style={{ display: 'none' }}
-                          />
-                        </label>
-                      )}
+                  {openExtensionRequest && <div className={`extension-insurance-step ${extensionInsuranceDocument?.status || 'missing'}`}>
+                    <div>
+                      <strong>New insurance required</strong>
+                      <span>
+                        {extensionInsuranceDocument?.status === 'approved'
+                          ? 'Approved for this extension.'
+                          : extensionInsuranceDocument?.status === 'pending_review'
+                            ? 'Uploaded and waiting for Rent Me CT approval.'
+                            : extensionInsuranceDocument?.status === 'rejected'
+                              ? 'The extension insurance was rejected. Upload a replacement.'
+                              : 'Upload proof that covers the requested continuation dates.'}
+                      </span>
                     </div>
-                  )}
+                    {(!extensionInsuranceDocument || extensionInsuranceDocument.status === 'rejected') && <label className="secondary-btn">
+                      <Upload size={16}/> {documentUploadBusy.extensionInsurance ? 'Uploading…' : 'Upload New Insurance'}
+                      <input
+                        type="file"
+                        accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
+                        disabled={Boolean(documentUploadBusy.extensionInsurance)}
+                        onChange={(event) => uploadDocument(event, 'insurance', {
+                          createNew: true,
+                          extensionRequestId: openExtensionRequest.id,
+                        })}
+                        style={{ display: 'none' }}
+                      />
+                    </label>}
+                  </div>}
                   <input
                     type="date"
                     min={currentRental.return_date}
@@ -3256,7 +3262,7 @@ async function verifyPhoneCode() {
             <h3>One Step at a Time</h3>
             <p className="muted">{allGuidedStepsComplete ? 'Every required rental step is complete.' : `Your progress is saved. Your next step is ${wizardSteps[getNextGuidedStep()]?.title || 'the rental checklist'}.`}</p>
             <button className="primary-btn big-action" onClick={beginWizard}>
-              <CheckCircle2 size={20} /> {allGuidedStepsComplete ? 'Guided Steps Complete' : 'Resume Guided Steps'}
+              <CheckCircle2 size={20} /> {allGuidedStepsComplete ? 'Guided Steps Complete' : returningFromStripeIdentity ? 'RESUME CHECKOUT' : 'Resume Guided Steps'}
             </button>
           </section>
         )}
