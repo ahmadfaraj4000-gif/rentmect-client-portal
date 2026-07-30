@@ -5284,6 +5284,34 @@ function Metric({ icon: Icon, label, value }) {
   );
 }
 
+function identityMatchResults(status, errorCode) {
+  if (status === 'verified') {
+    return [
+      { label: 'Legal name', result: 'Match confirmed', matched: true },
+      { label: 'Date of birth', result: 'Match confirmed', matched: true },
+    ];
+  }
+  if (errorCode === 'name_mismatch') {
+    return [
+      { label: 'Legal name', result: 'Does not match', matched: false },
+      { label: 'Date of birth', result: 'Match confirmed', matched: true },
+    ];
+  }
+  if (errorCode === 'date_of_birth_mismatch') {
+    return [
+      { label: 'Legal name', result: 'Match confirmed', matched: true },
+      { label: 'Date of birth', result: 'Does not match', matched: false },
+    ];
+  }
+  if (errorCode === 'identity_details_mismatch') {
+    return [
+      { label: 'Legal name', result: 'Does not match', matched: false },
+      { label: 'Date of birth', result: 'Does not match', matched: false },
+    ];
+  }
+  return [];
+}
+
 function IdentityVerificationPanel({ status, errorCode, verified, saving, onStart, onRefresh }) {
   const requiresInput = ['unverified', 'requires_input', 'canceled', 'redacted'].includes(status);
   const failed = ['requires_input', 'canceled', 'redacted'].includes(status);
@@ -5292,6 +5320,7 @@ function IdentityVerificationPanel({ status, errorCode, verified, saving, onStar
   const birthDateMismatch = errorCode === 'date_of_birth_mismatch';
   const detailsMismatch = errorCode === 'identity_details_mismatch';
   const identityDetailsMismatch = nameMismatch || birthDateMismatch || detailsMismatch;
+  const matchResults = identityMatchResults(status, errorCode);
   const statusLabel = verified ? 'VERIFIED' : configurationRequired ? 'RENT ME CT SETUP REQUIRED' : status === 'processing' ? 'PROCESSING' : failed ? 'NOT VERIFIED' : 'ACTION REQUIRED';
   return <div className={`identity-verification-panel ${verified ? 'verified' : status}`} role="status" aria-live="polite">
     {failed ? <AlertTriangle size={30} /> : verified ? <CheckCircle2 size={30} /> : <ShieldCheck size={30} />}
@@ -5313,6 +5342,12 @@ function IdentityVerificationPanel({ status, errorCode, verified, saving, onStar
           : failed
             ? 'Press Retry With Stripe Identity and complete every requested screen. You will return here for a clear result.'
             : 'You will continue to Stripe’s secure hosted verification. Complete every screen; we will bring you back to the next required step.'}</span>
+      {matchResults.length > 0 && <div className="identity-match-results" aria-label="Stripe Identity comparison results">
+        {matchResults.map((item) => <span className={item.matched ? 'matched' : 'mismatch'} key={item.label}>
+          <strong>{item.label}</strong>
+          {item.result}
+        </span>)}
+      </div>}
       <small>This identity check does not replace Rent Me CT’s separate driver-license validity and insurance review.</small>
       <div className="identity-verification-actions">
         {requiresInput && !configurationRequired && <button type="button" className="primary-btn" onClick={onStart} disabled={saving}>{saving ? 'Opening Stripe...' : status === 'requires_input' ? 'Retry With Stripe Identity' : 'Start Stripe Identity'}</button>}
