@@ -346,6 +346,44 @@
   box-shadow: 0 14px 42px rgba(15, 35, 22, .12);
 }
 
+.agreement-review-status {
+  margin: 14px 22px 0;
+  padding: 11px 13px;
+  border: 1px solid #e2c376;
+  border-radius: 10px;
+  background: #fff8e5;
+  color: #6b4b00;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.agreement-review-status.complete {
+  border-color: #abd0b9;
+  background: #edf8f1;
+  color: #145f35;
+}
+
+.agreement-stored-signature {
+  display: grid;
+  gap: 8px;
+  margin: 0 18px 18px;
+  padding: 13px;
+  border: 1px solid #abd0b9;
+  border-radius: 10px;
+  background: #edf8f1;
+  color: #145f35;
+}
+
+.agreement-stored-signature img {
+  display: block;
+  width: min(100%, 420px);
+  height: auto;
+  border: 1px solid #cddbd2;
+  border-radius: 6px;
+  background: #fff;
+}
+
 button:focus-visible,
 a:focus-visible,
 [role="button"]:focus-visible,
@@ -375,6 +413,10 @@ summary:focus-visible {
     max-height: calc(100dvh - 16px) !important;
   }
 
+  .agreement-review-status {
+    margin: 10px 16px 0;
+  }
+
   .support-form button,
   .preview-upload-card,
   .document-actions .secondary-btn {
@@ -390,6 +432,96 @@ summary:focus-visible {
     animation-duration: .01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: .01ms !important;
+  }
+}
+
+/* Stripe Identity must remain readable inside the light checkout surfaces. */
+.identity-verification-panel {
+  border-color: #d7ded9 !important;
+  background: #f8faf9 !important;
+  color: #17211b !important;
+}
+
+.identity-verification-panel > svg {
+  color: #b87900 !important;
+}
+
+.identity-verification-panel.verified > svg {
+  color: #16713d !important;
+}
+
+.identity-verification-panel .identity-status-title {
+  color: #111914 !important;
+  font-size: 19px !important;
+  line-height: 1.3 !important;
+}
+
+.identity-verification-panel > div > span,
+.identity-verification-panel > div > small {
+  color: #4d5c53 !important;
+}
+
+.identity-match-results > span {
+  border-color: #cfd8d2 !important;
+  background: #fff !important;
+  color: #26332b !important;
+}
+
+.identity-match-results > span strong {
+  color: inherit !important;
+}
+
+.identity-match-results > span.matched {
+  border-color: #74bd8f !important;
+  background: #edf8f1 !important;
+  color: #125f34 !important;
+}
+
+.identity-match-results > span.mismatch {
+  border-color: #e39b9b !important;
+  background: #fff0f0 !important;
+  color: #961e25 !important;
+}
+
+.identity-fix-guidance {
+  display: grid;
+  gap: 7px;
+  margin-top: 3px;
+  padding: 14px;
+  border: 1px solid #e2aaaa;
+  border-left: 5px solid #b4232b;
+  border-radius: 12px;
+  background: #fff6f6;
+  color: #4a171a;
+}
+
+.identity-fix-guidance > strong,
+.identity-fix-guidance > span,
+.identity-fix-guidance > small {
+  color: inherit !important;
+}
+
+.identity-fix-guidance > small {
+  font-weight: 700;
+}
+
+.identity-correction-button {
+  width: fit-content;
+  min-height: 44px;
+  margin-top: 3px;
+  padding: 10px 14px;
+  border: 1px solid #8f1c23;
+  border-radius: 8px;
+  background: #fff;
+  color: #8f1c23;
+  font: inherit;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+@media (max-width: 620px) {
+  .identity-correction-button {
+    width: 100%;
   }
 }
 
