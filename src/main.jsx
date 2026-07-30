@@ -2861,7 +2861,7 @@ async function verifyPhoneCode() {
         </aside>
       )}
 
-      <main className="portal-main compact-main">
+      <main id="portal-main-content" className="portal-main compact-main">
         {notice && <Notice notice={notice} onDismiss={() => setNotice(null)} />}
         <header className="portal-header compact-header">
           {isMobileClientNav && navCollapsed && (
@@ -6027,4 +6027,168 @@ function escapeHtml(value) {
   })[char]);
 }
 
-createRoot(document.getElementById('root')).render(<PortalErrorBoundary><App /></PortalErrorBoundary>);
+const PORTAL_CONSENT_KEY = 'rentmect_privacy_choices_v1';
+const PORTAL_CONSENT_VERSION = '2026-07-30';
+
+function portalConsentDefaults() {
+  return {
+    necessary: true,
+    functional: false,
+    analytics: false,
+    marketing: false,
+    globalPrivacyControl: navigator.globalPrivacyControl === true,
+    version: PORTAL_CONSENT_VERSION,
+    timestamp: null,
+  };
+}
+
+function readPortalConsent() {
+  const defaults = portalConsentDefaults();
+  try {
+    const stored = JSON.parse(localStorage.getItem(PORTAL_CONSENT_KEY) || 'null');
+    if (!stored || stored.version !== PORTAL_CONSENT_VERSION) return defaults;
+    return {
+      ...defaults,
+      functional: Boolean(stored.functional),
+      analytics: defaults.globalPrivacyControl ? false : Boolean(stored.analytics),
+      marketing: defaults.globalPrivacyControl ? false : Boolean(stored.marketing),
+      timestamp: stored.timestamp || null,
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+function PortalComplianceLayer() {
+  const [consent, setConsent] = useState(readPortalConsent);
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [draft, setDraft] = useState(consent);
+  const dialogRef = useRef(null);
+  const previousFocusRef = useRef(null);
+
+  const openPreferences = () => {
+    previousFocusRef.current = document.activeElement;
+    setDraft(readPortalConsent());
+    setPreferencesOpen(true);
+  };
+
+  const closePreferences = () => {
+    setPreferencesOpen(false);
+    window.requestAnimationFrame(() => {
+      if (previousFocusRef.current instanceof HTMLElement) previousFocusRef.current.focus();
+    });
+  };
+
+  const saveConsent = (next) => {
+    const globalPrivacyControl = navigator.globalPrivacyControl === true;
+    const value = {
+      necessary: true,
+      functional: Boolean(next.functional),
+      analytics: globalPrivacyControl ? false : Boolean(next.analytics),
+      marketing: globalPrivacyControl ? false : Boolean(next.marketing),
+      globalPrivacyControl,
+      version: PORTAL_CONSENT_VERSION,
+      timestamp: new Date().toISOString(),
+    };
+    try {
+      localStorage.setItem(PORTAL_CONSENT_KEY, JSON.stringify(value));
+    } catch {
+      // Keep the current page choice when browser storage is unavailable.
+    }
+    setConsent(value);
+    setDraft(value);
+    setPreferencesOpen(false);
+    window.dispatchEvent(new CustomEvent('rentmect:consent-changed', { detail: value }));
+  };
+
+  useEffect(() => {
+    window.rentmectPortalConsent = {
+      get: readPortalConsent,
+      allows: (category) => category === 'necessary' || Boolean(readPortalConsent()[category]),
+      open: openPreferences,
+    };
+    return () => { delete window.rentmectPortalConsent; };
+  });
+
+  useEffect(() => {
+    if (!preferencesOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.requestAnimationFrame(() => dialogRef.current?.focus());
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closePreferences();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialogRef.current) return;
+      const focusable = [...dialogRef.current.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+        .filter((element) => element instanceof HTMLElement && element.offsetParent !== null);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [preferencesOpen]);
+
+  return <>
+    <footer className="portal-compliance-footer" aria-label="Rent Me CT legal and privacy links">
+      <span>© 2026 Ancona Enterprises, Inc. d/b/a Rent Me CT</span>
+      <nav aria-label="Legal links">
+        <a href="https://rentmect.com/privacy-policy.html">Privacy</a>
+        <a href="https://rentmect.com/terms.html">Terms</a>
+        <a href="https://rentmect.com/cookie-policy.html">Cookie Policy</a>
+        <a href="https://rentmect.com/accessibility.html">Accessibility</a>
+        <a href="https://rentmect.com/rental-policies.html">Rental Policies</a>
+        <a href="https://rentmect.com/sitemap.html">Sitemap</a>
+        <a href="https://rentmect.com/privacy-choices.html">Do Not Sell or Share</a>
+        <button type="button" onClick={openPreferences}>Manage Cookie Preferences</button>
+      </nav>
+    </footer>
+
+    {!consent.timestamp && <section className="portal-privacy-banner" aria-label="Privacy choices">
+      <div><strong>Your privacy choices</strong><p>This portal uses necessary browser storage for secure sign-in, booking, and payments. No advertising or analytics pixel is currently active.</p><a href="https://rentmect.com/cookie-policy.html">Cookie and Browser Storage Policy</a></div>
+      <div className="portal-privacy-actions">
+        <button type="button" onClick={() => saveConsent({ functional: true, analytics: true, marketing: true })}>Accept all</button>
+        <button type="button" onClick={() => saveConsent({ functional: false, analytics: false, marketing: false })}>Reject non-essential</button>
+        <button type="button" onClick={openPreferences}>Customize</button>
+      </div>
+    </section>}
+
+    {preferencesOpen && <div className="portal-privacy-modal">
+      <button type="button" className="portal-privacy-backdrop" onClick={closePreferences} aria-label="Close privacy preferences" />
+      <section ref={dialogRef} className="portal-privacy-panel" role="dialog" aria-modal="true" aria-labelledby="portalPrivacyTitle" tabIndex="-1">
+        <div className="portal-privacy-heading"><div><p className="eyebrow">Privacy controls</p><h2 id="portalPrivacyTitle">Manage cookie and storage preferences</h2></div><button type="button" className="portal-privacy-close" onClick={closePreferences} aria-label="Close privacy preferences"><X size={22}/></button></div>
+        <p>Necessary storage keeps you signed in and supports requested booking, document, identity, payment, and security functions. The portal currently has no analytics or advertising pixels.</p>
+        <div className="portal-privacy-choice-list">
+          <label><span><strong>Necessary</strong><small>Secure sign-in, booking, fraud prevention, and your consent record. Always on.</small></span><input type="checkbox" checked disabled readOnly /></label>
+          <label><span><strong>Functional</strong><small>Optional display preferences.</small></span><input type="checkbox" checked={Boolean(draft.functional)} onChange={(event) => setDraft({ ...draft, functional: event.target.checked })} /></label>
+          <label><span><strong>Analytics</strong><small>Audience measurement. No provider is currently active.</small></span><input type="checkbox" checked={Boolean(draft.analytics)} disabled={draft.globalPrivacyControl} onChange={(event) => setDraft({ ...draft, analytics: event.target.checked })} /></label>
+          <label><span><strong>Marketing</strong><small>Targeted advertising. No advertising pixel is currently active.</small></span><input type="checkbox" checked={Boolean(draft.marketing)} disabled={draft.globalPrivacyControl} onChange={(event) => setDraft({ ...draft, marketing: event.target.checked })} /></label>
+        </div>
+        {draft.globalPrivacyControl && <p className="portal-gpc-notice"><strong>Global Privacy Control detected.</strong> Analytics and marketing remain off while this signal is enabled.</p>}
+        <div className="portal-privacy-actions modal-actions"><button type="button" onClick={() => saveConsent(draft)}>Save choices</button><button type="button" onClick={() => saveConsent({ functional: false, analytics: false, marketing: false })}>Reject non-essential</button></div>
+        <a className="portal-privacy-rights-link" href="https://rentmect.com/privacy-choices.html">View privacy rights and opt-out information</a>
+      </section>
+    </div>}
+  </>;
+}
+
+const portalRoot = document.getElementById('root');
+portalRoot.tabIndex = -1;
+createRoot(portalRoot).render(<>
+  <a className="portal-skip-link" href="#root">Skip to portal content</a>
+  <PortalErrorBoundary><App /></PortalErrorBoundary>
+  <PortalComplianceLayer />
+</>);
