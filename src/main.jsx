@@ -24,6 +24,7 @@ import {
 import { supabase } from './supabaseClient';
 import BookingPreviewFleet from './BookingPreviewFleet';
 import FLEET_GALLERY_IMAGES from './fleetGalleryImages';
+import { AGREEMENT_TEXT, AGREEMENT_VERSION } from './rentalAgreement';
 import logoUrl from './assets/logo-sidebar.png';
 import logoMobileUrl from './assets/logo-mobile.png';
 import './styles.css';
@@ -79,7 +80,6 @@ const BOOKING_FLOW_TEST_VEHICLE_ID = '00000000-0000-4000-8000-000000000015';
 const BOOKING_FLOW_TEST_ENABLED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_BOOKING_FLOW_TEST === 'true';
 const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 const ACCEPTED_DOCUMENT_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
-const AGREEMENT_VERSION = 'rentmect-master-v2026-05-20';
 const MILEAGE_POLICY = '200 miles/day included; excess mileage $0.35/mile';
 const CANCELLATION_TERMS = 'Contact Rent Me CT before pickup for cancellation or schedule changes.';
 const SMS_CONSENT_VERSION = '2026-07-26';
@@ -91,245 +91,6 @@ const BLOCKING_RENTAL_STATUSES = ['pending', 'documents_needed', 'document_revie
 const AVAILABILITY_RENTAL_STATUSES = [...BLOCKING_RENTAL_STATUSES, 'completed'];
 const BLOCKING_VEHICLE_STATUSES = ['maintenance', 'unavailable', 'inactive'];
 const TURNAROUND_BUFFER_MINUTES = 180;
-
-const AGREEMENT_TEXT = `
-RENT ME CT / ANCONA ENTERPRISES, INC.
-MASTER VEHICLE RENTAL AGREEMENT
-
-This Master Vehicle Rental Agreement ("Agreement") is entered into by and between Rent Me CT / Ancona Enterprises, Inc., a Connecticut corporation ("Company"), and the undersigned renter ("Renter"). This Agreement governs all rentals of motor vehicles by Renter from Company.
-
-VEHICLE DESCRIPTION AND CONDITION
-The vehicle subject to this Agreement ("Vehicle") shall be identified in the Rental Addendum executed at the time of rental, including make, model, year, VIN, license plate number, and odometer reading.
-
-Said documentation is incorporated herein by reference.
-
-Renter acknowledges receipt of the Vehicle in good working order except as noted in the Vehicle Condition Report and agrees to return the Vehicle in the same condition, ordinary wear and tear excepted.
-
-RENTAL TERM
-The Rental Period shall begin and end on the dates and times specified in the Rental Addendum.
-
-Same-day rentals are permitted subject to identity and license verification approval by Company.
-
-Failure to return the Vehicle at the agreed time may result in additional rental charges and may constitute unlawful retention of the Vehicle.
-
-DRIVER QUALIFICATIONS
-Renter must be at least twenty-one (21) years of age and possess a valid, unexpired driver’s license.
-
-Renters under the age of twenty-five (25) shall be subject to a Young Driver Fee.
-
-Only drivers listed in the Rental Addendum and approved by Company may operate the Vehicle.
-
-Operation by an unauthorized driver constitutes a material breach.
-
-PAYMENT TERMS AND MILEAGE
-Mileage: Two hundred (200) miles per day are included.
-
-Excess mileage shall be charged at $0.35 per mile.
-
-Unlimited mileage may be purchased for an additional fee depending upon vehicle class.
-
-Security deposits and post-rental charges may range from $200 to $2,000 depending upon vehicle class, extent of damage, policy violations, cleaning requirements, and other contractual breaches.
-
-Renter authorizes Company to charge any payment method on file for all authorized charges including rental fees, excess mileage, tolls, traffic violations, cleaning fees, smoking fees, damage, loss of use, diminished value, towing, storage, repossession, administrative fees, and attorneys’ fees.
-
-Renter also authorizes Company to charge fuel charges, transportation fees, recovery fees, and all other authorized charges related to the rental.
-
-PICK-UP AND DROP-OFF SERVICES
-Company may offer vehicle pick-up and drop-off services subject to availability, scheduling, and Company approval at its sole discretion.
-
-For locations within fifteen (15) miles of Company's designated pickup location, a $30 fee shall apply for vehicle pick-up service.
-
-If Renter requests return drop-off transportation, an additional $30 fee shall apply.
-
-If both services are requested, the total transportation charge shall be $60.
-
-Company reserves the right to approve, deny, modify, or reschedule any transportation-related request at its sole discretion.
-
-Additional charges may apply for locations exceeding fifteen (15) miles, airport coordination, after-hours requests, tolls, traffic conditions, or special accommodations.
-
-FUEL POLICY
-Renter agrees to return the Vehicle with the same fuel level provided at the commencement of the Rental Period.
-
-Vehicles must be refueled using the fuel type and octane rating recommended by the Vehicle manufacturer. Use of improper fuel or failure to follow manufacturer fuel guidelines may result in additional charges for damages, repairs, cleaning, diagnostics, towing, loss of use, and administrative expenses.
-
-If the Vehicle is returned with less fuel than originally provided, Company may refuel the Vehicle at Renter's expense.
-
-Renter shall be responsible for the actual fuel cost in addition to a $20 refueling service fee.
-
-Failure to maintain proper fuel levels may result in additional administrative or service charges where applicable.
-
-VEHICLE RECOVERY AND RETRIEVAL AMENDMENT
-In the event the Vehicle requires recovery, retrieval, repossession, improper return pickup, abandoned vehicle transport, or transportation from an unauthorized location, Renter agrees to pay all associated costs incurred by Company.
-
-Recovery and retrieval service charges shall begin at $80 and may increase depending upon distance, labor, tolls, storage, timing, vehicle condition, or other related circumstances.
-
-Company reserves the right to charge the payment method on file for all recovery-related costs and administrative expenses associated with enforcement of this Agreement.
-
-SPEED MONITORING AND VEHICLE DISABLING POLICY
-Renter acknowledges that the Vehicle may be equipped with GPS tracking and telematics capable of monitoring vehicle speed and driving behavior.
-
-No driver is permitted to operate the Vehicle at speeds exceeding ninety (90) miles per hour.
-
-Repeated excessive speed violations may result in warnings issued by Company.
-
-After the third warning for excessive speed or reckless driving behavior, Company reserves the right to remotely disable or shut down the Vehicle where legally permitted and reasonably safe to do so.
-
-Renter agrees that a $100 vehicle reactivation fee shall apply before the Vehicle is re-enabled for continued use.
-
-CLEANLINESS AND DETAILING POLICY
-Renter agrees to return the Vehicle in reasonably clean condition, excluding ordinary wear and minor debris associated with normal use.
-
-If the Vehicle is returned excessively dirty, stained, muddy, contains excessive trash, pet hair, strong odors, bodily fluids, sand, smoke residue, or otherwise requires abnormal cleaning or detailing beyond standard turnover preparation, Company reserves the right to charge an excessive cleaning fee of $80 or more depending upon the condition of the Vehicle and the extent of cleaning required.
-
-PROHIBITED USES
-The Vehicle shall not be used:
-
-• by any unauthorized driver
-• while under the influence of alcohol or drugs
-• for racing or speed contests
-• for towing or pushing another vehicle
-• for rideshare or delivery services unless authorized
-• for any illegal activity
-• outside permitted geographic areas
-
-Any such use constitutes a material breach and may void any damage waiver or liability limitation.
-
-SMOKING POLICY
-Smoking is strictly prohibited in the Vehicle.
-
-Evidence of smoking, including odor, ash, or residue, shall result in a cleaning and remediation fee ranging from $200 to $2,000.
-
-RENTER LIABILITY FOR DAMAGE
-Renter is fully responsible for any and all damage to the Vehicle during the Rental Period regardless of fault.
-
-Responsibility includes physical damage, mechanical damage caused by misuse, theft, vandalism, loss of use, diminished value, towing, storage, and administrative fees.
-
-Company shall not be required to prove fleet utilization or actual lost bookings.
-
-ACCIDENT AND DAMAGE REPORTING
-Renter must immediately notify Company of any accident, collision, theft, or damage involving the Vehicle.
-
-Renter shall cooperate with Company and law enforcement and file a police report when required.
-
-Failure to promptly report may result in additional liability.
-
-INSURANCE AND INDEMNIFICATION
-Unless expressly provided in writing, Company does not provide primary insurance.
-
-Renter represents that they maintain valid automobile insurance and agrees to indemnify and hold Company harmless.
-
-OUT-OF-STATE TRAVEL POLICY
-Out-of-state travel is:
-
-[ ] Permitted
-[ ] Prohibited
-
-Unauthorized interstate travel constitutes material breach.
-
-GPS AND TELEMATICS CONSENT
-Renter acknowledges that the Vehicle may be equipped with GPS tracking for theft prevention, recovery, speed monitoring, and vehicle diagnostics.
-
-TRAFFIC VIOLATIONS, PARKING CITATIONS, TOLLS
-Renter shall be responsible for all violations, tickets, and toll charges incurred during the Rental Period.
-
-Company may transfer liability or charge the Renter directly, including administrative fees.
-
-ATTORNEYS’ FEES AND COLLECTION COSTS
-Renter agrees to pay all reasonable costs incurred by Company in enforcing this Agreement, including attorneys’ fees, court costs, and collection expenses.
-
-GOVERNING LAW AND VENUE
-This Agreement shall be governed by the laws of the State of Connecticut.
-
-Any disputes shall be brought exclusively in Connecticut Superior Court, Judicial District of New Britain.
-
-ENTIRE AGREEMENT; SEVERABILITY
-This Agreement constitutes the entire agreement between the Parties.
-
-If any provision is deemed unenforceable, the remaining provisions shall remain in full force.
-
-SIGNATURES
-
-Renter’s Signature: ___________________________________________
-
-Printed Name: _______________________________________________
-
-Date: ___________________
-
-Rent Me CT Representative: _____________________________________
-
-Date: ___________________
-
-RENT ME CT / ANCONA ENTERPRISES, INC.
-RENTAL ADDENDUM
-
-This Addendum is incorporated into and governed by the Master Vehicle Rental Agreement.
-
-RENTER INFORMATION
-Full Legal Name: _____________________________________________
-
-Address: ____________________________________________________
-
-City/State/Zip: ______________________________________________
-
-Phone: ______________________________________________________
-
-Email: ______________________________________________________
-
-Driver’s License #: __________________ State: ____ Exp: ____
-
-VEHICLE INFORMATION
-Make: ______________________
-
-Model: _____________________
-
-Year: ______________________
-
-VIN: _______________________
-
-License Plate: ______________
-
-Odometer Out: ______________
-
-RENTAL TERM
-Rental Start Date: __________ Time: ________
-
-Rental End Date: __________ Time: ________
-
-Return Location: ____________________________________________
-
-PRICING & FEES
-Daily Rate: $_________
-
-Young Driver Fee: $_________
-
-Unlimited Mileage: [ ] YES [ ] NO
-
-Unlimited Mileage Fee: $_________
-
-Mileage Included: 200 miles/day
-
-Excess Mileage: $0.35 per mile
-
-Security Deposit: $_________
-
-Pick-Up / Drop-Off Fee (if applicable): $_________
-
-OUT-OF-STATE TRAVEL
-[ ] Permitted
-[ ] Prohibited
-
-ADDITIONAL AUTHORIZED DRIVERS
-Name: ________________________ License #: ___________________
-
-Name: ________________________ License #: ___________________
-
-ACKNOWLEDGMENT
-Renter acknowledges and agrees to all terms of the Master Agreement.
-
-Renter Signature: __________________________ Date: __________
-
-Company Representative: ____________________ Date: __________
-`;
 
 function App() {
   const initialUrlParams = new URLSearchParams(window.location.search);
@@ -529,9 +290,9 @@ function App() {
   useEffect(() => {
     if (session?.user?.id) {
       setPortalDataReady(false);
-      loadPortalData(session.user.id);
+      loadPortalData(session.user.id, { stripeReturnRetry: returningFromStripeIdentity });
     }
-  }, [session]);
+  }, [session, returningFromStripeIdentity]);
 
   useEffect(() => {
     if (!portalDataReady || !session?.access_token) return;
@@ -1123,7 +884,7 @@ function loadSavedBookingFromWebsite() {
     }
   }
 
-  async function loadPortalData(userId, { silent = false } = {}) {
+  async function loadPortalData(userId, { silent = false, stripeReturnRetry = false } = {}) {
     if (!silent) setLoading(true);
     setPortalHealth((current) => ({ ...current, refreshing: true }));
     let vehiclesQuery = supabase.from('vehicles').select('*');
@@ -1209,6 +970,12 @@ function loadSavedBookingFromWebsite() {
       label,
       message: userFacingPortalError(error, `${label} could not refresh.`),
     }));
+    const transientErrors = stripeReturnRetry
+      ? dataErrors.filter((item) => isTransientPortalError(item.message))
+      : [];
+    const visibleDataErrors = stripeReturnRetry
+      ? dataErrors.filter((item) => !isTransientPortalError(item.message))
+      : dataErrors;
 
     if (profileResult.data) {
       setProfile(profileResult.data);
@@ -1238,11 +1005,16 @@ function loadSavedBookingFromWebsite() {
 
     setPortalHealth({
       refreshing: false,
-      errors: dataErrors,
+      errors: visibleDataErrors,
       lastUpdated: new Date().toISOString(),
     });
     setPortalDataReady(true);
     if (!silent) setLoading(false);
+    if (transientErrors.length) {
+      window.setTimeout(() => {
+        loadPortalData(userId, { silent: true });
+      }, 900);
+    }
   }
 
   async function handleAuth(event) {
@@ -2201,37 +1973,53 @@ async function verifyPhoneCode() {
     setWizardOpen(true);
   }
 
-  async function callStripeIdentity(action, redirectToStripe = false) {
+  async function callStripeIdentity(action, redirectToStripe = false, retryTransientReturn = true) {
     if (!session?.access_token || identitySaving) return null;
     setIdentitySaving(true);
-    const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stripe-web-hook`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${session.access_token}`,
-      },
-      body: JSON.stringify({
-        action,
-        returnUrl: `${window.location.origin}${window.location.pathname}?identity=return`,
-      }),
-    });
-    const data = await response.json().catch(() => null);
-    setIdentitySaving(false);
-    if (!response.ok || data?.error) {
-      notify(data?.error || `Identity verification could not be loaded (${response.status}).`);
+    try {
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stripe-web-hook`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          action,
+          returnUrl: `${window.location.origin}${window.location.pathname}?identity=return`,
+        }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || data?.error) {
+        notify(data?.error || `Stripe Identity could not be opened (${response.status}). Try again.`);
+        return null;
+      }
+      setProfile((current) => current ? {
+        ...current,
+        identity_verification_status: data.status,
+        identity_verification_error_code: data.errorCode ?? current.identity_verification_error_code ?? null,
+      } : current);
+      if (data.verified) {
+        notify('Stripe Identity verification is complete.', 'success');
+        await loadPortalData(session.user.id, { silent: true });
+      } else if (data.status === 'processing') {
+        notify('Stripe is still checking your identity. Wait a moment, then select Refresh status.');
+      } else if (redirectToStripe && data.url) {
+        window.location.assign(data.url);
+      }
+      return data;
+    } catch (error) {
+      if (returningFromStripeIdentity && retryTransientReturn && isTransientPortalError(error)) {
+        window.setTimeout(() => {
+          callStripeIdentity(action, false, false);
+        }, 900);
+        return null;
+      }
+      notify(userFacingPortalError(error, 'Stripe Identity could not refresh. Select Refresh status to try again.'), 'error');
       return null;
+    } finally {
+      setIdentitySaving(false);
     }
-    setProfile((current) => current ? { ...current, identity_verification_status: data.status } : current);
-    if (data.verified) {
-      notify('Stripe Identity verification is complete.', 'success');
-      await loadPortalData(session.user.id);
-    } else if (data.status === 'processing') {
-      notify('Stripe is processing your identity verification. Refresh again shortly.');
-    } else if (redirectToStripe && data.url) {
-      window.location.assign(data.url);
-    }
-    return data;
   }
 
   function startIdentityVerification() {
@@ -3819,9 +3607,14 @@ function WizardModal({
             <IdentityVerificationPanel
               status={identityStatus}
               verified={identityVerified}
+              errorCode={profile?.identity_verification_error_code}
               saving={identitySaving}
               onStart={startIdentityVerification}
               onRefresh={() => refreshIdentityVerification(true)}
+              onEditProfile={() => {
+                setWizardReminder(null);
+                setWizardStep(0);
+              }}
             />
           )}
 
@@ -3961,6 +3754,29 @@ function AgreementModal({
   onClose,
 }) {
   const dialogRef = useDialogFocus(onClose);
+  const scrollRef = useRef(null);
+  const alreadySigned = Boolean(currentRental?.agreement_snapshot);
+  const [agreementReviewed, setAgreementReviewed] = useState(alreadySigned);
+  const displayedAgreement = currentRental?.agreement_snapshot || agreementText;
+  const displayedSignatureImage = extractSignatureImage(displayedAgreement);
+  const printableAgreement = String(displayedAgreement || '').replace(
+    /Drawn Signature Image:\s*data:image\/png;base64,[^\s]+/,
+    'Drawn Signature Image: embedded below',
+  );
+
+  function trackAgreementReview() {
+    const reviewBox = scrollRef.current;
+    if (!reviewBox || agreementReviewed) return;
+    const reachedEnd = reviewBox.scrollTop + reviewBox.clientHeight >= reviewBox.scrollHeight - 24;
+    if (reachedEnd) setAgreementReviewed(true);
+  }
+
+  useEffect(() => {
+    const reviewBox = scrollRef.current;
+    if (!reviewBox || alreadySigned) return;
+    if (reviewBox.scrollHeight <= reviewBox.clientHeight + 24) setAgreementReviewed(true);
+  }, [alreadySigned, displayedAgreement]);
+
   return (
     <div className="modal-backdrop" role="presentation">
       <div ref={dialogRef} className="agreement-modal" role="dialog" aria-modal="true" aria-labelledby="agreement-modal-title" tabIndex="-1">
@@ -3974,16 +3790,29 @@ function AgreementModal({
           </button>
         </div>
 
-        <div className="agreement-scroll-box">
-          <pre>{agreementText}</pre>
+        <div className={`agreement-review-status ${agreementReviewed ? 'complete' : ''}`} role="status" aria-live="polite">
+          {alreadySigned
+            ? 'This is the exact signed agreement stored with your rental.'
+            : agreementReviewed
+              ? 'Full agreement reviewed. The acknowledgment and signature fields are unlocked below.'
+              : 'Review the complete agreement and scroll to the bottom to unlock signing.'}
+        </div>
+
+        <div ref={scrollRef} className="agreement-scroll-box" onScroll={trackAgreementReview} tabIndex="0" aria-label="Complete rental agreement">
+          <pre>{printableAgreement}</pre>
+          {alreadySigned && displayedSignatureImage && <div className="agreement-stored-signature">
+            <strong>Stored electronic signature</strong>
+            <img src={displayedSignatureImage} alt={`Electronic signature for ${currentRental.agreement_signature_name || 'renter'}`} />
+          </div>}
         </div>
 
         <div className="agreement-sign-box">
-          <label className="checkbox-row">
+          {!alreadySigned && <><label className="checkbox-row">
             <input
               type="checkbox"
               checked={agreementChecked}
               onChange={(e) => setAgreementChecked(e.target.checked)}
+              disabled={!agreementReviewed}
             />
             I have read and agree to the rental agreement.
           </label>
@@ -3999,6 +3828,7 @@ function AgreementModal({
           </label>
 
           <SignaturePad value={signatureImageData} onChange={setSignatureImageData} />
+          </>}
 
           <div className="button-row end-row">
             <button className="secondary-btn" type="button" onClick={onClose}>Cancel</button>
@@ -4007,9 +3837,14 @@ function AgreementModal({
                 Download Agreement
               </button>
             )}
-            <button className="primary-btn" type="button" onClick={signAgreement} disabled={agreementSaving}>
+            {!alreadySigned && <button
+              className="primary-btn"
+              type="button"
+              onClick={signAgreement}
+              disabled={agreementSaving || !agreementReviewed || !agreementChecked || !signatureName.trim() || !signatureImageData}
+            >
               <FileSignature size={17} /> {agreementSaving ? 'Signing...' : 'Sign Agreement'}
-            </button>
+            </button>}
           </div>
         </div>
       </div>
@@ -4170,6 +4005,11 @@ function userFacingPortalError(error, fallback = 'Something went wrong. Please t
   if (/jwt|token|session|not authenticated/i.test(message)) return 'Your secure session needs to be refreshed. Sign in again and retry.';
   if (/duplicate key|already exists/i.test(message)) return 'That update was already recorded. Refresh to see the latest status.';
   return fallback;
+}
+
+function isTransientPortalError(error) {
+  const message = String(error?.message || error || '').trim();
+  return /failed to fetch|network|load failed|connection|timeout/i.test(message);
 }
 
 function validateDocumentFile(file) {
@@ -4663,7 +4503,15 @@ function PreviewCheckout({
           </PreviewCheckoutSection>
 
           <PreviewCheckoutSection number="2" title="Identity verification" summary={identityVerified ? 'Identity verified securely by Stripe' : identityStatus === 'processing' ? 'Verification processing' : 'Government ID and selfie'} completed={identityVerified} open={activeSection === 'identity'} onOpen={() => setActiveSection('identity')}>
-            <IdentityVerificationPanel status={identityStatus} verified={identityVerified} saving={identitySaving} onStart={startIdentityVerification} onRefresh={() => refreshIdentityVerification(true)} />
+            <IdentityVerificationPanel
+              status={identityStatus}
+              verified={identityVerified}
+              errorCode={profile?.identity_verification_error_code}
+              saving={identitySaving}
+              onStart={startIdentityVerification}
+              onRefresh={() => refreshIdentityVerification(true)}
+              onEditProfile={() => setActiveSection('contact')}
+            />
           </PreviewCheckoutSection>
 
           <PreviewCheckoutSection number="3" title="Driver documents" summary={documentsComplete ? 'License and insurance uploaded' : `${licenseUploaded ? 'License uploaded' : 'License required'} • ${insuranceUploaded ? 'Insurance uploaded' : 'Insurance required'}`} completed={documentsComplete} open={activeSection === 'documents'} onOpen={() => setActiveSection('documents')}>
@@ -4976,21 +4824,175 @@ function Metric({ icon: Icon, label, value }) {
   );
 }
 
-function IdentityVerificationPanel({ status, verified, saving, onStart, onRefresh }) {
+function identityMatchResults(status, errorCode) {
+  const code = String(errorCode || '').toLowerCase();
+  if (status === 'verified') {
+    return [
+      { label: 'Legal name', result: 'Match confirmed', matched: true },
+      { label: 'Date of birth', result: 'Match confirmed', matched: true },
+    ];
+  }
+  if (code === 'name_mismatch') {
+    return [
+      { label: 'Legal name', result: 'Does not match', matched: false },
+      { label: 'Date of birth', result: 'Match confirmed', matched: true },
+    ];
+  }
+  if (code === 'date_of_birth_mismatch') {
+    return [
+      { label: 'Legal name', result: 'Match confirmed', matched: true },
+      { label: 'Date of birth', result: 'Does not match', matched: false },
+    ];
+  }
+  if (code === 'identity_details_mismatch') {
+    return [
+      { label: 'Legal name', result: 'Does not match', matched: false },
+      { label: 'Date of birth', result: 'Does not match', matched: false },
+    ];
+  }
+  return [];
+}
+
+function identityCorrectionGuidance(errorCode) {
+  const code = String(errorCode || '').toLowerCase();
+  if (code === 'date_of_birth_mismatch') {
+    return {
+      title: 'Your saved date of birth does not match your government ID',
+      explanation: 'Correct the date of birth in Renter details so it exactly matches the ID you submitted.',
+      fix: 'Select the correction button below, update the date of birth, save and continue, then run Stripe Identity again.',
+      action: 'Correct date of birth',
+      preservesContact: true,
+    };
+  }
+  if (code === 'name_mismatch') {
+    return {
+      title: 'Your saved legal name does not match your government ID',
+      explanation: 'Correct your full legal name in Renter details so spelling, first name, and last name match the ID you submitted.',
+      fix: 'Select the correction button below, update the legal name, save and continue, then run Stripe Identity again.',
+      action: 'Correct legal name',
+      preservesContact: true,
+    };
+  }
+  if (code === 'identity_details_mismatch') {
+    return {
+      title: 'Your saved legal name and date of birth do not match your government ID',
+      explanation: 'Correct both fields in Renter details so they exactly match the ID you submitted.',
+      fix: 'Select the correction button below, update both highlighted details, save and continue, then run Stripe Identity again.',
+      action: 'Correct renter details',
+      preservesContact: true,
+    };
+  }
+  if (code === 'profile_details_changed') {
+    return {
+      title: 'Your corrected renter details are saved',
+      explanation: 'Start a new Stripe Identity check so Stripe can compare your ID with the corrected information.',
+      fix: 'Select Run Stripe Identity again and complete the new ID and selfie check.',
+      action: '',
+      preservesContact: true,
+    };
+  }
+  const stripeFailures = {
+    abandoned: {
+      title: 'Your Stripe Identity check was not submitted',
+      explanation: 'The ID and selfie check was closed before the final submission.',
+      fix: 'Start Stripe Identity again and continue until Stripe confirms the submission is complete.',
+    },
+    consent_declined: {
+      title: 'Stripe Identity consent was not accepted',
+      explanation: 'Stripe cannot run the ID and selfie check without the required consent.',
+      fix: 'Start again and accept Stripe’s verification consent. Contact Rent Me CT if you need help with an alternative review.',
+    },
+    device_not_supported: {
+      title: 'Stripe could not use this device’s camera',
+      explanation: 'Camera access was unavailable or not allowed.',
+      fix: 'Allow camera access and retry, or use a different phone with a working camera.',
+    },
+    document_expired: {
+      title: 'The government ID you submitted is expired',
+      explanation: 'Stripe requires a current, unexpired photo ID.',
+      fix: 'Retry with an unexpired driver license, state ID, or passport.',
+    },
+    document_type_not_supported: {
+      title: 'Stripe does not accept the document type you submitted',
+      explanation: 'The uploaded document is not a supported government photo ID.',
+      fix: 'Retry with a driver license, state ID, or passport.',
+    },
+    document_type_not_allowed: {
+      title: 'Stripe does not accept the document type you submitted',
+      explanation: 'The uploaded document is not allowed for this government ID check.',
+      fix: 'Retry with a driver license, state ID, or passport.',
+    },
+    document_unverified_other: {
+      title: 'Stripe could not verify the government ID',
+      explanation: 'The document image or document details could not be verified.',
+      fix: 'Retry with the original, unexpired ID in good lighting. Make sure every edge and all text are clear.',
+    },
+    selfie_document_missing_photo: {
+      title: 'The submitted ID does not contain a face photo',
+      explanation: 'Stripe cannot compare a selfie with an ID that has no visible portrait.',
+      fix: 'Retry with a supported government ID that includes a clear photo of your face.',
+    },
+    selfie_face_mismatch: {
+      title: 'The selfie does not match the photo on the ID',
+      explanation: 'Stripe could not confirm that the person taking the selfie is the person shown on the ID.',
+      fix: 'The person named on the rental must retry using their own ID and live selfie in good lighting.',
+    },
+    selfie_unverified_other: {
+      title: 'Stripe could not verify the selfie',
+      explanation: 'The selfie image was not clear enough to complete the face check.',
+      fix: 'Retry in good lighting with your full face visible and follow Stripe’s camera prompts.',
+    },
+    selfie_manipulated: {
+      title: 'Stripe could not accept the selfie image',
+      explanation: 'Stripe requires a new, live camera image without filters, screenshots, or image edits.',
+      fix: 'Retry and take a fresh live selfie using Stripe’s camera screen.',
+    },
+    country_not_supported: {
+      title: 'Stripe cannot verify an ID from this country',
+      explanation: 'The issuing country is not currently supported by Stripe Identity.',
+      fix: 'Contact Rent Me CT for help with an alternative identity review.',
+    },
+    under_supported_age: {
+      title: 'Stripe cannot verify this age',
+      explanation: 'Stripe reported that the person is below the supported age for Identity verification.',
+      fix: 'Check that the saved birthday and submitted ID are correct, then contact Rent Me CT.',
+    },
+  };
+  if (stripeFailures[code]) return { ...stripeFailures[code], action: '', preservesContact: false };
+  return null;
+}
+
+function IdentityVerificationPanel({ status, verified, errorCode, saving, onStart, onRefresh, onEditProfile }) {
   const requiresInput = ['unverified', 'requires_input', 'canceled', 'redacted'].includes(status);
+  const matchResults = identityMatchResults(status, errorCode);
+  const resultsUnavailable = errorCode === 'identity_results_access_required';
+  const correction = identityCorrectionGuidance(errorCode);
   return <div className={`identity-verification-panel ${verified ? 'verified' : status}`}>
     <ShieldCheck size={30} />
     <div>
-      <strong>{verified ? 'Identity verified' : status === 'processing' ? 'Stripe is checking your submission' : 'Verify your government ID and selfie'}</strong>
+      <strong className="identity-status-title">{verified ? 'Identity verified' : status === 'processing' ? 'Stripe is checking your submission' : correction?.title || 'Verify your government ID and selfie'}</strong>
       <span>{verified
         ? 'Stripe confirmed the document and selfie match. Rent Me CT stores only the verification status and session reference.'
         : status === 'processing'
           ? 'Most checks finish quickly. Use refresh if this page does not update automatically.'
-          : 'You will continue to Stripe’s secure hosted verification. Stripe captures the ID and selfie; do not email these images to us.'}</span>
+          : correction?.explanation || 'You will continue to Stripe’s secure hosted verification. Stripe captures the ID and selfie; do not email these images to us.'}</span>
+      {matchResults.length > 0 && <div className="identity-match-results" aria-label="Stripe Identity comparison results">
+        {matchResults.map((item) => <span className={item.matched ? 'matched' : 'mismatch'} key={item.label}>
+          <strong>{item.label}</strong>
+          {item.result}
+        </span>)}
+      </div>}
+      {correction && <div className="identity-fix-guidance" role="alert">
+        <strong>How to fix this</strong>
+        <span>{correction.fix}</span>
+        {correction.preservesContact && <small>Your verified email stays verified. Your phone also stays verified as long as you do not change the phone number.</small>}
+        {correction.action && onEditProfile && <button type="button" className="identity-correction-button" onClick={onEditProfile}>{correction.action}</button>}
+      </div>}
+      {resultsUnavailable && <span className="identity-results-warning" role="alert">Stripe received your submission, but Rent Me CT could not securely retrieve the comparison results. You do not need to resubmit unless we contact you.</span>}
       <small>This identity check does not replace Rent Me CT’s separate driver-license validity and insurance review.</small>
       <div className="identity-verification-actions">
-        {requiresInput && <button type="button" className="primary-btn" onClick={onStart} disabled={saving}>{saving ? 'Opening Stripe...' : status === 'requires_input' ? 'Retry With Stripe Identity' : 'Start Stripe Identity'}</button>}
-        {!verified && <button type="button" className="secondary-btn" onClick={onRefresh} disabled={saving}>{saving ? 'Checking...' : 'Refresh Status'}</button>}
+        {requiresInput && <button type="button" className="primary-btn" onClick={onStart} disabled={saving}>{saving ? 'Opening Stripe…' : correction ? 'Run Stripe Identity again' : status === 'requires_input' ? 'Retry with Stripe Identity' : 'Start Stripe Identity'}</button>}
+        {!verified && <button type="button" className="secondary-btn" onClick={onRefresh} disabled={saving}>{saving ? 'Checking…' : 'Refresh status'}</button>}
       </div>
     </div>
   </div>;
