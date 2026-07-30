@@ -1308,6 +1308,7 @@ input[readonly] {
 .identity-match-results>span strong{font-size:12px;text-transform:uppercase;letter-spacing:.08em}
 .identity-match-results>span.matched{border-color:rgba(141,255,161,.42);color:#d9ffe0}
 .identity-match-results>span.mismatch{border-color:rgba(255,126,126,.52);color:#ffd9d9}
+.identity-results-warning{padding:10px 12px;border:1px solid rgba(242,200,107,.45);border-radius:10px;background:rgba(242,200,107,.1);color:#fff0c7!important}
 .identity-verification-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px}
 @media(max-width:620px){.identity-verification-panel{display:grid}.identity-match-results{grid-template-columns:1fr}.identity-verification-actions button{width:100%}}
 .wizard-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 22px; border-top: 1px solid var(--line); flex-wrap: wrap; }
