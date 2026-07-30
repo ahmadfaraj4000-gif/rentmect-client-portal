@@ -2,20 +2,21 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, CalendarDays, Car, CheckCircle2, ChevronRight, Search, ShieldCheck } from 'lucide-react';
 import { supabase } from './supabaseClient';
 import logoMobileUrl from './assets/logo-mobile.png';
+import FLEET_GALLERY_IMAGES from './fleetGalleryImages';
 import './booking-preview-fleet.css';
 
 const TEST_VEHICLE_ID = '00000000-0000-4000-8000-000000000015';
 const TEST_VEHICLE_ENABLED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_BOOKING_FLOW_TEST === 'true';
 const PUBLIC_ASSET_BASE = (import.meta.env.VITE_PUBLIC_FLEET_ASSET_BASE_URL || 'https://rentmect.com/assets').replace(/\/$/, '');
 const FALLBACK_IMAGE = `${PUBLIC_ASSET_BASE}/Benz-CLS-AMG-550-224.webp`;
-const TIME_OPTIONS = Array.from({ length: 25 }, (_, index) => {
+const TIME_OPTIONS = Array.from({ length: 30 }, (_, index) => {
   const minutes = 9 * 60 + index * 30;
   const hour = Math.floor(minutes / 60);
   const minute = minutes % 60;
-  const period = hour >= 12 ? 'PM' : 'AM';
+  const period = hour >= 12 && hour < 24 ? 'PM' : 'AM';
   const displayHour = hour % 12 || 12;
   return `${displayHour}:${String(minute).padStart(2, '0')} ${period}`;
-}).filter((time) => time !== '9:30 PM');
+});
 
 function dateInput(offsetDays = 0) {
   const date = new Date();
@@ -37,15 +38,17 @@ function list(value) {
 
 function vehicleImages(vehicle) {
   const uploaded = list(vehicle?.image_urls);
-  if (uploaded.length) return uploaded;
   if (TEST_VEHICLE_ENABLED && vehicle?.id === TEST_VEHICLE_ID) {
-    return [FALLBACK_IMAGE, `${PUBLIC_ASSET_BASE}/fleet-2/224-1.webp`, `${PUBLIC_ASSET_BASE}/fleet-2/224-2.webp`];
+    return [FALLBACK_IMAGE, ...FLEET_GALLERY_IMAGES['224']];
   }
   const normalized = String(vehicle?.name || '')
     .replace(/Mercedes[- ]Benz/i, 'Mercedes-Benz')
     .replace(/[^a-zA-Z0-9]+/g, '-')
     .replace(/^-|-$/g, '');
-  return normalized ? [`${PUBLIC_ASSET_BASE}/${normalized}.webp`] : [FALLBACK_IMAGE];
+  const fleet = String(vehicle?.name || '').match(/#([a-z0-9]+)/i)?.[1]?.toUpperCase() || '';
+  const primary = uploaded[0] || (normalized ? `${PUBLIC_ASSET_BASE}/${normalized}.webp` : FALLBACK_IMAGE);
+  const supporting = FLEET_GALLERY_IMAGES[fleet] || uploaded.slice(1);
+  return [...new Set([primary, ...supporting].filter(Boolean))].slice(0, 5);
 }
 
 function money(value) {
@@ -215,7 +218,7 @@ export default function BookingPreviewFleet() {
             <div className={`supabase-preview-availability ${available ? 'available' : 'unavailable'}`}><span>{checking ? 'Checking calendar…' : available ? 'Available for these dates' : selectedAvailability?.reason || 'Unavailable for these dates'}</span></div>
             <div className="supabase-preview-total"><span>{days || 0} rental days</span><strong>{money(Number(selectedVehicle.daily_rate || 0) * days)}</strong></div>
             <button type="button" onClick={startBooking} disabled={!available || checking || starting}>{starting ? 'Starting secure checkout…' : 'Book this vehicle'}<ChevronRight size={18}/></button>
-            <small><ShieldCheck size={14}/> Supabase calendar verified. A final atomic availability check runs before a rental is created.</small>
+            <small><ShieldCheck size={14}/> Availability is confirmed again before checkout starts.</small>
             {error && <p className="supabase-preview-error">{error}</p>}
           </aside>
         </div>
@@ -224,9 +227,9 @@ export default function BookingPreviewFleet() {
   }
 
   return <div className="supabase-preview-shell">
-    <PreviewHeader label="Supabase Booking Preview" />
+    <PreviewHeader label="Rent Me CT Vehicles" />
     <main className="supabase-preview-fleet">
-      <section className="supabase-preview-hero"><p className="eyebrow">Rent Me CT fleet</p><h1>Choose your rental</h1><p>This private preview reads published vehicles and availability directly from the admin calendar.</p></section>
+      <section className="supabase-preview-hero"><p className="eyebrow">Rent Me CT fleet</p><h1>Choose your rental</h1><p>Choose your dates, see available vehicles, and start your reservation.</p></section>
       <section className="supabase-preview-date-panel"><h2>Choose rental dates</h2><TripFields trip={trip} updateTrip={updateTrip} /></section>
       <section className="supabase-preview-filterbar">
         <div className="supabase-preview-search"><Search size={18}/><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search the fleet" /></div>
@@ -256,7 +259,7 @@ function previewError(error, fallback) {
 }
 
 function PreviewHeader({ onBack, label }) {
-  return <header className="supabase-preview-header"><div>{onBack ? <button type="button" onClick={onBack}><ArrowLeft size={18}/>{label}</button> : <span>{label}</span>}<img src={logoMobileUrl} alt="Rent Me CT"/><span className="secure"><ShieldCheck size={16}/> Calendar-connected preview</span></div></header>;
+  return <header className="supabase-preview-header"><div>{onBack ? <button type="button" onClick={onBack}><ArrowLeft size={18}/>{label}</button> : <span>{label}</span>}<img src={logoMobileUrl} alt="Rent Me CT"/><span className="secure"><ShieldCheck size={16}/> Secure booking</span></div></header>;
 }
 
 function TripFields({ trip, updateTrip }) {

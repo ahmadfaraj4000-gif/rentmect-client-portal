@@ -6,6 +6,7 @@ import {
   CalendarDays,
   Car,
   CheckCircle2,
+  ChevronLeft,
   ChevronRight,
   Clock,
   CreditCard,
@@ -22,6 +23,7 @@ import {
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
 import BookingPreviewFleet from './BookingPreviewFleet';
+import FLEET_GALLERY_IMAGES from './fleetGalleryImages';
 import logoUrl from './assets/logo-sidebar.png';
 import logoMobileUrl from './assets/logo-mobile.png';
 import './styles.css';
@@ -47,7 +49,20 @@ const TEST_VEHICLE_PREVIEW_IMAGES = [
   `${PUBLIC_FLEET_ASSET_BASE_URL}/fleet-2/224-1.webp`,
   `${PUBLIC_FLEET_ASSET_BASE_URL}/fleet-2/224-2.webp`,
   `${PUBLIC_FLEET_ASSET_BASE_URL}/fleet-2/224-3.webp`,
+  `${PUBLIC_FLEET_ASSET_BASE_URL}/fleet-2/224-4.webp`,
 ];
+const VEHICLE_GALLERY_JPG_IMAGES = new Set([
+  '001-2', '002-1', '002-2', '100-3', '148-1', '157-2',
+  '191-1', '191-2', '210-1', '210-2', '225-2', '321-1',
+  '451-2', '474-1', '649-2', '656-1', '656-2', '656-3',
+]);
+const VEHICLE_FEATURE_GROUPS = {
+  suv: new Set(['100', '148', '149', '203', '210', '225', '234', '474', '997']),
+  compactSuv: new Set(['649', '650']),
+  hatchback: new Set(['656']),
+  truck: new Set(['191']),
+  van: new Set(['451', '452']),
+};
 const TEST_VEHICLE_FEATURES = [
   'Backup camera', 'Bluetooth', 'Apple CarPlay', 'AUX input',
   'USB charger', 'GPS', 'Keyless entry', 'Automatic transmission',
@@ -317,7 +332,10 @@ Company Representative: ____________________ Date: __________
 `;
 
 function App() {
-  const previewRoute = new URLSearchParams(window.location.search).get('preview') || '';
+  const initialUrlParams = new URLSearchParams(window.location.search);
+  const previewRoute = initialUrlParams.get('preview') || '';
+  const cars2BookingHandoff = initialUrlParams.get('source') === 'cars2';
+  const [returningFromStripeIdentity] = useState(() => initialUrlParams.get('identity') === 'return');
   const bookingPreviewFleetMode = previewRoute === 'fleet';
   const bookingPreviewCheckoutMode = previewRoute === '1';
   const [session, setSession] = useState(null);
@@ -331,7 +349,13 @@ function App() {
   const [agreementSaving, setAgreementSaving] = useState(false);
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [discountSaving, setDiscountSaving] = useState(false);
-  const [discountInput, setDiscountInput] = useState('');
+  const [discountInput, setDiscountInput] = useState(() =>
+    String(new URLSearchParams(window.location.search).get('promo') || '')
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9-]/g, '')
+      .slice(0, 24)
+  );
   const [identitySaving, setIdentitySaving] = useState(false);
   const [returnSaving, setReturnSaving] = useState(false);
   const [extensionSaving, setExtensionSaving] = useState(false);
@@ -392,7 +416,7 @@ function App() {
   const [checkoutExpiresAt, setCheckoutExpiresAt] = useState('');
   const [checkoutIntent, setCheckoutIntent] = useState(false);
   const [checkoutWizardStarted, setCheckoutWizardStarted] = useState(false);
-  const [previewPage, setPreviewPage] = useState('details');
+  const [previewPage, setPreviewPage] = useState(() => cars2BookingHandoff ? 'checkout' : 'details');
   const [previewCheckoutSection, setPreviewCheckoutSection] = useState('contact');
   const [previewPortalOpen, setPreviewPortalOpen] = useState(false);
   const checkoutExpiryHandledRef = useRef('');
@@ -801,6 +825,15 @@ function App() {
   const pendingExtension = currentRentalExtensions.find((request) => request.status === 'pending');
   const pendingSameVehicleExtension = pendingExtension?.request_kind !== 'switch_car_continuation' ? pendingExtension : null;
   const approvedUnpaidExtension = currentRentalExtensions.find((request) => request.status === 'approved_pending_payment');
+  const openExtensionRequest = pendingExtension || approvedUnpaidExtension;
+  const extensionInsuranceDocument = openExtensionRequest
+    ? [...currentRentalDocuments]
+        .filter((document) =>
+          document.document_type === 'insurance' &&
+          document.extension_request_id === openExtensionRequest.id
+        )
+        .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))[0]
+    : null;
   const approvedSwitchExtension = currentRentalExtensions.find((request) =>
     request.status === 'approved_pending_payment' &&
     request.request_kind === 'switch_car_continuation'
@@ -1024,7 +1057,11 @@ function getBookingIdFromUrl() {
 
       if (!pendingBooking) return;
 
-      applyBookingDataToPortal(pendingBooking);
+      const handoffExpiresAt = new URLSearchParams(window.location.search).get('holdExpires') || '';
+      applyBookingDataToPortal({
+        ...pendingBooking,
+        expires_at: pendingBooking.expires_at || handoffExpiresAt,
+      });
 
       if (pendingBooking.vehicle_id) {
         const { data: pendingVehicle } = await supabase
@@ -1239,7 +1276,7 @@ function loadSavedBookingFromWebsite() {
     }
 
     setEmailOtpSent(true);
-    setMessage("Check your email for a secure sign-in link or one-time code. If you don't see it, check your spam or junk folder. First-time customers get an account automatically.");
+    setMessage(`Verification email sent to ${email}. Enter the one-time code from that email. If it is not in your inbox, open your SPAM folder now.`);
   }
 
   async function verifyEmailOtp(event) {
@@ -1460,7 +1497,8 @@ async function verifyPhoneCode() {
       return null;
     }
 
-    if (!isVehicleAvailableForDates(selectedVehicle, reservationForm, fleetRentals, currentRental?.id)) {
+    const bookingId = pendingBookingId || getBookingIdFromUrl();
+    if (!bookingId && !isVehicleAvailableForDates(selectedVehicle, reservationForm, fleetRentals, currentRental?.id)) {
       notify('This vehicle is not available for those dates. Please choose another vehicle or adjust your rental period.');
       setReservationForm((prev) => ({ ...prev, vehicleId: '' }));
       setWizardStep(1);
@@ -1473,7 +1511,6 @@ async function verifyPhoneCode() {
     }
 
     setReservationSaving(true);
-    const bookingId = pendingBookingId || getBookingIdFromUrl();
     const reservationParams = {
       p_pickup_date: reservationForm.pickupDate,
       p_return_date: reservationForm.returnDate,
@@ -1537,6 +1574,33 @@ async function verifyPhoneCode() {
     return rentalData;
   }
 
+  async function changeCheckoutDatesOrVehicle() {
+    const bookingId = pendingBookingId || getBookingIdFromUrl();
+    const abandonToken = new URLSearchParams(window.location.search).get('abandonToken') || '';
+    if (bookingId || currentRental?.id) {
+      setReservationSaving(true);
+      const { error } = await supabase.rpc('abandon_website_checkout', {
+        p_booking_id: bookingId || null,
+        p_abandon_token: abandonToken || null,
+        p_rental_id: currentRental?.id || null,
+      });
+      setReservationSaving(false);
+      if (error) {
+        notify(error.message || 'Your current checkout could not be released. Please retry.');
+        return;
+      }
+    }
+
+    try {
+      localStorage.removeItem('rentmect_pending_booking');
+      localStorage.removeItem('rentMeCtBooking');
+      localStorage.removeItem('pendingBooking');
+    } catch {
+      // The server-side hold is already released.
+    }
+    navigateToFleet(reservationForm);
+  }
+
   function startNewReservation() {
     setReservationForm({
       vehicleId: '',
@@ -1557,9 +1621,10 @@ async function verifyPhoneCode() {
     notify('Start a new reservation by choosing dates and a vehicle.');
   }
 
-  async function uploadDocument(event, documentType) {
+  async function uploadDocument(event, documentType, { createNew = false, extensionRequestId = null } = {}) {
     const file = event.target.files?.[0];
     if (!file || !session?.user?.id) return;
+    const uploadBusyKey = extensionRequestId ? 'extensionInsurance' : documentType;
     const validationError = validateDocumentFile(file);
     if (validationError) {
       notify(validationError, 'error');
@@ -1567,7 +1632,7 @@ async function verifyPhoneCode() {
       return;
     }
 
-    setDocumentUploadBusy((current) => ({ ...current, [documentType]: true }));
+    setDocumentUploadBusy((current) => ({ ...current, [uploadBusyKey]: true }));
     try {
       const rental = currentRental || (await createReservationIfNeeded());
 
@@ -1576,9 +1641,11 @@ async function verifyPhoneCode() {
         return;
       }
 
-    const existingDocument = documentType === 'license'
-      ? latestDocument(documents, 'license')
-      : latestDocument(documents.filter((document) => document.rental_id === rental.id), 'insurance');
+    const existingDocument = createNew
+      ? null
+      : documentType === 'license'
+        ? latestDocument(documents, 'license')
+        : latestDocument(documents.filter((document) => document.rental_id === rental.id), 'insurance');
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
     const existingPath = existingDocument?.file_path || existingDocument?.storage_path || existingDocument?.path;
     const path = existingPath || `${session.user.id}/${documentType}/${Date.now()}-${safeName}`;
@@ -1623,6 +1690,7 @@ async function verifyPhoneCode() {
         document_type: documentType,
         file_path: path,
         status: 'pending_review',
+        extension_request_id: extensionRequestId || null,
       })
       .select()
       .single();
@@ -1643,7 +1711,7 @@ async function verifyPhoneCode() {
     }
       if (event.target) event.target.value = '';
     } finally {
-      setDocumentUploadBusy((current) => ({ ...current, [documentType]: false }));
+      setDocumentUploadBusy((current) => ({ ...current, [uploadBusyKey]: false }));
     }
   }
 
@@ -2503,6 +2571,8 @@ async function verifyPhoneCode() {
           estimate={estimate}
           checkoutSecondsRemaining={checkoutSecondsRemaining}
           checkoutExpired={checkoutExpired}
+          directCheckout={cars2BookingHandoff}
+          changeCheckoutDatesOrVehicle={changeCheckoutDatesOrVehicle}
         />
       );
     }
@@ -2573,8 +2643,13 @@ async function verifyPhoneCode() {
           paymentSaving={paymentSaving}
           startStripeCheckout={startStripeCheckout}
           serviceFees={serviceFees}
+          discountInput={discountInput}
+          setDiscountInput={setDiscountInput}
+          discountSaving={discountSaving}
+          applyCustomerDiscount={applyCustomerDiscount}
           checkoutSecondsRemaining={checkoutSecondsRemaining}
           checkoutExpired={checkoutExpired}
+          changeCheckoutDatesOrVehicle={changeCheckoutDatesOrVehicle}
           signOut={signOut}
           openPortal={() => setPreviewPortalOpen(true)}
         />
@@ -2672,7 +2747,7 @@ async function verifyPhoneCode() {
               <MapPin size={18} /> Location
             </button>
             {!paymentPaid && <button className="primary-btn" onClick={beginWizard}>
-              <CheckCircle2 size={18} /> Continue Guided Steps
+              <CheckCircle2 size={18} /> {returningFromStripeIdentity ? 'RESUME CHECKOUT' : 'Continue Guided Steps'}
             </button>}
           </div>
         </header>
@@ -2846,6 +2921,33 @@ async function verifyPhoneCode() {
                     <button className="secondary-btn" type="button" onClick={cancelExtensionRequest} disabled={extensionSaving}>Cancel Extension Request</button>
                   </div>}
                   {approvedUnpaidExtension && <p className="auth-message">Approved extension is waiting for payment before the new return date becomes active.{approvedUnpaidExtension.payment_due_at ? ` Pay by ${new Date(approvedUnpaidExtension.payment_due_at).toLocaleString()} or the hold is released automatically.` : ''}</p>}
+                  {openExtensionRequest && <div className={`extension-insurance-step ${extensionInsuranceDocument?.status || 'missing'}`}>
+                    <div>
+                      <strong>New insurance required</strong>
+                      <span>
+                        {extensionInsuranceDocument?.status === 'approved'
+                          ? 'Approved for this extension.'
+                          : extensionInsuranceDocument?.status === 'pending_review'
+                            ? 'Uploaded and waiting for Rent Me CT approval.'
+                            : extensionInsuranceDocument?.status === 'rejected'
+                              ? 'The extension insurance was rejected. Upload a replacement.'
+                              : 'Upload proof that covers the requested continuation dates.'}
+                      </span>
+                    </div>
+                    {(!extensionInsuranceDocument || extensionInsuranceDocument.status === 'rejected') && <label className="secondary-btn">
+                      <Upload size={16}/> {documentUploadBusy.extensionInsurance ? 'Uploading…' : 'Upload New Insurance'}
+                      <input
+                        type="file"
+                        accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
+                        disabled={Boolean(documentUploadBusy.extensionInsurance)}
+                        onChange={(event) => uploadDocument(event, 'insurance', {
+                          createNew: true,
+                          extensionRequestId: openExtensionRequest.id,
+                        })}
+                        style={{ display: 'none' }}
+                      />
+                    </label>}
+                  </div>}
                   <input
                     type="date"
                     min={currentRental.return_date}
@@ -4178,6 +4280,76 @@ function ReturnReviewNotice({ report }) {
   );
 }
 
+function PreviewVehicleGallery({ vehicle, compact = false, badge = '' }) {
+  const images = getVehicleImages(vehicle);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const touchStartX = useRef(null);
+  const imageKey = images.join('|');
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [vehicle?.id, imageKey]);
+
+  const show = (requestedIndex) => {
+    setActiveIndex((requestedIndex + images.length) % images.length);
+  };
+
+  const recoverImage = (event, index) => {
+    const fallback = getVehicleImageFallback(vehicle, index);
+    const currentSource = event.currentTarget.getAttribute('src');
+    if (fallback && currentSource !== fallback) {
+      event.currentTarget.src = fallback;
+      return;
+    }
+    event.currentTarget.hidden = true;
+  };
+
+  return (
+    <section className={`preview-vehicle-gallery${compact ? ' compact' : ''}`} aria-label={`${vehicle?.name || 'Vehicle'} photos`}>
+      <div
+        className="preview-vehicle-gallery-frame"
+        onTouchStart={(event) => {
+          if (event.touches.length === 1) touchStartX.current = event.touches[0].clientX;
+        }}
+        onTouchEnd={(event) => {
+          if (touchStartX.current === null || !event.changedTouches.length) return;
+          const distance = event.changedTouches[0].clientX - touchStartX.current;
+          touchStartX.current = null;
+          if (Math.abs(distance) >= 42) show(activeIndex + (distance > 0 ? -1 : 1));
+        }}
+      >
+        <img
+          src={images[activeIndex]}
+          alt={`${vehicle?.name || 'Vehicle'} photo ${activeIndex + 1} of ${images.length}`}
+          onError={(event) => recoverImage(event, activeIndex)}
+        />
+        {badge && <span className="preview-badge">{badge}</span>}
+        <button className="preview-gallery-arrow previous" type="button" onClick={() => show(activeIndex - 1)} aria-label="Show previous vehicle photo">
+          <ChevronLeft size={compact ? 18 : 22} />
+        </button>
+        <button className="preview-gallery-arrow next" type="button" onClick={() => show(activeIndex + 1)} aria-label="Show next vehicle photo">
+          <ChevronRight size={compact ? 18 : 22} />
+        </button>
+        <span className="preview-gallery-counter" aria-live="polite">{activeIndex + 1} / {images.length}</span>
+      </div>
+      <div className="preview-gallery-thumbnails" aria-label="Choose a vehicle photo">
+        {images.map((image, index) => (
+          <button
+            className={index === activeIndex ? 'active' : ''}
+            type="button"
+            key={`${image}-${index}`}
+            onClick={() => show(index)}
+            aria-label={`Show ${vehicle?.name || 'vehicle'} photo ${index + 1}`}
+            aria-current={index === activeIndex ? 'true' : undefined}
+          >
+            <img src={image} alt="" onError={(event) => recoverImage(event, index)} />
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function PreviewGuestExperience({
   page,
   setPage,
@@ -4196,11 +4368,12 @@ function PreviewGuestExperience({
   estimate,
   checkoutSecondsRemaining,
   checkoutExpired,
+  directCheckout = false,
+  changeCheckoutDatesOrVehicle,
 }) {
   const days = Math.max(1, getRentalDays(reservationForm.pickupDate, reservationForm.returnDate));
   const displayVehicle = vehicle || { id: BOOKING_FLOW_TEST_VEHICLE_ID, name: 'Booking Flow Test Vehicle', brand: 'Rent Me CT', model: 'Checkout Preview', vehicle_type: 'Internal Test', daily_rate: 1, security_deposit: 300, description: 'Internal test vehicle for the booking flow.', features: TEST_VEHICLE_FEATURES };
-  const images = getVehicleImages(displayVehicle);
-  const features = Array.isArray(displayVehicle.features) && displayVehicle.features.length ? displayVehicle.features : TEST_VEHICLE_FEATURES;
+  const features = getVehicleFeatures(displayVehicle);
   const rental = Number(estimate?.rentalTotal ?? Number(displayVehicle.daily_rate || 0) * days);
   const serviceFeeTotal = Number(estimate?.serviceFeeTotal || 0);
   const tax = Number(estimate?.taxAmount ?? rental * CT_TAX_RATE);
@@ -4208,10 +4381,17 @@ function PreviewGuestExperience({
   const total = rental + serviceFeeTotal + tax + deposit;
   const update = (key, value) => setAuthForm({ ...authForm, [key]: value });
 
+  if (checkoutExpired) {
+    return <CheckoutExpiredScreen reservationForm={reservationForm} />;
+  }
+
   if (page === 'checkout') {
     return (
       <div className="preview-guest-shell">
-        <PreviewTopbar onBack={() => setPage('details')} label="Back to vehicle details" />
+        <PreviewTopbar
+          onBack={() => directCheckout ? changeCheckoutDatesOrVehicle() : setPage('details')}
+          label={directCheckout ? 'Change dates or vehicle' : 'Back to vehicle details'}
+        />
         <main className="preview-checkout-layout preview-guest-checkout">
           <section className="preview-checkout-column">
             <div className="preview-page-heading">
@@ -4240,7 +4420,7 @@ function PreviewGuestExperience({
                     required
                   />
                 </label>
-                {emailOtpSent && (
+                {emailOtpSent && <>
                   <label>
                     <span>One-time email code</span>
                     <input
@@ -4252,7 +4432,8 @@ function PreviewGuestExperience({
                       required
                     />
                   </label>
-                )}
+                  <EmailVerificationSpamNotice email={authForm.email} />
+                </>}
                 <button className="preview-primary-button" type="submit" disabled={emailAuthBusy || checkoutExpired}>
                   {emailAuthBusy ? 'Please wait…' : emailOtpSent ? 'Verify email & continue' : 'Continue with email'}
                   <ChevronRight size={18} />
@@ -4290,15 +4471,7 @@ function PreviewGuestExperience({
     <div className="preview-detail-shell">
       <PreviewTopbar />
       <main className="preview-detail-main">
-        <section className="preview-gallery" aria-label={`${displayVehicle.name} photos`}>
-          <img className="preview-gallery-featured" src={images[0]} alt={`${displayVehicle.name} featured view`} />
-          <div className="preview-gallery-stack">
-            {images.slice(1, 3).map((image, index) => (
-              <img key={image} src={image} alt={`${displayVehicle.name} view ${index + 2}`} />
-            ))}
-          </div>
-          <span className="preview-badge">Preview vehicle</span>
-        </section>
+        <PreviewVehicleGallery vehicle={displayVehicle} badge="Preview vehicle" />
 
         <div className="preview-detail-layout">
           <div className="preview-detail-copy">
@@ -4404,8 +4577,13 @@ function PreviewCheckout({
   paymentSaving,
   startStripeCheckout,
   serviceFees,
+  discountInput,
+  setDiscountInput,
+  discountSaving,
+  applyCustomerDiscount,
   checkoutSecondsRemaining,
   checkoutExpired,
+  changeCheckoutDatesOrVehicle,
   signOut,
   openPortal,
 }) {
@@ -4444,6 +4622,10 @@ function PreviewCheckout({
     );
   }
 
+  if (checkoutExpired) {
+    return <CheckoutExpiredScreen reservationForm={reservationForm} />;
+  }
+
   return (
     <div className="preview-checkout-shell">
       <PreviewTopbar />
@@ -4454,6 +4636,9 @@ function PreviewCheckout({
               <p className="eyebrow">Verify & pay</p>
               <h1>Complete your booking.</h1>
               <p>{completedCount} of 5 sections complete • Signed in as {userEmail}</p>
+              <button className="preview-change-booking-button" type="button" onClick={changeCheckoutDatesOrVehicle} disabled={reservationSaving}>
+                <ArrowLeft size={16} /> Change dates or choose another vehicle
+              </button>
             </div>
             <button className="preview-text-button" type="button" onClick={signOut}>Sign out</button>
           </div>
@@ -4500,6 +4685,34 @@ function PreviewCheckout({
           </PreviewCheckoutSection>
 
           <PreviewCheckoutSection number="5" title="Payment" summary={paymentPaid ? 'Payment complete' : `Due today ${money(total)}`} completed={paymentPaid} open={activeSection === 'payment'} onOpen={() => setActiveSection('payment')}>
+            {currentRental?.discount_code ? (
+              <div className="preview-discount-applied" role="status">
+                <span><strong>{currentRental.discount_code}</strong> applied</span>
+                <strong>−{money(currentRental.discount_amount)}</strong>
+              </div>
+            ) : (
+              <div className="preview-discount-entry">
+                <label htmlFor="previewDiscountCode">Promotion or discount code</label>
+                <div>
+                  <input
+                    id="previewDiscountCode"
+                    value={discountInput}
+                    maxLength="24"
+                    placeholder="DISCOUNT CODE"
+                    onChange={(event) => setDiscountInput(event.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, ''))}
+                  />
+                  <button
+                    type="button"
+                    className="preview-secondary-button"
+                    disabled={discountSaving || !discountInput.trim() || !currentRental?.id}
+                    onClick={applyCustomerDiscount}
+                  >
+                    {discountSaving ? 'Applying…' : 'Apply code'}
+                  </button>
+                </div>
+                {!currentRental?.id && <small>Finish the contact section first, then apply your code before payment.</small>}
+              </div>
+            )}
             <div className="preview-payment-breakdown">
               <div><span>Rental</span><strong>{money(rentalTotal)}</strong></div>
               <div><span>CT sales tax</span><strong>{money(taxAmount)}</strong></div>
@@ -4545,11 +4758,15 @@ function PreviewUploadCard({ title, text, complete, busy = false, onUpload }) {
 
 function PreviewTripSummary({ reservationForm, rentalTotal, serviceFeeTotal = 0, taxAmount, securityDeposit, total, secondsRemaining, expired, vehicle }) {
   const displayVehicle = vehicle || { name: 'Booking Flow Test Vehicle', id: BOOKING_FLOW_TEST_VEHICLE_ID };
+  const features = getVehicleFeatures(displayVehicle);
   return (
     <aside className="preview-trip-summary">
       <div className="preview-trip-vehicle">
-        <img src={getVehicleImages(displayVehicle)[0]} alt={displayVehicle.name} />
         <div><span>Booking Preview</span><strong>{displayVehicle.name}</strong></div>
+        <PreviewVehicleGallery vehicle={displayVehicle} compact />
+        <div className="preview-trip-features">
+          {features.map((feature) => <span key={feature}><CheckCircle2 size={13} /> {feature}</span>)}
+        </div>
       </div>
       <div className="preview-trip-summary-dates">
         <div><CalendarDays size={18} /><span><small>Pickup</small><strong>{formatRentalDate(reservationForm.pickupDate, reservationForm.pickupTime)}</strong></span></div>
@@ -4586,6 +4803,10 @@ function AuthScreen({
   checkoutSecondsRemaining,
   checkoutExpired
 }) {
+  if (checkoutIntent && checkoutExpired) {
+    return <CheckoutExpiredScreen reservationForm={reservationForm} />;
+  }
+
   const update = (key, value) => setAuthForm({ ...authForm, [key]: value });
 
   return (
@@ -4613,7 +4834,7 @@ function AuthScreen({
           />
         </label>
 
-        {emailOtpSent && (
+        {emailOtpSent && <>
           <label>
             <span>One-time email code</span>
             <input
@@ -4625,7 +4846,8 @@ function AuthScreen({
               required
             />
           </label>
-        )}
+          <EmailVerificationSpamNotice email={authForm.email} />
+        </>}
 
         <button className="primary-btn" type="submit" disabled={emailAuthBusy || checkoutExpired}>
           {emailAuthBusy ? 'Please wait…' : emailOtpSent ? 'Verify & Open Booking' : 'Email My Secure Sign-In'}
@@ -4644,6 +4866,21 @@ function AuthScreen({
   );
 }
 
+function EmailVerificationSpamNotice({ email }) {
+  return (
+    <div className="email-verification-spam-notice" role="alert">
+      <AlertTriangle size={22} />
+      <div>
+        <strong>CHECK YOUR SPAM FOLDER</strong>
+        <span>
+          We sent the Rent Me CT verification email to <b>{email}</b>. Enter the one-time code from that email.
+          If it is not in your inbox, open your <b>SPAM</b> folder now.
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function CheckoutHoldTimer({ secondsRemaining, expired, compact = false }) {
   return (
     <div className={`checkout-hold-timer ${expired ? 'expired' : ''} ${compact ? 'compact' : ''}`} role="timer" aria-live="polite">
@@ -4654,6 +4891,70 @@ function CheckoutHoldTimer({ secondsRemaining, expired, compact = false }) {
       </div>
     </div>
   );
+}
+
+function CheckoutExpiredScreen({ reservationForm }) {
+  return (
+    <div className="preview-checkout-shell">
+      <PreviewTopbar label="Secure booking" />
+      <main className="preview-expired-screen" role="alert">
+        <AlertTriangle size={52} />
+        <p className="eyebrow">Vehicle hold expired</p>
+        <h1>Let’s restart your booking.</h1>
+        <p>
+          The 25-minute checkout hold ended and the vehicle is available to other customers again.
+          Your selected dates and times will carry back to the fleet page.
+        </p>
+        <button
+          className="preview-primary-button"
+          type="button"
+          onClick={() => restartExpiredBooking(reservationForm)}
+        >
+          Choose a vehicle and restart <ChevronRight size={18} />
+        </button>
+        <small>No payment was taken for the expired checkout.</small>
+      </main>
+    </div>
+  );
+}
+
+function restartExpiredBooking(reservationForm = {}) {
+  try {
+    localStorage.removeItem('rentmect_pending_booking');
+    localStorage.removeItem('rentMeCtBooking');
+    localStorage.removeItem('pendingBooking');
+  } catch {
+    // Continue to the fleet even when browser storage is unavailable.
+  }
+
+  navigateToFleet(reservationForm);
+}
+
+function navigateToFleet(reservationForm = {}) {
+  let target;
+  try {
+    const referrer = document.referrer ? new URL(document.referrer) : null;
+    target = referrer?.pathname.endsWith('/cars-2.html')
+      ? new URL(referrer.pathname, referrer.origin)
+      : /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname)
+        ? new URL(`${window.location.protocol}//${window.location.hostname}:5501/cars-2.html`)
+        : new URL('https://rentmect.com/cars-2.html');
+  } catch {
+    target = new URL('https://rentmect.com/cars-2.html');
+  }
+
+  [
+    ['pickupDate', reservationForm.pickupDate],
+    ['returnDate', reservationForm.returnDate],
+    ['pickupTime', reservationForm.pickupTime],
+    ['returnTime', reservationForm.returnTime],
+  ].forEach(([key, value]) => {
+    if (value) target.searchParams.set(key, value);
+  });
+
+  const promo = new URLSearchParams(window.location.search).get('promo');
+  if (promo) target.searchParams.set('promo', promo);
+  window.location.assign(target.toString());
 }
 
 function SummaryItem({ label, value }) {
@@ -5088,12 +5389,69 @@ function getVehicleImage(vehicle) {
 }
 
 function getVehicleImages(vehicle) {
-  const uploaded = Array.isArray(vehicle?.image_urls)
-    ? vehicle.image_urls.filter(Boolean)
-    : String(vehicle?.image_urls || '').split(/\r?\n|,/).map((value) => value.trim()).filter(Boolean);
-  if (uploaded.length) return uploaded;
   if (isBookingFlowTestVehicle(vehicle)) return TEST_VEHICLE_PREVIEW_IMAGES;
-  return [getVehicleImage(vehicle)];
+  const uploaded = parseVehicleList(vehicle?.image_urls);
+  const primary = uploaded[0] || getVehicleImage(vehicle);
+  const fleet = getVehicleFleetNumber(vehicle);
+  const highResolutionImages = fleet ? FLEET_GALLERY_IMAGES[fleet] : null;
+  const builtIn = Array.isArray(highResolutionImages) && highResolutionImages.length >= 4
+    ? highResolutionImages.slice(0, 4)
+    : fleet
+      ? Array.from({ length: 4 }, (_, index) => {
+        const imageKey = `${fleet}-${index + 1}`;
+        const extension = VEHICLE_GALLERY_JPG_IMAGES.has(imageKey) ? 'jpg' : 'webp';
+        return `${PUBLIC_FLEET_ASSET_BASE_URL}/fleet-2/${imageKey}.${extension}`;
+      })
+      : uploaded.slice(1);
+  return [...new Set([primary, ...builtIn].filter(Boolean))].slice(0, 5);
+}
+
+function getVehicleImageFallback(vehicle, index) {
+  if (isBookingFlowTestVehicle(vehicle)) return TEST_VEHICLE_PREVIEW_IMAGES[index] || TEST_VEHICLE_PREVIEW_IMAGES[0];
+
+  if (index <= 0) {
+    const imageKey = vehicleImageKey(vehicle?.name);
+    if (VEHICLE_IMAGES_BY_KEY[imageKey]) return VEHICLE_IMAGES_BY_KEY[imageKey];
+    const fallbackKey = Object.keys(VEHICLE_IMAGES_BY_KEY).find((key) =>
+      imageKey.includes(key) || key.includes(imageKey)
+    );
+    return fallbackKey ? VEHICLE_IMAGES_BY_KEY[fallbackKey] : Object.values(VEHICLE_IMAGES_BY_KEY)[0];
+  }
+
+  const fleet = getVehicleFleetNumber(vehicle);
+  if (!fleet) return getVehicleImage(vehicle);
+  const galleryIndex = Math.min(index, 4);
+  const imageKey = `${fleet}-${galleryIndex}`;
+  const extension = VEHICLE_GALLERY_JPG_IMAGES.has(imageKey) ? 'jpg' : 'webp';
+  return `${PUBLIC_FLEET_ASSET_BASE_URL}/fleet-2/${imageKey}.${extension}`;
+}
+
+function getVehicleFleetNumber(vehicle) {
+  return String(vehicle?.name || '').match(/#([a-z0-9]+)/i)?.[1]?.toUpperCase() || '';
+}
+
+function parseVehicleList(value) {
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return parsed.filter(Boolean);
+  } catch {
+    // Legacy newline and comma-separated values are normalized below.
+  }
+  return String(value).split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean);
+}
+
+function getVehicleFeatures(vehicle) {
+  const saved = parseVehicleList(vehicle?.features);
+  if (saved.length) return saved;
+  const fleet = getVehicleFleetNumber(vehicle);
+  if (VEHICLE_FEATURE_GROUPS.compactSuv.has(fleet)) return ['SUV', 'Compact', 'Efficient'];
+  if (VEHICLE_FEATURE_GROUPS.hatchback.has(fleet)) return ['Compact', 'Hatchback', 'Efficient'];
+  if (VEHICLE_FEATURE_GROUPS.truck.has(fleet)) return ['Truck', '4x4', 'Work Ready'];
+  if (VEHICLE_FEATURE_GROUPS.van.has(fleet)) return ['Van', 'Passenger/Utility', 'Spacious'];
+  if (VEHICLE_FEATURE_GROUPS.suv.has(fleet)) return ['SUV', 'Luxury', 'Comfortable'];
+  return ['Sedan', 'Luxury', 'Comfortable'];
 }
 
 function parseRentalDateTime(date, time) {
@@ -5232,10 +5590,12 @@ function extensionStatusText(request) {
 
 function timeOptions() {
   const times = [];
-  for (let hour = 9; hour <= 21; hour++) {
-    const suffix = hour >= 12 ? 'PM' : 'AM';
-    const displayHour = hour > 12 ? hour - 12 : hour;
-    times.push(`${displayHour}:00 ${suffix}`);
+  for (let minutes = 9 * 60; minutes < 24 * 60; minutes += 30) {
+    const hour = Math.floor(minutes / 60);
+    const minute = minutes % 60;
+    const suffix = hour >= 12 && hour < 24 ? 'PM' : 'AM';
+    const displayHour = hour % 12 || 12;
+    times.push(`${displayHour}:${String(minute).padStart(2, '0')} ${suffix}`);
   }
   return times;
 }
