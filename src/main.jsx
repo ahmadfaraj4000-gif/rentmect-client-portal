@@ -1376,17 +1376,21 @@ function loadSavedBookingFromWebsite() {
   }
 }
 
-async function verifyPhoneCode() {
-  if (!session?.user?.id) return;
+async function verifyPhoneCode(options = {}) {
+  const successMessage = typeof options?.successMessage === 'string'
+    ? options.successMessage
+    : 'Phone verified.';
+
+  if (!session?.user?.id) return false;
 
   if (!profileForm.phone.trim()) {
     notify('Add your phone number first.');
-    return;
+    return false;
   }
 
   if (!phoneCode.trim()) {
     notify('Enter the verification code.');
-    return;
+    return false;
   }
 
   setVerifyingCode(true);
@@ -1399,7 +1403,7 @@ async function verifyPhoneCode() {
     });
     if (error) {
       notify(await functionInvokeErrorMessage(error, 'Phone verification failed.'));
-      return;
+      return false;
     }
 
     if (data?.verified === true || data?.status === 'approved') {
@@ -1412,16 +1416,18 @@ async function verifyPhoneCode() {
         .eq('id', session.user.id)
         .single();
       if (profileError) {
-        notify('Phone verified. Refresh the page if the verified badge does not appear.');
-        return;
+        notify('Phone verified. Continuing securely…', 'success');
+        return true;
       }
       if (updatedProfile) setProfile(updatedProfile);
-      notify('Phone verified.');
-      return;
+      notify(successMessage, 'success');
+      return true;
     }
     notify(data?.error || 'That code is invalid or expired. Request a new code and try again.');
+    return false;
   } catch (error) {
     notify(error?.message || 'Phone verification failed. Please try again.');
+    return false;
   } finally {
     setVerifyingCode(false);
   }
@@ -2421,8 +2427,11 @@ async function verifyPhoneCode() {
     notify(`${data.discount_code} applied. You saved ${money(data.discount_amount)}.`, 'success');
   }
 
-  async function nextWizardStep() {
-    if (wizardStep === 0 && !contactStepCompleted) {
+  async function nextWizardStep(options = {}) {
+    const phoneJustVerified = options?.phoneJustVerified === true;
+    const contactReady = Boolean(profileComplete && (phoneVerified || phoneJustVerified));
+
+    if (wizardStep === 0 && !contactReady) {
       notify('Save your renter details and verify your phone number before continuing.');
       return;
     }
@@ -2441,14 +2450,14 @@ async function verifyPhoneCode() {
       }
     }
 
-    if (wizardStep === 0 && contactStepCompleted && selectedVehicle && !currentRental) {
+    if (wizardStep === 0 && contactReady && selectedVehicle && !currentRental) {
       const rental = await createReservationIfNeeded();
       if (!rental) return;
       setWizardStep(2);
       return;
     }
 
-    if (wizardStep === 0 && contactStepCompleted && selectedVehicle && currentRental) {
+    if (wizardStep === 0 && contactReady && selectedVehicle && currentRental) {
       setWizardStep(2);
       return;
     }
@@ -2672,7 +2681,10 @@ async function verifyPhoneCode() {
           phoneCode={phoneCode}
           setPhoneCode={setPhoneCode}
           sendPhoneCode={sendPhoneCode}
-          verifyPhoneCode={verifyPhoneCode}
+          verifyPhoneCode={async () => {
+            const verified = await verifyPhoneCode({ successMessage: 'Phone verified. Continuing…' });
+            if (verified) await continuePreviewContact();
+          }}
           sendingCode={sendingCode}
           verifyingCode={verifyingCode}
           phoneVerified={phoneVerified}
@@ -3408,7 +3420,10 @@ async function verifyPhoneCode() {
           phoneCode={phoneCode}
           setPhoneCode={setPhoneCode}
           sendPhoneCode={sendPhoneCode}
-          verifyPhoneCode={verifyPhoneCode}
+          verifyPhoneCode={async () => {
+            const verified = await verifyPhoneCode({ successMessage: 'Phone verified. Continuing…' });
+            if (verified) await nextWizardStep({ phoneJustVerified: true });
+          }}
           sendingCode={sendingCode}
           verifyingCode={verifyingCode}
           phoneVerified={phoneVerified}
@@ -3740,8 +3755,8 @@ function WizardModal({
                     }}
                   /></label>
 
-                  <button className="secondary-btn" type="button" onClick={verifyPhoneCode} disabled={verifyingCode}>
-                    {verifyingCode ? 'Verifying...' : 'Verify Phone'}
+                  <button className="primary-btn" type="button" onClick={verifyPhoneCode} disabled={verifyingCode}>
+                    {verifyingCode ? 'Verifying…' : 'Verify & continue'}
                   </button>
                 </>
               )}
@@ -4083,17 +4098,19 @@ function WizardModal({
           >
             Back
           </button>
-          <button
-            className="primary-btn"
-            type="button"
-            onClick={wizardStep === 5 && !agreementSigned ? jumpToWizardSignature : nextWizardStep}
-          >
-            {wizardStep === wizardSteps.length - 1
-              ? 'Finish'
-              : wizardStep === 5
-                ? agreementSigned ? 'Continue to secure payment' : 'Jump to signature'
-                : 'Next'}
-          </button>
+          {(wizardStep !== 0 || phoneVerified || correctingIdentity) && (
+            <button
+              className="primary-btn"
+              type="button"
+              onClick={wizardStep === 5 && !agreementSigned ? jumpToWizardSignature : nextWizardStep}
+            >
+              {wizardStep === wizardSteps.length - 1
+                ? 'Finish'
+                : wizardStep === 5
+                  ? agreementSigned ? 'Continue to secure payment' : 'Jump to signature'
+                  : 'Next'}
+            </button>
+          )}
         </div>
 
         {vehicleReminder && (
@@ -5077,9 +5094,9 @@ function PreviewCheckout({
             </div>
             {!correctingIdentity && <div className="preview-inline-actions">
               <button className="preview-secondary-button" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>{phoneVerified ? 'Phone verified' : sendingCode ? 'Saving & sending…' : 'Save details & send code'}</button>
-              {!phoneVerified && <><input className="preview-code-input" inputMode="numeric" autoComplete="one-time-code" value={phoneCode} onChange={(event) => setPhoneCode(event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="Verification code" /><button className="preview-secondary-button" type="button" onClick={verifyPhoneCode} disabled={verifyingCode}>{verifyingCode ? 'Verifying…' : 'Verify phone'}</button></>}
+              {!phoneVerified && <><input className="preview-code-input" inputMode="numeric" autoComplete="one-time-code" value={phoneCode} onChange={(event) => setPhoneCode(event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="Verification code" /><button className="preview-primary-button" type="button" onClick={verifyPhoneCode} disabled={verifyingCode}>{verifyingCode ? 'Verifying…' : 'Verify & continue'}</button></>}
             </div>}
-            <button className="preview-primary-button" type="button" onClick={continueContact} disabled={reservationSaving || checkoutExpired}>{reservationSaving ? 'Saving…' : correctingIdentity ? 'Save correction & return to Identity' : currentRental ? 'Continue' : 'Save & continue'} <ChevronRight size={18} /></button>
+            {(correctingIdentity || phoneVerified) && <button className="preview-primary-button" type="button" onClick={continueContact} disabled={reservationSaving || checkoutExpired}>{reservationSaving ? 'Saving…' : correctingIdentity ? 'Save correction & return to Identity' : currentRental ? 'Continue' : 'Save & continue'} <ChevronRight size={18} /></button>}
           </PreviewCheckoutSection>
 
           <PreviewCheckoutSection number="2" title="Identity verification" summary={identityVerified ? 'Verified once and saved for returning rentals' : identityStatus === 'processing' ? 'Verification processing' : 'Government ID and selfie'} completed={identityVerified} open={activeSection === 'identity'} onOpen={() => setActiveSection('identity')}>
