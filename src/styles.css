@@ -1046,6 +1046,41 @@ select option {
 .extension-payment-card small {
   color: var(--muted);
 }
+.extension-payment-ready {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid rgba(35,138,58,.3);
+  border-radius: 14px;
+  background: rgba(35,138,58,.08);
+}
+.extension-payment-ready span {
+  color: var(--muted);
+  line-height: 1.45;
+}
+.extension-payment-ready .primary-btn {
+  width: 100%;
+}
+.extension-date-field,
+.extension-time-field {
+  min-width: 0;
+}
+.extension-date-field input[type="date"],
+.extension-time-field select {
+  display: block;
+  width: 100%;
+  min-width: 0 !important;
+  max-width: 100%;
+}
+.extension-date-field input[type="date"]::-webkit-date-and-time-value {
+  min-width: 0;
+  text-align: left;
+}
+.extension-date-field small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
 .extension-pending-actions { display: grid; gap: 10px; }
 .extension-pending-actions .auth-message { margin: 0; }
 .extension-pending-actions .secondary-btn { justify-self: start; }
