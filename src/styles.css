@@ -413,22 +413,6 @@ select option {
 .preview-form-grid textarea:focus,
 .preview-code-input:focus { border-color: #123d2a; box-shadow: 0 0 0 3px rgba(18,61,42,.13); }
 .preview-inline-message { padding: 11px; border-radius: 8px; background: #f1f7f3; color: #205a32; line-height: 1.45; }
-.email-verification-spam-notice {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 10px;
-  margin: 4px 0 10px;
-  padding: 13px 14px;
-  border: 2px solid #b5161b;
-  border-radius: 10px;
-  background: #fff1f1;
-  color: #711016;
-  text-align: left;
-}
-.email-verification-spam-notice > svg { margin-top: 1px; color: #b5161b; }
-.email-verification-spam-notice > div { display: grid; gap: 4px; }
-.email-verification-spam-notice strong { font-size: 15px; line-height: 1.2; letter-spacing: .025em; }
-.email-verification-spam-notice span { font-size: 13px; line-height: 1.5; }
 .preview-security-note { display: flex; align-items: flex-start; gap: 7px; color: #66706b; font-size: 12px; line-height: 1.5; }
 .preview-security-note svg { flex: none; color: #123d2a; margin-top: 1px; }
 .preview-checkout-section { margin-bottom: 12px; overflow: hidden; }
