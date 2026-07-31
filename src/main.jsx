@@ -193,8 +193,9 @@ function App() {
   const [adminBookingError, setAdminBookingError] = useState('');
   const checkoutExpiryHandledRef = useRef('');
   const identityReturnHandledRef = useRef(false);
-  const paymentReturnPendingRef = useRef(false);
+  const paymentReturnPendingRef = useRef(null);
   const paymentReturnHandledRef = useRef(false);
+  const extensionDateSourceRef = useRef('');
 
   const [profileForm, setProfileForm] = useState({
     first_name: '',
@@ -517,6 +518,20 @@ function App() {
     currentRental?.checkout_expires_at,
   ]);
 
+  useEffect(() => {
+    if (!currentRental?.return_date) return;
+    const dateSource = `${currentRental.id}:${currentRental.return_date}`;
+    if (extensionDateSourceRef.current === dateSource) return;
+    extensionDateSourceRef.current = dateSource;
+    setExtensionForm((current) => {
+      return {
+        ...current,
+        returnDate: getNextDateInputValue(currentRental.return_date),
+        returnTime: currentRental.return_time || current.returnTime,
+      };
+    });
+  }, [currentRental?.id, currentRental?.return_date, currentRental?.return_time]);
+
   const bookingFlowTestMode = BOOKING_FLOW_TEST_ENABLED && Boolean(
     pendingVehicleId === BOOKING_FLOW_TEST_VEHICLE_ID ||
     reservationForm.vehicleId === BOOKING_FLOW_TEST_VEHICLE_ID ||
@@ -706,6 +721,8 @@ function App() {
       String(message.message || '').includes('RETURN CONFIRMATION')
     )
   );
+  const phoneLockedForRental = ['approved', 'ready_for_pickup', 'active', 'overdue', 'return_initiated']
+    .includes(currentRental?.status);
   const canManageTrip = ['active', 'overdue', 'return_initiated'].includes(currentRental?.status);
   const effectiveTripChangeChoice = tripChangeChoice || currentRental?.trip_change_intent || '';
   const showTripManager = Boolean(canManageTrip && (tripManagerOpen || returnConfirmationSent || pendingExtension || approvedUnpaidExtension));
@@ -777,15 +794,21 @@ function App() {
     if (!portalDataReady || !session?.user?.id || paymentReturnHandledRef.current) return undefined;
     const url = new URL(window.location.href);
     const paymentReturn = url.searchParams.get('payment');
+    const extensionPaymentReturnId = url.searchParams.get('extension');
     if (!paymentReturn) return undefined;
 
     paymentReturnHandledRef.current = true;
     url.searchParams.delete('payment');
+    url.searchParams.delete('extension');
     window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
     setPreviewCheckoutSection('payment');
-    setActiveTab('overview');
+    setActiveTab(extensionPaymentReturnId ? 'payment' : 'overview');
 
     if (paymentReturn === 'stripe_cancelled') {
+      if (extensionPaymentReturnId) {
+        notify('Extension payment was not completed. Your approved extension is still waiting in Billing.', 'error');
+        return undefined;
+      }
       if (!bookingPreviewCheckoutMode) {
         setWizardStep(6);
         setWizardOpen(true);
@@ -794,12 +817,30 @@ function App() {
       return undefined;
     }
 
+    if (extensionPaymentReturnId) {
+      const returnedExtension = extensionRequests.find((request) => request.id === extensionPaymentReturnId);
+      if (returnedExtension?.status === 'activated') {
+        notify('Extension payment confirmed. Your new return date is active.', 'success');
+        return undefined;
+      }
+      paymentReturnPendingRef.current = { type: 'extension', id: extensionPaymentReturnId };
+      notify('Stripe returned successfully. Confirming your extension payment now…');
+      const refreshOne = window.setTimeout(() => loadPortalData(session.user.id, { silent: true }), 1200);
+      const refreshTwo = window.setTimeout(() => loadPortalData(session.user.id, { silent: true }), 3500);
+      const refreshThree = window.setTimeout(() => loadPortalData(session.user.id, { silent: true }), 6500);
+      return () => {
+        window.clearTimeout(refreshOne);
+        window.clearTimeout(refreshTwo);
+        window.clearTimeout(refreshThree);
+      };
+    }
+
     if (paymentPaid) {
       notify('Payment confirmed successfully. Your booking is sealed.', 'success');
       return undefined;
     }
 
-    paymentReturnPendingRef.current = true;
+    paymentReturnPendingRef.current = { type: 'rental' };
     if (!bookingPreviewCheckoutMode) {
       setWizardStep(6);
       setWizardOpen(true);
@@ -815,11 +856,21 @@ function App() {
   }, [portalDataReady, session?.user?.id, bookingPreviewCheckoutMode]);
 
   useEffect(() => {
-    if (!paymentReturnPendingRef.current || !paymentPaid) return;
-    paymentReturnPendingRef.current = false;
+    const pendingReturn = paymentReturnPendingRef.current;
+    if (!pendingReturn) return;
+    if (pendingReturn.type === 'extension') {
+      const paidExtension = extensionRequests.find((request) => request.id === pendingReturn.id);
+      if (paidExtension?.status !== 'activated') return;
+      paymentReturnPendingRef.current = null;
+      setActiveTab('overview');
+      notify('Extension payment confirmed. Your new return date is active.', 'success');
+      return;
+    }
+    if (!paymentPaid) return;
+    paymentReturnPendingRef.current = null;
     setWizardOpen(false);
     notify('Payment confirmed successfully. Your booking is sealed.', 'success');
-  }, [paymentPaid]);
+  }, [paymentPaid, extensionRequests]);
 
   useEffect(() => {
     if (!checkoutExpired || !session?.user?.id) return;
@@ -2316,11 +2367,16 @@ async function verifyPhoneCode(options = {}) {
     returnUrl.searchParams.delete('guided');
     returnUrl.searchParams.delete('payment');
     returnUrl.searchParams.delete('charge');
+    returnUrl.searchParams.delete('extension');
     if (bookingId) returnUrl.searchParams.set('booking', bookingId);
     const successUrl = new URL(returnUrl);
     successUrl.searchParams.set('payment', 'stripe_success');
     const cancelUrl = new URL(returnUrl);
     cancelUrl.searchParams.set('payment', 'stripe_cancelled');
+    if (targetExtension) {
+      successUrl.searchParams.set('extension', targetExtension.id);
+      cancelUrl.searchParams.set('extension', targetExtension.id);
+    }
 
     const checkoutPayload = targetExtension
       ? {
@@ -3003,7 +3059,13 @@ async function verifyPhoneCode(options = {}) {
                     </p>
                     <button className="secondary-btn" type="button" onClick={cancelExtensionRequest} disabled={extensionSaving}>Cancel Extension Request</button>
                   </div>}
-                  {approvedUnpaidExtension && <p className="auth-message">Approved extension is waiting for payment before the new return date becomes active.{approvedUnpaidExtension.payment_due_at ? ` Pay by ${new Date(approvedUnpaidExtension.payment_due_at).toLocaleString()} or the hold is released automatically.` : ''}</p>}
+                  {approvedUnpaidExtension && <div className="extension-payment-ready" role="status">
+                    <strong>Extension approved — payment ready</strong>
+                    <span>Your approved extension can be paid directly here in the client portal.{approvedUnpaidExtension.payment_due_at ? ` Pay by ${new Date(approvedUnpaidExtension.payment_due_at).toLocaleString()} or the hold is released automatically.` : ''}</span>
+                    <button className="primary-btn" type="button" onClick={startStripeCheckout} disabled={paymentSaving || extensionInsuranceRequired}>
+                      <CreditCard size={18} /> {extensionInsuranceRequired ? 'Upload New Insurance First' : paymentSaving ? 'Opening Stripe…' : 'Pay Approved Extension'}
+                    </button>
+                  </div>}
                   {openExtensionRequest && <div className={`extension-insurance-step ${extensionInsuranceDocument?.status || 'missing'}`}>
                     <div>
                       <strong>New insurance required</strong>
@@ -3031,22 +3093,29 @@ async function verifyPhoneCode(options = {}) {
                       />
                     </label>}
                   </div>}
-                  <input
-                    type="date"
-                    min={currentRental.return_date}
-                    value={extensionForm.returnDate}
-                    onChange={(event) => {
+                  <label className="extension-date-field">
+                    <span>New return date</span>
+                    <input
+                      type="date"
+                      min={currentRental.return_date}
+                      value={extensionForm.returnDate}
+                      onChange={(event) => {
+                        setExtensionPreview(null);
+                        setExtensionForm({ ...extensionForm, returnDate: event.target.value });
+                      }}
+                      required
+                    />
+                    <small>Your current return is {formatRentalDate(currentRental.return_date, currentRental.return_time)}. The next day is preselected so the date box is never blank.</small>
+                  </label>
+                  <label className="extension-time-field">
+                    <span>New return time</span>
+                    <select value={extensionForm.returnTime} onChange={(event) => {
                       setExtensionPreview(null);
-                      setExtensionForm({ ...extensionForm, returnDate: event.target.value });
-                    }}
-                    required
-                  />
-                  <select value={extensionForm.returnTime} onChange={(event) => {
-                    setExtensionPreview(null);
-                    setExtensionForm({ ...extensionForm, returnTime: event.target.value });
-                  }}>
-                    {timeOptions().map((time) => <option key={time}>{time}</option>)}
-                  </select>
+                      setExtensionForm({ ...extensionForm, returnTime: event.target.value });
+                    }}>
+                      {timeOptions().map((time) => <option key={time}>{time}</option>)}
+                    </select>
+                  </label>
                   <input
                     placeholder="Optional note for Rent Me CT"
                     value={extensionForm.note}
@@ -3138,7 +3207,9 @@ async function verifyPhoneCode(options = {}) {
                   placeholder="Example: 8605551234"
                   value={profileForm.phone}
                   onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value, sms_transactional_opt_in: false })}
+                  disabled={phoneLockedForRental}
                 /></label>
+                {phoneLockedForRental && <small className="identity-name-lock-note">Your verified phone number is locked while this approved rental is active so extension and payment notices continue to reach the same number. Contact Rent Me CT if it must be changed.</small>}
                 <label>
                   <span>What will you use the vehicle for?</span>
                   <textarea
@@ -3157,12 +3228,12 @@ async function verifyPhoneCode(options = {}) {
                 <div className="button-row">
                   <button className="primary-btn" type="submit">Save Profile</button>
 
-                  <button className="secondary-btn" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>
+                  <button className="secondary-btn" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified || phoneLockedForRental}>
                     {phoneVerified ? 'Phone Verified' : sendingCode ? 'Sending...' : 'Send Code'}
                   </button>
                 </div>
 
-                {!phoneVerified && (
+                {!phoneVerified && !phoneLockedForRental && (
                   <div className="phone-code-row">
                     <input
                       placeholder="Enter verification code"
@@ -6051,8 +6122,8 @@ function extensionStatusText(request) {
 
   if (request.status === 'approved_pending_payment') {
     return request.request_kind === 'switch_car_continuation'
-      ? `Approved through ${requestedReturn}. Payment is required before the replacement vehicle activates.`
-      : `Approved through ${requestedReturn}. Payment is required before the new return time activates.`;
+      ? `Approved through ${requestedReturn}. Payment is ready in Billing and must be completed before the replacement vehicle activates.`
+      : `Approved through ${requestedReturn}. Payment is ready in Billing and must be completed before the new return time activates.`;
   }
 
   if (request.status === 'activated') {
