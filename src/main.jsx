@@ -4377,10 +4377,22 @@ function PortalDataHealth({ health, onRetry }) {
 }
 
 function userFacingPortalError(error, fallback = 'Something went wrong. Please try again.') {
-  const message = String(error?.message || error || '').trim();
+  const message = [
+    error?.message,
+    error?.details,
+    error?.hint,
+    error?.code,
+    typeof error === 'string' ? error : '',
+  ].filter(Boolean).join(' ').trim();
   if (!message) return fallback;
   if (/failed to fetch|network|load failed|connection|timeout/i.test(message)) return 'The connection was interrupted. Check your internet connection and try again.';
   if (/jwt|token|session|not authenticated/i.test(message)) return 'Your secure session needs to be refreshed. Sign in again and retry.';
+  if (/already uses this mobile number|profiles_normalized_phone_unique_idx/i.test(message)) {
+    return 'This mobile number is already linked to another Rent Me CT account. Sign in with the email for that account, or contact Rent Me CT to safely correct the account. A verification code was not sent.';
+  }
+  if (/already uses this email|profiles_normalized_email_unique_idx/i.test(message)) {
+    return 'This email is already linked to a Rent Me CT account. Sign in to that account or use Forgot Password. Your renter details were not changed.';
+  }
   if (/duplicate key|already exists/i.test(message)) return 'That update was already recorded. Refresh to see the latest status.';
   return fallback;
 }
