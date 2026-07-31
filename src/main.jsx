@@ -102,7 +102,8 @@ function App() {
   const guidedAdminCustomerPath = initialUrlParams.get('adminPath') === 'returning' ? 'returning' : 'new';
   const cars2BookingHandoff = initialUrlParams.get('source') === 'cars2';
   const [returningFromStripeIdentity] = useState(() => initialUrlParams.get('identity') === 'return');
-  const [returningFromStripePayment] = useState(() => initialUrlParams.get('payment') === 'stripe_success');
+  const [returningFromStripePayment] = useState(() => initialUrlParams.get('payment') || '');
+  const [stripeCheckoutSessionId] = useState(() => initialUrlParams.get('session_id') || '');
   const bookingPreviewFleetMode = previewRoute === 'fleet';
   const bookingPreviewCheckoutMode = previewRoute === '1';
   const [session, setSession] = useState(null);
@@ -195,6 +196,7 @@ function App() {
   const identityReturnHandledRef = useRef(false);
   const paymentReturnPendingRef = useRef(null);
   const paymentReturnHandledRef = useRef(false);
+  const stripeReturnHandledRef = useRef(false);
   const extensionDateSourceRef = useRef('');
 
   const [profileForm, setProfileForm] = useState({
@@ -317,9 +319,9 @@ function App() {
   useEffect(() => {
     if (session?.user?.id) {
       setPortalDataReady(false);
-      loadPortalData(session.user.id, { stripeReturnRetry: returningFromStripeIdentity });
+      loadPortalData(session.user.id, { stripeReturnRetry: Boolean(returningFromStripeIdentity || returningFromStripePayment) });
     }
-  }, [session, returningFromStripeIdentity]);
+  }, [session, returningFromStripeIdentity, returningFromStripePayment]);
 
   useEffect(() => {
     if (!portalDataReady || !session?.access_token || identityReturnHandledRef.current) return;
@@ -359,6 +361,70 @@ function App() {
       notify('Identity was not verified. Open the identity step to see the status and retry with Stripe.', 'error');
     });
   }, [portalDataReady, session?.access_token, bookingPreviewCheckoutMode]);
+
+  useEffect(() => {
+    if (!portalDataReady || !session?.user?.id || !session?.access_token || !returningFromStripePayment) return;
+    if (stripeReturnHandledRef.current) return;
+    stripeReturnHandledRef.current = true;
+
+    const clearStripeReturnParams = () => {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('payment');
+      url.searchParams.delete('session_id');
+      window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+    };
+
+    if (returningFromStripePayment === 'stripe_cancelled') {
+      clearStripeReturnParams();
+      notify('Stripe Checkout was cancelled. No payment was recorded.');
+      return;
+    }
+
+    if (returningFromStripePayment !== 'stripe_success') return;
+
+    async function reconcileStripeReturn() {
+      if (!stripeCheckoutSessionId) {
+        await loadPortalData(session.user.id, { silent: true, stripeReturnRetry: true });
+        clearStripeReturnParams();
+        notify('Stripe returned successfully. Payment confirmation is refreshing; do not submit another payment.');
+        return;
+      }
+
+      setPaymentSaving(true);
+      try {
+        const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stripe-web-hook`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ action: 'confirm_checkout', sessionId: stripeCheckoutSessionId }),
+        });
+        const data = await response.json().catch(() => null);
+
+        if (!response.ok || data?.error) {
+          stripeReturnHandledRef.current = false;
+          notify(data?.error || 'Stripe received the payment, but the booking could not be confirmed yet. Do not pay again; contact Rent Me CT.', 'error');
+          return;
+        }
+
+        await loadPortalData(session.user.id, { silent: true, stripeReturnRetry: true });
+        setCheckoutExpiresAt(null);
+        setCheckoutIntent(false);
+        setActiveTab('payment');
+        clearStripeReturnParams();
+        notify('Payment confirmed. Your rental is recorded and ready for Rent Me CT review.', 'success');
+      } catch (error) {
+        stripeReturnHandledRef.current = false;
+        notify('Stripe received the payment, but the booking confirmation could not reconnect. Do not pay again; refresh or contact Rent Me CT.', 'error');
+      } finally {
+        setPaymentSaving(false);
+      }
+    }
+
+    reconcileStripeReturn();
+  }, [portalDataReady, returningFromStripePayment, session?.access_token, session?.user?.id, stripeCheckoutSessionId]);
 
   useEffect(() => {
     if (!session?.user?.id) return undefined;
@@ -2596,7 +2662,7 @@ async function verifyPhoneCode(options = {}) {
       completed: licenseUploaded,
     },
     {
-      title: 'Upload Insurance Paperwork',
+      title: 'Upload Insurance Declaration Page',
       icon: FileText,
       status: insuranceUploaded ? 'Completed' : 'Required',
       completed: insuranceUploaded,
@@ -3068,7 +3134,7 @@ async function verifyPhoneCode(options = {}) {
                   </div>}
                   {openExtensionRequest && <div className={`extension-insurance-step ${extensionInsuranceDocument?.status || 'missing'}`}>
                     <div>
-                      <strong>New insurance required</strong>
+                      <strong>New insurance required — declaration page only</strong>
                       <span>
                         {extensionInsuranceDocument?.status === 'approved'
                           ? 'Approved for this extension.'
@@ -3076,11 +3142,11 @@ async function verifyPhoneCode(options = {}) {
                             ? 'Uploaded and waiting for Rent Me CT approval.'
                             : extensionInsuranceDocument?.status === 'rejected'
                               ? 'The extension insurance was rejected. Upload a replacement.'
-                              : 'Upload proof that covers the requested continuation dates.'}
+                              : 'Upload the declaration page showing the policyholder, active dates, and coverage for the requested continuation dates. Other insurance documents will be rejected.'}
                       </span>
                     </div>
                     {(!extensionInsuranceDocument || extensionInsuranceDocument.status === 'rejected') && <label className="secondary-btn">
-                      <Upload size={16}/> {documentUploadBusy.extensionInsurance ? 'Uploading…' : 'Upload New Insurance'}
+                      <Upload size={16}/> {documentUploadBusy.extensionInsurance ? 'Uploading…' : 'Upload Declaration Page'}
                       <input
                         type="file"
                         accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
@@ -3282,8 +3348,8 @@ async function verifyPhoneCode(options = {}) {
                   <div className="insurance-upload-card">
                     <InsuranceOptionsPanel insuranceCoverage={insuranceCoverage} setInsuranceCoverage={setInsuranceCoverage} />
                     <UploadCard
-                      title={insuranceRejected ? 'Replace Insurance' : 'Upload Insurance'}
-                      text={insuranceRejected ? 'This rental insurance upload was rejected. Upload a replacement for review.' : 'Upload proof of active auto insurance for this rental.'}
+                      title={insuranceRejected ? 'Replace Insurance Declaration Page' : 'Upload Insurance Declaration Page'}
+                      text={insuranceRejected ? 'This rental insurance upload was rejected. Upload the policy declaration page as the replacement.' : 'Upload the declaration page showing the policyholder, active dates, and coverage. Other insurance documents will be rejected.'}
                       icon={FileText}
                       onUpload={(e) => uploadDocument(e, 'insurance')}
                       busy={Boolean(documentUploadBusy.insurance)}
@@ -3293,7 +3359,7 @@ async function verifyPhoneCode(options = {}) {
               </section>
             )}
             {licenseUploaded && !currentRentalLicenseDocument && (
-              <p className="document-on-file-note">Driver license on file. This rental only needs a fresh insurance upload.</p>
+              <p className="document-on-file-note">Driver license on file. This rental only needs a fresh insurance declaration-page upload.</p>
             )}
             <UploadedDocuments documents={documentsForActiveRental} currentRental={currentRental} openDocument={openDocument} replaceDocument={replaceDocument} busy={documentUploadBusy} />
           </>
@@ -3586,6 +3652,7 @@ function LegalNameFields({ profileForm, setProfileForm, identityVerified = false
           disabled={identityVerified}
         />
       </label>
+      <LegalNameIdNotice />
     </div>
   );
 }
@@ -3794,37 +3861,37 @@ function WizardModal({
                 <small>{profileForm.intended_vehicle_use.length}/500 characters</small>
               </label>
 
-              <label><span>Phone number</span><input
-                type="tel"
-                autoComplete="tel"
-                placeholder="Example: 8605551234"
-                value={profileForm.phone}
-                onChange={(e) => {
-                  setWizardReminder(null);
-                  setProfileForm({ ...profileForm, phone: e.target.value, sms_transactional_opt_in: false });
-                }}
-              /></label>
+                <label><span>Phone number</span><input
+                  type="tel"
+                  autoComplete="tel"
+                  placeholder="Example: 8605551234"
+                  value={profileForm.phone}
+                  onChange={(e) => {
+                    setWizardReminder(null);
+                    setProfileForm({ ...profileForm, phone: e.target.value, sms_transactional_opt_in: false });
+                  }}
+                /></label>
 
-              <EmailMarketingPreference profileForm={profileForm} setProfileForm={setProfileForm} />
-              <SmsTransactionalPreference profileForm={profileForm} setProfileForm={setProfileForm} />
-              <SmsVerificationDisclosure />
+                <EmailMarketingPreference profileForm={profileForm} setProfileForm={setProfileForm} />
+                <SmsTransactionalPreference profileForm={profileForm} setProfileForm={setProfileForm} />
+                <SmsVerificationDisclosure />
 
-              <button className="primary-btn" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>
-                {phoneVerified ? 'Phone Verified' : sendingCode ? 'Sending...' : 'Send Verification Code'}
-              </button>
+                <button className="primary-btn" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>
+                  {phoneVerified ? 'Phone Verified' : sendingCode ? 'Sending...' : 'Send Verification Code'}
+                </button>
 
-              {!phoneVerified && (
-                <>
-                  <label><span>Phone verification code</span><input
-                    placeholder="Enter verification code"
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    value={phoneCode}
-                    onChange={(e) => {
-                      setWizardReminder(null);
-                      setPhoneCode(e.target.value.replace(/\D/g, '').slice(0, 10));
-                    }}
-                  /></label>
+                {!phoneVerified && (
+                  <>
+                    <label><span>Phone verification code</span><input
+                      placeholder="Enter verification code"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      value={phoneCode}
+                      onChange={(e) => {
+                        setWizardReminder(null);
+                        setPhoneCode(e.target.value.replace(/\D/g, '').slice(0, 10));
+                      }}
+                    /></label>
 
                   <button className="primary-btn" type="button" onClick={verifyPhoneCode} disabled={verifyingCode}>
                     {verifyingCode ? 'Verifying…' : 'Verify & continue'}
@@ -4130,7 +4197,7 @@ function WizardModal({
               <p className="muted">
                 {insuranceUploaded
                   ? 'Insurance is uploaded for this rental. Rent Me CT will review it before vehicle release.'
-                  : 'Upload proof of active auto insurance. Rent Me CT must have insurance on file before pickup.'}
+                  : 'Upload your insurance declaration page showing the policyholder, active dates, and coverage. Other insurance documents will be rejected.'}
               </p>
               <InsuranceOptionsPanel insuranceCoverage={insuranceCoverage} setInsuranceCoverage={setInsuranceCoverage} />
               {insuranceUploaded ? (
@@ -4143,7 +4210,7 @@ function WizardModal({
                 </div>
               ) : (
                 <label className={`secondary-btn ${documentUploadBusy?.insurance ? 'is-busy' : ''}`}>
-                  {documentUploadBusy?.insurance ? 'Uploading insurance…' : 'Upload Insurance'}
+                  {documentUploadBusy?.insurance ? 'Uploading insurance…' : 'Upload Declaration Page'}
                   <input
                     type="file"
                     accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
@@ -5191,7 +5258,7 @@ function PreviewCheckout({
               <PreviewUploadCard title="Driver license" text="PDF, JPEG, PNG, or WebP up to 10 MB. Reused for future rentals." complete={licenseUploaded} busy={Boolean(documentUploadBusy?.license)} onUpload={(event) => uploadDocument(event, 'license')} />
               <div>
                 <InsuranceOptionsPanel insuranceCoverage={insuranceCoverage} setInsuranceCoverage={setInsuranceCoverage} />
-                <PreviewUploadCard title="Proof of insurance" text="Current policy as PDF, JPEG, PNG, or WebP up to 10 MB." complete={insuranceUploaded} busy={Boolean(documentUploadBusy?.insurance)} onUpload={(event) => uploadDocument(event, 'insurance')} />
+                <PreviewUploadCard title="Insurance declaration page" text="Upload the declaration page showing the policyholder, active dates, and coverage. Other insurance documents will be rejected. PDF, JPEG, PNG, or WebP up to 10 MB." complete={insuranceUploaded} busy={Boolean(documentUploadBusy?.insurance)} onUpload={(event) => uploadDocument(event, 'insurance')} />
               </div>
             </div>
           </PreviewCheckoutSection>
@@ -5517,6 +5584,7 @@ function identityCorrectionGuidance(errorCode) {
       explanation: 'Correct the date of birth in Renter details so it exactly matches the ID you submitted.',
       fix: 'Select the correction button below, update the date of birth, save and continue, then run Stripe Identity again.',
       action: 'Correct date of birth',
+      field: 'date_of_birth',
       preservesContact: true,
     };
   }
@@ -5526,6 +5594,7 @@ function identityCorrectionGuidance(errorCode) {
       explanation: 'Correct your full legal name in Renter details so spelling, first name, and last name match the ID you submitted.',
       fix: 'Select the correction button below, update the legal name, save and continue, then run Stripe Identity again.',
       action: 'Correct legal name',
+      field: 'full_name',
       preservesContact: true,
     };
   }
@@ -5535,6 +5604,7 @@ function identityCorrectionGuidance(errorCode) {
       explanation: 'Correct both fields in Renter details so they exactly match the ID you submitted.',
       fix: 'Select the correction button below, update both highlighted details, save and continue, then run Stripe Identity again.',
       action: 'Correct renter details',
+      field: 'identity_details',
       preservesContact: true,
     };
   }
@@ -5685,6 +5755,15 @@ function ChecklistItem({ icon: Icon, title, status, completed, onOpen }) {
         <span>{status}</span>
       </div>
       {completed ? <CheckCircle2 size={20} /> : <button type="button" onClick={onOpen}>Open</button>}
+    </div>
+  );
+}
+
+function LegalNameIdNotice() {
+  return (
+    <div className="name-id-match-notice" role="note">
+      <AlertTriangle size={17} />
+      <span><strong>Match your ID exactly.</strong> If your ID shows a middle name, type it immediately after your first name. Stripe Identity may reject a missing or mismatched name.</span>
     </div>
   );
 }
