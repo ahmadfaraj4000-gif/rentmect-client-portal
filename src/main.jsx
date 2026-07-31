@@ -4421,10 +4421,8 @@ function LoadingScreen({ stripeReturn = false }) {
     <div className="loading-screen" role="status" aria-live="polite">
       <div className="loading-card">
         <img className="loading-logo" src={logoMobileUrl} alt="Rent Me CT" />
-        <div className="loading-motion" aria-hidden="true">
-          <div className="loading-road">
-            <Car className="loading-car" size={38} strokeWidth={2.4} />
-          </div>
+        <div className="client-loading-spinner" aria-hidden="true">
+          <span />
         </div>
         <p className="eyebrow">{stripeReturn ? 'Secure Stripe return' : 'Secure customer portal'}</p>
         <h1>{stripeReturn ? 'Finishing your Stripe step' : 'Getting your rental ready'}</h1>

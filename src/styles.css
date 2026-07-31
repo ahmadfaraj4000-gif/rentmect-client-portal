@@ -75,6 +75,24 @@ select option {
   height: auto;
   margin-bottom: 18px;
 }
+.client-loading-spinner {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  margin: 2px 0 24px;
+  border: 8px solid #dcefe3;
+  border-top-color: #16834a;
+  border-right-color: #16834a;
+  border-radius: 50%;
+  box-shadow: 0 8px 24px rgba(22,131,74,.16);
+  animation: client-loading-spin .8s linear infinite;
+}
+.client-loading-spinner span {
+  position: absolute;
+  inset: 14px;
+  border-radius: 50%;
+  background: #eaf7ef;
+}
 .loading-motion {
   width: min(300px, 76vw);
   margin: 2px 0 24px;
@@ -146,9 +164,15 @@ select option {
   0%, 100% { transform: translateX(-50%) translateY(0); }
   50% { transform: translateX(-50%) translateY(-5px); }
 }
+@keyframes client-loading-spin {
+  to { transform: rotate(360deg); }
+}
 @keyframes loading-stage-in {
   from { opacity: 0; transform: translateY(5px); }
   to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .client-loading-spinner { animation-duration: 1.8s; }
 }
 
 .auth-screen { grid-template-columns: 1fr 460px; gap: 50px; }
@@ -1130,6 +1154,25 @@ input[readonly] {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+.vehicle-date-grid input[type="date"],
+.vehicle-date-grid select {
+  height: 52px !important;
+  min-height: 52px !important;
+}
+.vehicle-date-grid input[type="date"] {
+  display: flex;
+  align-items: center;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  line-height: normal;
+}
+.vehicle-date-grid input[type="date"]::-webkit-date-and-time-value {
+  display: flex;
+  align-items: center;
+  min-height: 100%;
+  margin: 0;
+  line-height: normal;
 }
 .vehicle-picker-grid {
   display: grid;
