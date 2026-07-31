@@ -4429,10 +4429,12 @@ function LoadingScreen({ stripeReturn = false }) {
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      setMessageIndex((current) => (current + 1) % messages.length);
-    }, 1600);
+      setMessageIndex((current) => stripeReturn
+        ? Math.min(current + 1, messages.length - 1)
+        : (current + 1) % messages.length);
+    }, stripeReturn ? 2400 : 1600);
     return () => window.clearInterval(interval);
-  }, [messages.length]);
+  }, [messages.length, stripeReturn]);
 
   return (
     <div className="loading-screen" role="status" aria-live="polite">
