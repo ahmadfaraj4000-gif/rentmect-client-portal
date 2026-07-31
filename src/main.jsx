@@ -97,6 +97,9 @@ const TURNAROUND_BUFFER_MINUTES = 180;
 function App() {
   const initialUrlParams = new URLSearchParams(window.location.search);
   const previewRoute = initialUrlParams.get('preview') || '';
+  const adminBookingToken = initialUrlParams.get('adminBooking') || '';
+  const guidedAdminRentalId = initialUrlParams.get('adminRental') || '';
+  const guidedAdminCustomerPath = initialUrlParams.get('adminPath') === 'returning' ? 'returning' : 'new';
   const cars2BookingHandoff = initialUrlParams.get('source') === 'cars2';
   const [returningFromStripeIdentity] = useState(() => initialUrlParams.get('identity') === 'return');
   const bookingPreviewFleetMode = previewRoute === 'fleet';
@@ -176,11 +179,17 @@ function App() {
   const [pendingVehicleId, setPendingVehicleId] = useState('');
   const [pendingBookingId, setPendingBookingId] = useState('');
   const [checkoutExpiresAt, setCheckoutExpiresAt] = useState('');
-  const [checkoutIntent, setCheckoutIntent] = useState(false);
+  const [checkoutIntent, setCheckoutIntent] = useState(Boolean(adminBookingToken || guidedAdminRentalId));
   const [checkoutWizardStarted, setCheckoutWizardStarted] = useState(false);
   const [previewPage, setPreviewPage] = useState(() => cars2BookingHandoff ? 'checkout' : 'details');
   const [previewCheckoutSection, setPreviewCheckoutSection] = useState('contact');
   const [previewPortalOpen, setPreviewPortalOpen] = useState(false);
+  const [adminBookingHandoff, setAdminBookingHandoff] = useState(() =>
+    guidedAdminRentalId ? { rental_id: guidedAdminRentalId, customer_path: guidedAdminCustomerPath } : null
+  );
+  const [adminBookingRentalId, setAdminBookingRentalId] = useState(guidedAdminRentalId);
+  const [adminBookingClaimed, setAdminBookingClaimed] = useState(Boolean(guidedAdminRentalId));
+  const [adminBookingError, setAdminBookingError] = useState('');
   const checkoutExpiryHandledRef = useRef('');
   const identityReturnHandledRef = useRef(false);
   const paymentReturnPendingRef = useRef(false);
@@ -265,17 +274,24 @@ function App() {
       const { data } = await supabase.auth.getSession();
       if (!mounted) return;
 
-      setSession(data.session);
-      const metaBooking = data.session?.user?.user_metadata?.pending_booking;
+      let initialSession = data.session;
+      if (adminBookingToken && initialSession) {
+        await supabase.auth.signOut();
+        initialSession = null;
+      }
+      setSession(initialSession);
+      const metaBooking = initialSession?.user?.user_metadata?.pending_booking;
 
       if (metaBooking) {
         localStorage.setItem('rentmect_pending_booking', JSON.stringify(metaBooking));
       }
 
-      const bookingId = getBookingIdFromUrl();
-      if (bookingId) {
+      if (adminBookingToken) {
+        await loadAdminBookingHandoff(adminBookingToken);
+      } else if (getBookingIdFromUrl()) {
+        const bookingId = getBookingIdFromUrl();
         setPendingBookingId(bookingId);
-        await loadPendingBookingFromDatabase(bookingId, data.session);
+        await loadPendingBookingFromDatabase(bookingId, initialSession);
       } else {
         loadSavedBookingFromWebsite();
       }
@@ -294,7 +310,7 @@ function App() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [adminBookingToken]);
 
   useEffect(() => {
     if (session?.user?.id) {
@@ -454,6 +470,9 @@ function App() {
 
   const currentRental = useMemo(() => {
     const blockingRentals = rentals.filter((r) => BLOCKING_RENTAL_STATUSES.includes(r.status));
+    if (adminBookingRentalId) {
+      return blockingRentals.find((rental) => rental.id === adminBookingRentalId);
+    }
     if (checkoutIntent && reservationForm.vehicleId) {
       return blockingRentals.find((rental) => (
         rental.vehicle_id === reservationForm.vehicleId &&
@@ -470,7 +489,7 @@ function App() {
       return 2;
     };
     return [...blockingRentals].sort((a, b) => priority(a.status) - priority(b.status))[0];
-  }, [rentals, checkoutIntent, reservationForm.vehicleId, reservationForm.pickupDate, reservationForm.returnDate, reservationForm.pickupTime, reservationForm.returnTime]);
+  }, [rentals, adminBookingRentalId, checkoutIntent, reservationForm.vehicleId, reservationForm.pickupDate, reservationForm.returnDate, reservationForm.pickupTime, reservationForm.returnTime]);
 
   useEffect(() => {
     if (!currentRental?.id) return;
@@ -736,6 +755,24 @@ function App() {
   const allGuidedStepsComplete = Boolean(contactStepCompleted && vehicleStepCompleted && identityVerified && licenseUploaded && insuranceUploaded && agreementSigned && paymentPaid);
 
   useEffect(() => {
+    if (!adminBookingClaimed || !portalDataReady || !currentRental?.id) return;
+    if (!contactStepCompleted) setPreviewCheckoutSection('contact');
+    else if (!identityVerified) setPreviewCheckoutSection('identity');
+    else if (!licenseUploaded || !insuranceUploaded) setPreviewCheckoutSection('documents');
+    else if (!agreementSigned) setPreviewCheckoutSection('agreement');
+    else setPreviewCheckoutSection('payment');
+  }, [
+    adminBookingClaimed,
+    portalDataReady,
+    currentRental?.id,
+    contactStepCompleted,
+    identityVerified,
+    licenseUploaded,
+    insuranceUploaded,
+    agreementSigned,
+  ]);
+
+  useEffect(() => {
     if (!portalDataReady || !session?.user?.id || paymentReturnHandledRef.current) return undefined;
     const url = new URL(window.location.href);
     const paymentReturn = url.searchParams.get('payment');
@@ -827,6 +864,32 @@ function App() {
   }, [checkoutExpired, session?.user?.id, pendingBookingId, currentRental?.id]);
 function getBookingIdFromUrl() {
     return new URLSearchParams(window.location.search).get('booking') || '';
+  }
+
+  async function loadAdminBookingHandoff(token) {
+    setAdminBookingError('');
+    const { data, error } = await supabase.rpc('get_manual_booking_handoff', { p_token: token });
+    if (error || !data?.rental_id || !data?.vehicle) {
+      setAdminBookingError(error?.message || 'This booking link is invalid or expired. Ask Rent Me CT to resend it.');
+      setCheckoutIntent(false);
+      return;
+    }
+
+    setAdminBookingHandoff(data);
+    setAdminBookingRentalId(data.rental_id);
+    setCheckoutIntent(true);
+    setPreviewPage('checkout');
+    setReservationForm((current) => ({
+      ...current,
+      vehicleId: data.vehicle_id,
+      pickupDate: data.pickup_date,
+      returnDate: data.return_date,
+      pickupTime: data.pickup_time || '9:00 AM',
+      returnTime: data.return_time || '9:00 AM',
+    }));
+    setVehicles((current) => current.some((vehicle) => vehicle.id === data.vehicle.id)
+      ? current
+      : [data.vehicle, ...current]);
   }
 
   function applyBookingDataToPortal(bookingData) {
@@ -1125,7 +1188,7 @@ function loadSavedBookingFromWebsite() {
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        shouldCreateUser: true,
+        shouldCreateUser: !adminBookingToken,
         emailRedirectTo: redirectUrl.toString(),
         data: {
           pending_booking: JSON.parse(localStorage.getItem('rentmect_pending_booking') || '{}'),
@@ -1154,20 +1217,56 @@ function loadSavedBookingFromWebsite() {
     }
 
     setEmailAuthBusy(true);
-    const { error } = await supabase.auth.verifyOtp({ email, token, type: 'email' });
-    setEmailAuthBusy(false);
+    const { data, error } = await supabase.auth.verifyOtp({ email, token, type: 'email' });
 
     if (error) {
+      setEmailAuthBusy(false);
       setMessage(error.message);
       return;
     }
 
+    if (adminBookingToken) {
+      const { data: claimed, error: claimError } = await supabase.rpc('claim_manual_booking_handoff', {
+        p_token: adminBookingToken,
+      });
+      if (claimError || !claimed?.rental_id) {
+        await supabase.auth.signOut();
+        setSession(null);
+        setAdminBookingClaimed(false);
+        setEmailOtp('');
+        setEmailOtpSent(false);
+        setEmailAuthBusy(false);
+        setMessage(claimError?.message || 'That email is not attached to this booking. Use the email that received the link.');
+        return;
+      }
+      setAdminBookingHandoff(claimed);
+      setAdminBookingRentalId(claimed.rental_id);
+      setAdminBookingClaimed(true);
+      setPreviewPage('checkout');
+      const guidedUrl = new URL(window.location.href);
+      guidedUrl.searchParams.delete('adminBooking');
+      guidedUrl.searchParams.set('adminRental', claimed.rental_id);
+      guidedUrl.searchParams.set('adminPath', claimed.customer_path === 'returning' ? 'returning' : 'new');
+      window.history.replaceState({}, '', `${guidedUrl.pathname}${guidedUrl.search}${guidedUrl.hash}`);
+    }
+    setEmailAuthBusy(false);
+    if (data?.session) setSession(data.session);
     setMessage('Email verified. Opening your booking checklist…');
   }
 
   async function signOut() {
     await supabase.auth.signOut();
     setSession(null);
+    if (adminBookingRentalId && !adminBookingToken) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('adminRental');
+      url.searchParams.delete('adminPath');
+      window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+      setAdminBookingHandoff(null);
+      setAdminBookingRentalId('');
+      setAdminBookingClaimed(false);
+      setCheckoutIntent(false);
+    }
   }
 
   async function saveProfileDetails(showSuccess = true) {
@@ -2484,6 +2583,22 @@ async function verifyPhoneCode() {
 
   if (loading) return <LoadingScreen />;
 
+  if (adminBookingToken && adminBookingError) {
+    return (
+      <div className="preview-guest-shell">
+        <PreviewTopbar />
+        <main className="preview-confirmation preview-handoff-error">
+          <AlertTriangle size={50} />
+          <p className="eyebrow">Secure booking link</p>
+          <h1>We couldn’t open this booking.</h1>
+          <p>{adminBookingError}</p>
+        </main>
+      </div>
+    );
+  }
+
+  if (session && adminBookingToken && !adminBookingClaimed) return <LoadingScreen />;
+
   if (!session) {
     if (checkoutIntent && bookingPreviewCheckoutMode) {
       return (
@@ -2506,6 +2621,7 @@ async function verifyPhoneCode() {
           checkoutSecondsRemaining={checkoutSecondsRemaining}
           checkoutExpired={checkoutExpired}
           directCheckout={cars2BookingHandoff}
+          adminBookingHandoff={adminBookingHandoff}
           changeCheckoutDatesOrVehicle={changeCheckoutDatesOrVehicle}
         />
       );
@@ -2591,6 +2707,7 @@ async function verifyPhoneCode() {
           changeCheckoutDatesOrVehicle={changeCheckoutDatesOrVehicle}
           signOut={signOut}
           openPortal={() => setPreviewPortalOpen(true)}
+          adminBookingHandoff={adminBookingHandoff}
         />
         {agreementModalOpen && (
           <FlowStepErrorBoundary label="rental agreement" onClose={() => setAgreementModalOpen(false)}>
@@ -4512,6 +4629,7 @@ function PreviewGuestExperience({
   checkoutSecondsRemaining,
   checkoutExpired,
   directCheckout = false,
+  adminBookingHandoff = null,
   changeCheckoutDatesOrVehicle,
 }) {
   const days = Math.max(1, getRentalDays(reservationForm.pickupDate, reservationForm.returnDate));
@@ -4529,18 +4647,33 @@ function PreviewGuestExperience({
   }
 
   if (page === 'checkout') {
+    const adminManagedBooking = Boolean(adminBookingHandoff?.rental_id);
+    const returningPath = adminBookingHandoff?.customer_path === 'returning';
     return (
       <div className="preview-guest-shell">
         <PreviewTopbar
-          onBack={() => directCheckout ? changeCheckoutDatesOrVehicle() : setPage('details')}
+          onBack={adminManagedBooking ? undefined : () => directCheckout ? changeCheckoutDatesOrVehicle() : setPage('details')}
           label={directCheckout ? 'Change dates or vehicle' : 'Back to vehicle details'}
         />
         <main className="preview-checkout-layout preview-guest-checkout">
           <section className="preview-checkout-column">
             <div className="preview-page-heading">
               <p className="eyebrow">Secure checkout</p>
-              <h1>Let’s get your trip ready.</h1>
-              <p>Your account is created automatically. No password to remember.</p>
+              <h1>{adminManagedBooking ? 'Review your selected trip.' : 'Let’s get your trip ready.'}</h1>
+              <p>{adminManagedBooking
+                ? 'Rent Me CT selected the vehicle and dates shown here. Enter the email attached to this booking to continue.'
+                : 'Your account is created automatically. No password to remember.'}</p>
+              {adminManagedBooking && (
+                <div className="preview-guided-path-banner">
+                  <ShieldCheck size={20} />
+                  <div>
+                    <strong>{returningPath ? 'Returning customer fast path' : 'New customer guided setup'}</strong>
+                    <span>{returningPath
+                      ? 'Your verified phone, Stripe Identity check, and approved driver license will be reused. You will only complete requirements still missing for this rental.'
+                      : 'After email login, the checklist will guide you through phone, identity, documents, agreement, and payment.'}</span>
+                  </div>
+                </div>
+              )}
             </div>
             <form className="preview-auth-section" onSubmit={emailOtpSent ? verifyEmailOtp : handleAuth}>
               <div className="preview-section-number">1</div>
@@ -4548,7 +4681,7 @@ function PreviewGuestExperience({
                 <div className="preview-section-title">
                   <div>
                     <h2>Contact information</h2>
-                    <p>We’ll use this email for your receipt and secure trip access.</p>
+                    <p>{adminManagedBooking ? 'Use the exact email that received this booking link.' : 'We’ll use this email for your receipt and secure trip access.'}</p>
                   </div>
                   <ShieldCheck size={22} />
                 </div>
@@ -4590,7 +4723,9 @@ function PreviewGuestExperience({
                     Use a different email
                   </button>
                 )}
-                <p className="preview-security-note"><ShieldCheck size={16} /> Returning customers receive the same secure code—no temporary passwords.</p>
+                <p className="preview-security-note"><ShieldCheck size={16} /> {adminManagedBooking
+                  ? 'The link never signs anyone in automatically. The booking email must be verified.'
+                  : 'Returning customers receive the same secure code—no temporary passwords.'}</p>
               </div>
             </form>
           </section>
@@ -4734,6 +4869,7 @@ function PreviewCheckout({
   changeCheckoutDatesOrVehicle,
   signOut,
   openPortal,
+  adminBookingHandoff = null,
 }) {
   const documentsComplete = licenseUploaded && insuranceUploaded;
   const completedCount = [contactStepCompleted, identityVerified, documentsComplete, agreementSigned, paymentPaid].filter(Boolean).length;
@@ -4746,6 +4882,8 @@ function PreviewCheckout({
   const correctingIdentity = Boolean(identityCorrectionTarget);
   const showCorrectionName = ['full_name', 'identity_details'].includes(identityCorrectionTarget);
   const showCorrectionBirthday = ['date_of_birth', 'identity_details'].includes(identityCorrectionTarget);
+  const adminManagedBooking = Boolean(adminBookingHandoff?.rental_id);
+  const returningAdminPath = adminBookingHandoff?.customer_path === 'returning';
 
   useEffect(() => {
     if (paymentPaid) return;
@@ -4788,9 +4926,21 @@ function PreviewCheckout({
               <p className="eyebrow">Verify & pay</p>
               <h1>Complete your booking.</h1>
               <p>{completedCount} of 5 sections complete • Signed in as {userEmail}</p>
-              <button className="preview-change-booking-button" type="button" onClick={changeCheckoutDatesOrVehicle} disabled={reservationSaving}>
-                <ArrowLeft size={16} /> Change dates or choose another vehicle
-              </button>
+              {adminManagedBooking ? (
+                <div className="preview-guided-path-banner">
+                  <ShieldCheck size={20} />
+                  <div>
+                    <strong>{returningAdminPath ? 'Returning customer fast path' : 'New customer guided setup'}</strong>
+                    <span>{returningAdminPath
+                      ? 'Verified phone, Stripe Identity, and approved driver license records remain completed. Finish only the open sections below.'
+                      : 'The vehicle and dates were selected by Rent Me CT. Complete each open section below.'}</span>
+                  </div>
+                </div>
+              ) : (
+                <button className="preview-change-booking-button" type="button" onClick={changeCheckoutDatesOrVehicle} disabled={reservationSaving}>
+                  <ArrowLeft size={16} /> Change dates or choose another vehicle
+                </button>
+              )}
             </div>
             <button className="preview-text-button" type="button" onClick={signOut}>Sign out</button>
           </div>
@@ -4848,7 +4998,7 @@ function PreviewCheckout({
             />
           </PreviewCheckoutSection>
 
-          <PreviewCheckoutSection number="3" title="Driver documents" summary={documentsComplete ? 'License and insurance uploaded' : `${licenseUploaded ? 'License uploaded' : 'License required'} • ${insuranceUploaded ? 'Insurance uploaded' : 'Insurance required'}`} completed={documentsComplete} open={activeSection === 'documents'} onOpen={() => setActiveSection('documents')}>
+          <PreviewCheckoutSection number="3" title="Driver documents" summary={documentsComplete ? `${licenseUploaded && returningAdminPath ? 'Saved license reused' : 'License uploaded'} • Insurance uploaded` : `${licenseUploaded ? (returningAdminPath ? 'Saved license reused' : 'License uploaded') : 'License required'} • ${insuranceUploaded ? 'Insurance uploaded' : 'Insurance required'}`} completed={documentsComplete} open={activeSection === 'documents'} onOpen={() => setActiveSection('documents')}>
             <div className="preview-upload-grid">
               <PreviewUploadCard title="Driver license" text="PDF, JPEG, PNG, or WebP up to 10 MB. Reused for future rentals." complete={licenseUploaded} busy={Boolean(documentUploadBusy?.license)} onUpload={(event) => uploadDocument(event, 'license')} />
               <div>

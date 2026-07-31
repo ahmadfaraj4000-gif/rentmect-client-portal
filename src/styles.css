@@ -3614,3 +3614,40 @@ body {
     min-width: 0;
   }
 }
+.preview-guided-path-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid #b9d6c7;
+  border-radius: 12px;
+  background: #eef8f2;
+  color: #123d2b;
+}
+
+.preview-guided-path-banner svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.preview-guided-path-banner div {
+  display: grid;
+  gap: 4px;
+}
+
+.preview-guided-path-banner strong,
+.preview-guided-path-banner span {
+  display: block;
+}
+
+.preview-guided-path-banner span {
+  color: #405f50;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.preview-handoff-error {
+  max-width: 660px;
+  margin: 8vh auto;
+}
