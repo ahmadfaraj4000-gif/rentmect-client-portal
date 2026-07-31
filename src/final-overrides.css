@@ -411,6 +411,8 @@ summary:focus-visible {
     width: calc(100vw - 16px) !important;
     max-width: calc(100vw - 16px) !important;
     max-height: calc(100dvh - 16px) !important;
+    place-self: center !important;
+    margin: auto !important;
   }
 
   .agreement-review-status {
