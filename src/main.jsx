@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
 import BookingPreviewFleet from './BookingPreviewFleet';
+import BirthdayInput from './BirthdayInput';
 import FLEET_GALLERY_IMAGES from './fleetGalleryImages';
 import { AGREEMENT_TEXT, AGREEMENT_VERSION } from './rentalAgreement';
 import logoUrl from './assets/logo-sidebar.png';
@@ -195,11 +196,15 @@ function App() {
     email_marketing_opt_in: false,
     sms_transactional_opt_in: false,
   });
+  const [confirmedBirthDate, setConfirmedBirthDate] = useState('');
+  const [identityCorrectionTarget, setIdentityCorrectionTarget] = useState('');
+  const birthDateConfirmed = Boolean(profileForm.date_of_birth && confirmedBirthDate === profileForm.date_of_birth);
   const profileComplete = Boolean(
     hasFirstAndLastName(profileForm.full_name) &&
     profileForm.phone.trim() &&
     profileForm.intended_vehicle_use.trim() &&
-    isValidBirthDate(profileForm.date_of_birth)
+    isValidBirthDate(profileForm.date_of_birth) &&
+    birthDateConfirmed
   );
 
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -1075,6 +1080,7 @@ function loadSavedBookingFromWebsite() {
         email_marketing_opt_in: Boolean(profileResult.data.email_marketing_opt_in && !profileResult.data.email_marketing_unsubscribed_at),
         sms_transactional_opt_in: Boolean(profileResult.data.sms_transactional_opt_in && !profileResult.data.sms_transactional_opted_out_at),
       });
+      setConfirmedBirthDate(profileResult.data.date_of_birth || '');
       setPhoneVerified(Boolean(profileResult.data.phone_verified));
     }
 
@@ -1173,7 +1179,11 @@ function loadSavedBookingFromWebsite() {
     }
 
     if (!isValidBirthDate(profileForm.date_of_birth)) {
-      notify('Enter a valid date of birth before saving your profile.');
+      notify('Enter a real date of birth. Renters must be at least 21.');
+      return null;
+    }
+    if (!birthDateConfirmed) {
+      notify('Confirm that the birthday exactly matches your government ID.');
       return null;
     }
     const { data, error } = await supabase.rpc('save_customer_profile_contact_details', {
@@ -1217,6 +1227,7 @@ function loadSavedBookingFromWebsite() {
     }
 
     setProfile(savedProfile);
+    setConfirmedBirthDate(savedProfile.date_of_birth || profileForm.date_of_birth);
     setPhoneVerified(Boolean(savedProfile.phone_verified));
     if (showSuccess && !preferenceError && !smsPreferenceError) notify('Profile and communication preferences saved.');
     return savedProfile;
@@ -1231,6 +1242,7 @@ function loadSavedBookingFromWebsite() {
   const missingContactFields = [
     !hasFirstAndLastName(profileForm.full_name) && 'full legal first and last name exactly as shown on your government ID',
     !isValidBirthDate(profileForm.date_of_birth) && 'valid date of birth',
+    isValidBirthDate(profileForm.date_of_birth) && !birthDateConfirmed && 'birthday confirmation',
     !profileForm.intended_vehicle_use.trim() && 'intended vehicle use',
     !profileForm.phone.trim() && 'phone number',
   ].filter(Boolean);
@@ -1320,6 +1332,12 @@ async function verifyPhoneCode() {
     if (!savedProfile) return;
     if (!savedProfile.phone_verified) {
       notify('Verify your phone number to continue.');
+      return;
+    }
+    if (identityCorrectionTarget) {
+      setIdentityCorrectionTarget('');
+      setPreviewCheckoutSection('identity');
+      notify('Your corrected identity details are saved. Your email and phone remain verified.', 'success');
       return;
     }
     const rental = currentRental || (await createReservationIfNeeded());
@@ -2238,6 +2256,12 @@ async function verifyPhoneCode() {
       return;
     }
 
+    if (data?.noPaymentRequired) {
+      await loadPortalData(session.user.id, { silent: true });
+      notify('Your 100% discount covered the full checkout, including the waived security deposit. No Stripe payment was required.', 'success');
+      return;
+    }
+
     if (!data?.url) {
       notify('Stripe checkout did not return a payment link.');
       return;
@@ -2307,6 +2331,12 @@ async function verifyPhoneCode() {
       const savedProfile = await saveProfileDetails(false);
       if (!savedProfile?.phone_verified) {
         notify('Verify the saved phone number before continuing.');
+        return;
+      }
+      if (identityCorrectionTarget) {
+        setIdentityCorrectionTarget('');
+        setWizardStep(2);
+        notify('Your corrected identity details are saved. Your email and phone remain verified.', 'success');
         return;
       }
     }
@@ -2516,6 +2546,10 @@ async function verifyPhoneCode() {
           estimate={estimate}
           profileForm={profileForm}
           setProfileForm={setProfileForm}
+          birthDateConfirmed={birthDateConfirmed}
+          setConfirmedBirthDate={setConfirmedBirthDate}
+          identityCorrectionTarget={identityCorrectionTarget}
+          setIdentityCorrectionTarget={setIdentityCorrectionTarget}
           userEmail={userEmail}
           emailVerified={emailVerified}
           phoneCode={phoneCode}
@@ -2959,20 +2993,15 @@ async function verifyPhoneCode() {
                   identityVerified={identityVerified}
                 />
                 {identityVerified && <small className="identity-name-lock-note">Identity verified. Your legal name and birthday are locked so returning rentals can reuse the approved Stripe Identity check.</small>}
-                <label className="profile-date-field">
-                  <span>Date of birth</span>
-                  <input
-                    type="date"
-                    name="bday"
-                    autoComplete="bday"
-                    max={getTodayDateInputValue()}
-                    value={profileForm.date_of_birth}
-                    onChange={(e) => setProfileForm({ ...profileForm, date_of_birth: e.target.value })}
-                    disabled={identityVerified}
-                    required
-                  />
-                  {profileForm.date_of_birth && <small>{isCustomerUnder25(profileForm.date_of_birth) ? 'Under 25: the configured deposit adjustment and rental markup apply.' : 'Age 25 or older: the selected vehicle deposit applies.'}</small>}
-                </label>
+                <BirthdayInput
+                  idPrefix="profile-birthday"
+                  value={profileForm.date_of_birth}
+                  onChange={(dateOfBirth) => setProfileForm((current) => ({ ...current, date_of_birth: dateOfBirth }))}
+                  confirmed={birthDateConfirmed}
+                  onConfirmedChange={(isConfirmed) => setConfirmedBirthDate(isConfirmed ? profileForm.date_of_birth : '')}
+                  disabled={identityVerified}
+                />
+                {profileForm.date_of_birth && isValidBirthDate(profileForm.date_of_birth) && <small>{isCustomerUnder25(profileForm.date_of_birth) ? 'Under 25: the configured deposit adjustment and rental markup apply.' : 'Age 25 or older: the selected vehicle deposit applies.'}</small>}
                 <label><span>Phone number</span><input
                   type="tel"
                   autoComplete="tel"
@@ -3108,7 +3137,7 @@ async function verifyPhoneCode() {
               {Number(currentRental?.discount_amount || 0) > 0 && <div className="invoice-row discount-row"><span>Discount ({currentRental.discount_code})</span><strong>−{money(currentRental.discount_amount)}</strong></div>}
               <div className="invoice-row"><span>Rental Total</span><strong>{currentRental ? money(currentRental.rental_total) : estimate ? money(estimate.rentalTotal) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>CT Sales Tax</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
-              <div className="invoice-row"><span>Security Deposit</span><strong>{currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
+              <div className="invoice-row"><span>Security Deposit</span><strong>{currentRental?.discount_waives_security_deposit ? 'Waived' : currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
               <ServiceFeesSummary serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
               <div className="invoice-row total-row"><span>Total Due Today</span><strong>{currentRental ? money(Number(currentRental.rental_total || 0) + Number(currentRental.service_fee_total || 0) + Number(currentRental.tax_amount || 0) + Number(currentRental.security_deposit || 0)) : estimate && !estimate.invalid ? money(estimate.checkoutTotal + estimate.securityDeposit) : 'Pending'}</strong></div>
             </div>
@@ -3151,7 +3180,7 @@ async function verifyPhoneCode() {
                 insuranceRejected={insuranceRejected}
               />
             )}
-            {paymentPaid && <p className="auth-message">Payment recorded. Deposit is marked as held.</p>}
+            {paymentPaid && <p className="auth-message">{currentRental?.discount_waives_security_deposit ? 'Booking completed with the security deposit waived.' : 'Payment recorded. Deposit is marked as held.'}</p>}
             {approvedUnpaidExtension && (
               <div className="extension-payment-card">
                 <strong>Extension Payment Required</strong>
@@ -3254,6 +3283,10 @@ async function verifyPhoneCode() {
           setWizardStep={setWizardStep}
           profileForm={profileForm}
           setProfileForm={setProfileForm}
+          birthDateConfirmed={birthDateConfirmed}
+          setConfirmedBirthDate={setConfirmedBirthDate}
+          identityCorrectionTarget={identityCorrectionTarget}
+          setIdentityCorrectionTarget={setIdentityCorrectionTarget}
           phoneCode={phoneCode}
           setPhoneCode={setPhoneCode}
           sendPhoneCode={sendPhoneCode}
@@ -3405,6 +3438,10 @@ function WizardModal({
   setWizardStep,
   profileForm,
   setProfileForm,
+  birthDateConfirmed,
+  setConfirmedBirthDate,
+  identityCorrectionTarget,
+  setIdentityCorrectionTarget,
   phoneCode,
   setPhoneCode,
   sendPhoneCode,
@@ -3457,6 +3494,9 @@ function WizardModal({
   const Icon = step.icon;
   const [vehicleReminder, setVehicleReminder] = useState(null);
   const dialogRef = useDialogFocus(() => setWizardOpen(false));
+  const correctingIdentity = Boolean(identityCorrectionTarget);
+  const showCorrectionName = ['full_name', 'identity_details'].includes(identityCorrectionTarget);
+  const showCorrectionBirthday = ['date_of_birth', 'identity_details'].includes(identityCorrectionTarget);
 
   return (
     <div className="wizard-backdrop" role="presentation">
@@ -3504,30 +3544,30 @@ function WizardModal({
           {wizardStep === 0 && (
             <div className="portal-form">
               <p className="muted">
-                Add your renter details once, then verify your phone. Your passwordless account is already connected to this booking.
+                {correctingIdentity
+                  ? 'Correct only the highlighted identity information below. Your verified email and phone number will not be changed.'
+                  : 'Add your renter details once, then verify your phone. Your passwordless account is already connected to this booking.'}
               </p>
 
-              <LegalNameFields
+              {(!correctingIdentity || showCorrectionName) && <LegalNameFields
                 profileForm={profileForm}
                 setProfileForm={setProfileForm}
-                identityVerified={identityVerified}
-              />
-              {identityVerified && <small className="identity-name-lock-note">Identity already verified. Your legal name and birthday stay locked and the approved check is reused for returning rentals.</small>}
+                identityVerified={identityVerified && !correctingIdentity}
+              />}
+              {identityVerified && !correctingIdentity && <small className="identity-name-lock-note">Identity already verified. Your legal name and birthday stay locked and the approved check is reused for returning rentals.</small>}
 
-              <label className="auth-date-field">
-                <span>Date of birth</span>
-                <input
-                  type="date"
-                  name="bday"
-                  autoComplete="bday"
-                  max={getTodayDateInputValue()}
-                  value={profileForm.date_of_birth}
-                  onChange={(e) => setProfileForm({ ...profileForm, date_of_birth: e.target.value })}
-                  disabled={identityVerified}
-                />
-              </label>
+              {(!correctingIdentity || showCorrectionBirthday) && <BirthdayInput
+                idPrefix="wizard-birthday"
+                value={profileForm.date_of_birth}
+                onChange={(dateOfBirth) => setProfileForm((current) => ({ ...current, date_of_birth: dateOfBirth }))}
+                confirmed={birthDateConfirmed}
+                onConfirmedChange={(isConfirmed) => setConfirmedBirthDate(isConfirmed ? profileForm.date_of_birth : '')}
+                autoFocus={identityCorrectionTarget === 'date_of_birth'}
+                disabled={identityVerified && !correctingIdentity}
+              />}
 
-              <label>
+              {!correctingIdentity && <>
+                <label>
                 <span>What will you use the vehicle for?</span>
                 <textarea
                   placeholder="Example: commuting to work, a family trip, or local personal errands"
@@ -3576,6 +3616,7 @@ function WizardModal({
                   </button>
                 </>
               )}
+              </>}
             </div>
           )}
 
@@ -3788,7 +3829,7 @@ function WizardModal({
               {Number(currentRental?.discount_amount || 0) > 0 && <div className="invoice-row discount-row"><span>Discount ({currentRental.discount_code})</span><strong>−{money(currentRental.discount_amount)}</strong></div>}
               <div className="invoice-row"><span>Rental Total</span><strong>{currentRental ? money(currentRental.rental_total) : estimate ? money(estimate.rentalTotal) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Taxes</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
-              <div className="invoice-row"><span>Security Deposit</span><strong>{currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
+              <div className="invoice-row"><span>Security Deposit</span><strong>{currentRental?.discount_waives_security_deposit ? 'Waived' : currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
               <ServiceFeesSummary serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
               <div className="invoice-row"><span>Mileage</span><strong>{MILEAGE_POLICY}</strong></div>
               <div className="invoice-row"><span>Pickup</span><strong>{RENTMECT_ADDRESS}</strong></div>
@@ -3798,7 +3839,7 @@ function WizardModal({
                 {!currentRental.discount_code && <div className="discount-code-entry"><input aria-label="Discount code" value={discountInput} maxLength="24" placeholder="DISCOUNT CODE" onChange={(event) => setDiscountInput(event.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, ''))}/><button type="button" className="secondary-btn" disabled={discountSaving || !discountInput.trim()} onClick={applyCustomerDiscount}>{discountSaving ? 'Applying…' : 'Apply code'}</button></div>}
               </div>}
 
-              {paymentPaid && <p className="auth-message">Payment recorded. Deposit is marked as held.</p>}
+              {paymentPaid && <p className="auth-message">{currentRental?.discount_waives_security_deposit ? 'Booking completed with the security deposit waived.' : 'Payment recorded. Deposit is marked as held.'}</p>}
               {(!identityVerified || !licenseUploaded || !insuranceUploaded) && (
                 <div className="pickup-reminder-box compact-reminder">
                   <ShieldCheck size={22} />
@@ -3822,8 +3863,9 @@ function WizardModal({
               saving={identitySaving}
               onStart={startIdentityVerification}
               onRefresh={() => refreshIdentityVerification(true)}
-              onEditProfile={() => {
+              onEditProfile={(target) => {
                 setWizardReminder(null);
+                setIdentityCorrectionTarget(target);
                 setWizardStep(0);
               }}
             />
@@ -4647,6 +4689,10 @@ function PreviewCheckout({
   estimate,
   profileForm,
   setProfileForm,
+  birthDateConfirmed,
+  setConfirmedBirthDate,
+  identityCorrectionTarget,
+  setIdentityCorrectionTarget,
   userEmail,
   emailVerified,
   phoneCode,
@@ -4696,6 +4742,10 @@ function PreviewCheckout({
   const taxAmount = Number(currentRental?.tax_amount ?? estimate?.taxAmount ?? 0);
   const securityDeposit = Number(currentRental?.security_deposit ?? estimate?.securityDeposit ?? 0);
   const total = rentalTotal + serviceFeeTotal + taxAmount + securityDeposit;
+  const depositWaived = Boolean(currentRental?.discount_waives_security_deposit);
+  const correctingIdentity = Boolean(identityCorrectionTarget);
+  const showCorrectionName = ['full_name', 'identity_details'].includes(identityCorrectionTarget);
+  const showCorrectionBirthday = ['date_of_birth', 'identity_details'].includes(identityCorrectionTarget);
 
   useEffect(() => {
     if (paymentPaid) return;
@@ -4746,38 +4796,55 @@ function PreviewCheckout({
           </div>
 
           <PreviewCheckoutSection number="1" title="Contact information" summary={contactStepCompleted ? `${profileForm.full_name} • Phone verified` : 'Tell us who will be driving'} completed={contactStepCompleted} open={activeSection === 'contact'} onOpen={() => setActiveSection('contact')}>
+            {correctingIdentity && <div className="identity-correction-notice" role="status">
+              <strong>Correct only the highlighted identity information.</strong>
+              <span>Your verified email and phone number will not be changed or verified again.</span>
+            </div>}
             <div className="preview-form-grid">
-              <LegalNameFields
+              {(!correctingIdentity || showCorrectionName) && <LegalNameFields
                 className="preview-full-field"
                 profileForm={profileForm}
                 setProfileForm={setProfileForm}
-                identityVerified={identityVerified}
-              />
-              {identityVerified && <small className="preview-full-field identity-name-lock-note">Identity already verified. Your legal name and birthday are locked and reused for future rentals.</small>}
-              <label><span>Date of birth</span><input type="date" name="bday" autoComplete="bday" max={getTodayDateInputValue()} value={profileForm.date_of_birth} onChange={(event) => setProfileForm({ ...profileForm, date_of_birth: event.target.value })} disabled={identityVerified} /></label>
-              <label className="preview-full-field"><span>Email</span><input value={userEmail} disabled /></label>
-              <label className="preview-full-field"><span>What will you use the vehicle for?</span><textarea maxLength="500" value={profileForm.intended_vehicle_use} onChange={(event) => setProfileForm({ ...profileForm, intended_vehicle_use: event.target.value })} placeholder="Personal transportation, work, family trip…" /></label>
-              <label className="preview-full-field"><span>Mobile number</span><input value={profileForm.phone} onChange={(event) => setProfileForm({ ...profileForm, phone: event.target.value, sms_transactional_opt_in: false })} placeholder="(860) 555-0123" /></label>
-              <div className="preview-full-field"><EmailMarketingPreference profileForm={profileForm} setProfileForm={setProfileForm} /></div>
-              <div className="preview-full-field"><SmsTransactionalPreference profileForm={profileForm} setProfileForm={setProfileForm} /></div>
-              <div className="preview-full-field"><SmsVerificationDisclosure /></div>
+                identityVerified={identityVerified && !correctingIdentity}
+              />}
+              {identityVerified && !correctingIdentity && <small className="preview-full-field identity-name-lock-note">Identity already verified. Your legal name and birthday are locked and reused for future rentals.</small>}
+              {(!correctingIdentity || showCorrectionBirthday) && <BirthdayInput
+                idPrefix="preview-birthday"
+                value={profileForm.date_of_birth}
+                onChange={(dateOfBirth) => setProfileForm((current) => ({ ...current, date_of_birth: dateOfBirth }))}
+                confirmed={birthDateConfirmed}
+                onConfirmedChange={(isConfirmed) => setConfirmedBirthDate(isConfirmed ? profileForm.date_of_birth : '')}
+                autoFocus={identityCorrectionTarget === 'date_of_birth'}
+                disabled={identityVerified && !correctingIdentity}
+              />}
+              {!correctingIdentity && <>
+                <label className="preview-full-field"><span>Email</span><input value={userEmail} disabled /></label>
+                <label className="preview-full-field"><span>What will you use the vehicle for?</span><textarea maxLength="500" value={profileForm.intended_vehicle_use} onChange={(event) => setProfileForm({ ...profileForm, intended_vehicle_use: event.target.value })} placeholder="Personal transportation, work, family trip…" /></label>
+                <label className="preview-full-field"><span>Mobile number</span><input value={profileForm.phone} onChange={(event) => setProfileForm({ ...profileForm, phone: event.target.value, sms_transactional_opt_in: false })} placeholder="(860) 555-0123" /></label>
+                <div className="preview-full-field"><EmailMarketingPreference profileForm={profileForm} setProfileForm={setProfileForm} /></div>
+                <div className="preview-full-field"><SmsTransactionalPreference profileForm={profileForm} setProfileForm={setProfileForm} /></div>
+                <div className="preview-full-field"><SmsVerificationDisclosure /></div>
+              </>}
             </div>
-            <div className="preview-inline-actions">
+            {!correctingIdentity && <div className="preview-inline-actions">
               <button className="preview-secondary-button" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>{phoneVerified ? 'Phone verified' : sendingCode ? 'Saving & sending…' : 'Save details & send code'}</button>
               {!phoneVerified && <><input className="preview-code-input" inputMode="numeric" autoComplete="one-time-code" value={phoneCode} onChange={(event) => setPhoneCode(event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="Verification code" /><button className="preview-secondary-button" type="button" onClick={verifyPhoneCode} disabled={verifyingCode}>{verifyingCode ? 'Verifying…' : 'Verify phone'}</button></>}
-            </div>
-            <button className="preview-primary-button" type="button" onClick={continueContact} disabled={reservationSaving || checkoutExpired}>{reservationSaving ? 'Saving…' : currentRental ? 'Continue' : 'Save & continue'} <ChevronRight size={18} /></button>
+            </div>}
+            <button className="preview-primary-button" type="button" onClick={continueContact} disabled={reservationSaving || checkoutExpired}>{reservationSaving ? 'Saving…' : correctingIdentity ? 'Save correction & return to Identity' : currentRental ? 'Continue' : 'Save & continue'} <ChevronRight size={18} /></button>
           </PreviewCheckoutSection>
 
-          <PreviewCheckoutSection number="2" title="Identity verification" summary={identityVerified ? 'Identity verified securely by Stripe' : identityStatus === 'processing' ? 'Verification processing' : 'Government ID and selfie'} completed={identityVerified} open={activeSection === 'identity'} onOpen={() => setActiveSection('identity')}>
+          <PreviewCheckoutSection number="2" title="Identity verification" summary={identityVerified ? 'Verified once and saved for returning rentals' : identityStatus === 'processing' ? 'Verification processing' : 'Government ID and selfie'} completed={identityVerified} open={activeSection === 'identity'} onOpen={() => setActiveSection('identity')}>
             <IdentityVerificationPanel
               status={identityStatus}
-              verified={identityVerified}
               errorCode={identityErrorCode}
+              verified={identityVerified}
               saving={identitySaving}
               onStart={startIdentityVerification}
               onRefresh={() => refreshIdentityVerification(true)}
-              onEditProfile={() => setActiveSection('contact')}
+              onEditProfile={(target) => {
+                setIdentityCorrectionTarget(target);
+                setActiveSection('contact');
+              }}
             />
           </PreviewCheckoutSection>
 
@@ -4831,7 +4898,7 @@ function PreviewCheckout({
             <div className="preview-payment-breakdown">
               <div><span>Rental</span><strong>{money(rentalTotal)}</strong></div>
               <div><span>CT sales tax</span><strong>{money(taxAmount)}</strong></div>
-              <div><span>Refundable security deposit</span><strong>{money(securityDeposit)}</strong></div>
+              <div><span>Refundable security deposit</span><strong>{depositWaived ? 'Waived' : money(securityDeposit)}</strong></div>
               <ServiceFeesSummary serviceFees={serviceFees} total={serviceFeeTotal} />
               <div className="preview-payment-total"><span>Total due today</span><strong>{money(total)}</strong></div>
             </div>
@@ -4840,7 +4907,7 @@ function PreviewCheckout({
           </PreviewCheckoutSection>
         </section>
 
-        <PreviewTripSummary reservationForm={reservationForm} rentalTotal={rentalTotal} serviceFeeTotal={serviceFeeTotal} taxAmount={taxAmount} securityDeposit={securityDeposit} total={total} secondsRemaining={checkoutSecondsRemaining} expired={checkoutExpired} vehicle={vehicle} />
+        <PreviewTripSummary reservationForm={reservationForm} rentalTotal={rentalTotal} serviceFeeTotal={serviceFeeTotal} taxAmount={taxAmount} securityDeposit={securityDeposit} depositWaived={depositWaived} total={total} secondsRemaining={checkoutSecondsRemaining} expired={checkoutExpired} vehicle={vehicle} />
       </main>
     </div>
   );
@@ -4871,7 +4938,7 @@ function PreviewUploadCard({ title, text, complete, busy = false, onUpload }) {
   );
 }
 
-function PreviewTripSummary({ reservationForm, rentalTotal, serviceFeeTotal = 0, taxAmount, securityDeposit, total, secondsRemaining, expired, vehicle }) {
+function PreviewTripSummary({ reservationForm, rentalTotal, serviceFeeTotal = 0, taxAmount, securityDeposit, depositWaived = false, total, secondsRemaining, expired, vehicle }) {
   const displayVehicle = vehicle || { name: 'Booking Flow Test Vehicle', id: BOOKING_FLOW_TEST_VEHICLE_ID };
   const features = getVehicleFeatures(displayVehicle);
   return (
@@ -4893,7 +4960,7 @@ function PreviewTripSummary({ reservationForm, rentalTotal, serviceFeeTotal = 0,
         <div><span>Rental</span><strong>{money(rentalTotal)}</strong></div>
         {Number(serviceFeeTotal) > 0 && <div><span>Booking fees</span><strong>{money(serviceFeeTotal)}</strong></div>}
         <div><span>Estimated tax</span><strong>{money(taxAmount)}</strong></div>
-        <div><span>Refundable deposit</span><strong>{money(securityDeposit)}</strong></div>
+        <div><span>Refundable deposit</span><strong>{depositWaived ? 'Waived' : money(securityDeposit)}</strong></div>
         <div className="preview-total-row"><span>Due today</span><strong>{money(total)}</strong></div>
       </div>
       <p><ShieldCheck size={15} /> Secure checkout • Your progress is saved</p>
@@ -5231,12 +5298,31 @@ function identityCorrectionGuidance(errorCode) {
 
 function IdentityVerificationPanel({ status, verified, errorCode, saving, onStart, onRefresh, onEditProfile }) {
   const requiresInput = ['unverified', 'requires_input', 'canceled', 'redacted'].includes(status);
+  const failed = ['requires_input', 'canceled', 'redacted'].includes(status);
   const configurationRequired = status === 'configuration_required' || errorCode === 'identity_results_access_required';
   const matchResults = identityMatchResults(status, errorCode);
   const resultsUnavailable = errorCode === 'identity_results_access_required';
   const correction = identityCorrectionGuidance(errorCode);
-  return <div className={`identity-verification-panel ${verified ? 'verified' : status}`}>
-    <ShieldCheck size={30} />
+  const normalizedErrorCode = String(errorCode || '').toLowerCase();
+  const identityDetailsMismatch = ['name_mismatch', 'date_of_birth_mismatch', 'identity_details_mismatch'].includes(normalizedErrorCode);
+  const correctionTarget = normalizedErrorCode === 'date_of_birth_mismatch'
+    ? 'date_of_birth'
+    : normalizedErrorCode === 'name_mismatch'
+      ? 'full_name'
+      : normalizedErrorCode === 'identity_details_mismatch'
+        ? 'identity_details'
+        : '';
+  const retryRequired = status !== 'unverified' || (
+    Boolean(normalizedErrorCode) &&
+    normalizedErrorCode !== 'profile_details_changed'
+  );
+  const identityActionLabel = identityDetailsMismatch
+    ? 'Run Stripe Identity again'
+    : retryRequired
+      ? 'Retry Stripe Identity'
+      : 'Start Stripe Identity';
+  return <div className={`identity-verification-panel ${verified ? 'verified' : status}`} role="status" aria-live="polite">
+    {failed ? <AlertTriangle size={30} /> : verified ? <CheckCircle2 size={30} /> : <ShieldCheck size={30} />}
     <div>
       <strong className="identity-status-title">{verified ? 'Identity verified' : status === 'processing' ? 'Stripe is checking your submission' : correction?.title || 'Verify your government ID and selfie'}</strong>
       <span>{verified
@@ -5256,13 +5342,13 @@ function IdentityVerificationPanel({ status, verified, errorCode, saving, onStar
         <strong>How to fix this</strong>
         <span>{correction.fix}</span>
         {correction.preservesContact && <small>Your verified email stays verified. Your phone also stays verified as long as you do not change the phone number.</small>}
-        {correction.action && onEditProfile && <button type="button" className="identity-correction-button" onClick={onEditProfile}>{correction.action}</button>}
+        {correction.action && onEditProfile && <button type="button" className="identity-correction-button" onClick={() => onEditProfile(correctionTarget)}>{correction.action}</button>}
       </div>}
       {resultsUnavailable && <span className="identity-results-warning" role="alert">Stripe received your submission, but Rent Me CT could not securely retrieve the comparison results. You do not need to resubmit unless we contact you.</span>}
       <small>This identity check does not replace Rent Me CT’s separate driver-license validity and insurance review.</small>
       <div className="identity-verification-actions">
-        {requiresInput && !configurationRequired && <button type="button" className="primary-btn" onClick={onStart} disabled={saving}>{saving ? 'Opening Stripe…' : correction ? 'Run Stripe Identity again' : status === 'requires_input' ? 'Retry with Stripe Identity' : 'Start Stripe Identity'}</button>}
-        {!verified && <button type="button" className="secondary-btn" onClick={onRefresh} disabled={saving}>{saving ? 'Checking…' : 'Refresh status'}</button>}
+        {requiresInput && !configurationRequired && <button type="button" className="primary-btn" onClick={onStart} disabled={saving}>{saving ? 'Opening Stripe...' : identityActionLabel}</button>}
+        {!verified && <button type="button" className="secondary-btn" onClick={onRefresh} disabled={saving}>{saving ? 'Checking...' : 'Refresh status'}</button>}
       </div>
     </div>
   </div>;
@@ -5448,7 +5534,7 @@ function customerAge(dateOfBirth, today = new Date()) {
 }
 function isValidBirthDate(dateOfBirth) {
   const age = customerAge(dateOfBirth);
-  return age !== null && age >= 21;
+  return age !== null && age >= 21 && age <= 120;
 }
 function hasFirstAndLastName(value) {
   return String(value || '').trim().split(/\s+/).filter(Boolean).length >= 2;
@@ -5874,7 +5960,7 @@ Base Rental Total: ${rental?.base_rental_total ? money(rental.base_rental_total)
 Under-25 Rental Markup: ${Number(rental?.under_25_markup_amount || 0) > 0 ? `${money(rental.under_25_markup_amount)} (${Number(rental.under_25_markup_percentage || 0)}%)` : 'Not applied'}
 Rental Total: ${rental?.rental_total ? money(rental.rental_total) : 'Pending'}
 Tax Amount: ${rental?.tax_amount ? money(rental.tax_amount) : 'Pending'}
-Security Deposit: ${rental?.security_deposit ? money(rental.security_deposit) : vehicle?.security_deposit ? money(vehicle.security_deposit) : 'Pending'}
+Security Deposit: ${rental?.discount_waives_security_deposit ? 'Waived by discount code' : rental ? money(rental.security_deposit) : vehicle?.security_deposit ? money(vehicle.security_deposit) : 'Pending'}
 Mileage Policy: ${MILEAGE_POLICY}
 Cancellation Terms: ${CANCELLATION_TERMS}
 Typed Signature: ${signatureName || rental?.agreement_signature_name || 'Pending'}
