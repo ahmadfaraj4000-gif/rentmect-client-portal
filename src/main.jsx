@@ -3807,9 +3807,8 @@ function WizardModal({
           {wizardStep === 2 && (
             <IdentityVerificationPanel
               status={identityStatus}
-              errorCode={identityErrorCode}
               verified={identityVerified}
-              errorCode={profile?.identity_verification_error_code}
+              errorCode={identityErrorCode}
               saving={identitySaving}
               onStart={startIdentityVerification}
               onRefresh={() => refreshIdentityVerification(true)}
@@ -4753,7 +4752,7 @@ function PreviewCheckout({
             <IdentityVerificationPanel
               status={identityStatus}
               verified={identityVerified}
-              errorCode={profile?.identity_verification_error_code}
+              errorCode={identityErrorCode}
               saving={identitySaving}
               onStart={startIdentityVerification}
               onRefresh={() => refreshIdentityVerification(true)}
