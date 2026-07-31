@@ -3251,6 +3251,7 @@ async function verifyPhoneCode() {
           setWizardReminder={setWizardReminder}
           previousWizardStep={previousWizardStep}
           nextWizardStep={nextWizardStep}
+          setWizardStep={setWizardStep}
           profileForm={profileForm}
           setProfileForm={setProfileForm}
           phoneCode={phoneCode}
@@ -3291,6 +3292,10 @@ async function verifyPhoneCode() {
           agreementSaving={agreementSaving}
           agreementText={agreementTextWithDetails}
           serviceFees={serviceFees}
+          discountInput={discountInput}
+          setDiscountInput={setDiscountInput}
+          discountSaving={discountSaving}
+          applyCustomerDiscount={applyCustomerDiscount}
           insuranceCoverage={insuranceCoverage}
           setInsuranceCoverage={setInsuranceCoverage}
             currentRental={currentRental}
@@ -3397,6 +3402,7 @@ function WizardModal({
   setWizardReminder,
   previousWizardStep,
   nextWizardStep,
+  setWizardStep,
   profileForm,
   setProfileForm,
   phoneCode,
@@ -3438,6 +3444,10 @@ function WizardModal({
   agreementSaving,
   agreementText,
   serviceFees,
+  discountInput,
+  setDiscountInput,
+  discountSaving,
+  applyCustomerDiscount,
   insuranceCoverage,
   setInsuranceCoverage,
   currentRental,
@@ -4214,6 +4224,17 @@ function userFacingPortalError(error, fallback = 'Something went wrong. Please t
   if (/jwt|token|session|not authenticated/i.test(message)) return 'Your secure session needs to be refreshed. Sign in again and retry.';
   if (/duplicate key|already exists/i.test(message)) return 'That update was already recorded. Refresh to see the latest status.';
   return fallback;
+}
+
+function customerSafeMessage(message, fallback = 'Something went wrong. Please try again.') {
+  const text = String(message || '').trim();
+  if (!text) return fallback;
+  if (
+    /(?:insert|update|delete|select)\s+(?:on|from|into)\s+table|foreign key|constraint|violates|duplicate key|relation\s+["']|column\s+["']|schema cache|sqlstate|pgrst\d+|row-level security|permission denied for (?:table|schema|function)|null value in column|syntax error at or near|sensitive verification results|restricted api key|access-verification-results|stripe\.com\/docs\/identity/i.test(text)
+  ) {
+    return fallback;
+  }
+  return text;
 }
 
 function isTransientPortalError(error) {
@@ -5210,6 +5231,7 @@ function identityCorrectionGuidance(errorCode) {
 
 function IdentityVerificationPanel({ status, verified, errorCode, saving, onStart, onRefresh, onEditProfile }) {
   const requiresInput = ['unverified', 'requires_input', 'canceled', 'redacted'].includes(status);
+  const configurationRequired = status === 'configuration_required' || errorCode === 'identity_results_access_required';
   const matchResults = identityMatchResults(status, errorCode);
   const resultsUnavailable = errorCode === 'identity_results_access_required';
   const correction = identityCorrectionGuidance(errorCode);
@@ -5239,7 +5261,7 @@ function IdentityVerificationPanel({ status, verified, errorCode, saving, onStar
       {resultsUnavailable && <span className="identity-results-warning" role="alert">Stripe received your submission, but Rent Me CT could not securely retrieve the comparison results. You do not need to resubmit unless we contact you.</span>}
       <small>This identity check does not replace Rent Me CT’s separate driver-license validity and insurance review.</small>
       <div className="identity-verification-actions">
-        {requiresInput && <button type="button" className="primary-btn" onClick={onStart} disabled={saving}>{saving ? 'Opening Stripe…' : correction ? 'Run Stripe Identity again' : status === 'requires_input' ? 'Retry with Stripe Identity' : 'Start Stripe Identity'}</button>}
+        {requiresInput && !configurationRequired && <button type="button" className="primary-btn" onClick={onStart} disabled={saving}>{saving ? 'Opening Stripe…' : correction ? 'Run Stripe Identity again' : status === 'requires_input' ? 'Retry with Stripe Identity' : 'Start Stripe Identity'}</button>}
         {!verified && <button type="button" className="secondary-btn" onClick={onRefresh} disabled={saving}>{saving ? 'Checking…' : 'Refresh status'}</button>}
       </div>
     </div>

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
+    "audit": "eslint src/main.jsx src/BookingPreviewFleet.jsx src/supabaseClient.js",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0 --port 4173"
   },
@@ -15,5 +16,9 @@
     "react": "latest",
     "react-dom": "latest",
     "vite": "^8.1.5"
+  },
+  "devDependencies": {
+    "eslint": "^9.39.5",
+    "globals": "^16.5.0"
   }
 }
