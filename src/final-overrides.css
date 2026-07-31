@@ -82,6 +82,164 @@
   font-weight: 500;
 }
 
+.birthday-input {
+  min-width: 0;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.birthday-input legend {
+  margin: 0 0 8px;
+  padding: 0;
+  color: #343b38;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.birthday-segments {
+  display: grid;
+  grid-template-columns: minmax(58px, .8fr) auto minmax(58px, .8fr) auto minmax(96px, 1.3fr);
+  gap: 8px;
+  align-items: end;
+  width: 100%;
+}
+
+.birthday-segments label {
+  min-width: 0;
+  display: grid !important;
+  gap: 5px !important;
+}
+
+.birthday-segments label > span {
+  color: #626b67;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .08em;
+}
+
+.birthday-segments input {
+  min-width: 0 !important;
+  width: 100% !important;
+  min-height: 48px;
+  padding: 11px 8px !important;
+  text-align: center;
+  font-size: 17px !important;
+  font-weight: 850 !important;
+  letter-spacing: .02em;
+}
+
+.birthday-divider {
+  padding-bottom: 14px;
+  color: #6c746f;
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.birthday-status {
+  min-height: 23px;
+  margin-top: 8px;
+  color: #68716c;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.birthday-status.valid {
+  color: #145c35;
+}
+
+.birthday-status.error {
+  color: #a20d17;
+}
+
+.birthday-confirmation {
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 10px !important;
+  margin-top: 8px;
+  padding: 12px 13px;
+  border: 1px solid #bed6c9;
+  border-radius: 10px;
+  background: #f5faf7;
+  color: #1f3028 !important;
+  font-size: 13px !important;
+  font-weight: 750 !important;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.birthday-confirmation.disabled {
+  border-color: #d9ddda;
+  background: #f5f6f5;
+  color: #7a817d !important;
+  cursor: not-allowed;
+}
+
+.birthday-confirmation input {
+  flex: 0 0 auto !important;
+  width: 19px !important;
+  min-width: 19px !important;
+  height: 19px !important;
+  min-height: 19px !important;
+  margin: 1px 0 0 !important;
+  padding: 0 !important;
+  accent-color: #0f4d32;
+}
+
+.preview-form-grid > .birthday-input {
+  min-width: 0;
+}
+
+.identity-correction-notice {
+  display: grid;
+  gap: 4px;
+  margin: 14px 0 2px;
+  padding: 13px 14px;
+  border: 1px solid #efc56d;
+  border-radius: 10px;
+  background: #fff8e7;
+  color: #5b4212;
+}
+
+.identity-correction-notice span {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.name-id-match-notice {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: -2px 0 4px;
+  padding: 11px 12px;
+  border: 1px solid #efc56d;
+  border-radius: 9px;
+  background: #fff8e7;
+  color: #5b4212;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.name-id-match-notice svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+@media (max-width: 420px) {
+  .birthday-segments {
+    grid-template-columns: minmax(52px, .75fr) auto minmax(52px, .75fr) auto minmax(88px, 1.25fr);
+    gap: 5px;
+  }
+
+  .birthday-segments input {
+    padding-inline: 5px !important;
+    font-size: 16px !important;
+  }
+}
+
 .sms-consent-preference {
   display: grid !important;
   gap: 9px !important;
