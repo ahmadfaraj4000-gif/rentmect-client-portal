@@ -102,6 +102,7 @@ function App() {
   const guidedAdminCustomerPath = initialUrlParams.get('adminPath') === 'returning' ? 'returning' : 'new';
   const cars2BookingHandoff = initialUrlParams.get('source') === 'cars2';
   const [returningFromStripeIdentity] = useState(() => initialUrlParams.get('identity') === 'return');
+  const [returningFromStripePayment] = useState(() => initialUrlParams.get('payment') === 'stripe_success');
   const bookingPreviewFleetMode = previewRoute === 'fleet';
   const bookingPreviewCheckoutMode = previewRoute === '1';
   const [session, setSession] = useState(null);
@@ -2581,7 +2582,7 @@ async function verifyPhoneCode() {
 
   if (bookingPreviewFleetMode) return <BookingPreviewFleet />;
 
-  if (loading) return <LoadingScreen />;
+  if (loading) return <LoadingScreen stripeReturn={returningFromStripeIdentity || returningFromStripePayment} />;
 
   if (adminBookingToken && adminBookingError) {
     return (
@@ -3611,9 +3612,20 @@ function WizardModal({
   const Icon = step.icon;
   const [vehicleReminder, setVehicleReminder] = useState(null);
   const dialogRef = useDialogFocus(() => setWizardOpen(false));
+  const agreementSignatureRef = useRef(null);
   const correctingIdentity = Boolean(identityCorrectionTarget);
   const showCorrectionName = ['full_name', 'identity_details'].includes(identityCorrectionTarget);
   const showCorrectionBirthday = ['date_of_birth', 'identity_details'].includes(identityCorrectionTarget);
+
+  function jumpToWizardSignature() {
+    const signatureSection = agreementSignatureRef.current;
+    if (!signatureSection) return;
+    signatureSection.scrollIntoView({
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+      block: 'start',
+    });
+    window.setTimeout(() => signatureSection.focus({ preventScroll: true }), 350);
+  }
 
   return (
     <div className="wizard-backdrop" role="presentation">
@@ -3884,9 +3896,12 @@ function WizardModal({
                 <div className="agreement-guidance" role="note">
                   <ArrowDown size={22} />
                   <div>
-                    <strong>Scroll down to complete this step</strong>
-                    <span>Read the agreement, check the acknowledgment, type your legal name, draw your signature, then press the green sign button.</span>
+                    <strong>Review the agreement, then sign once</strong>
+                    <span>You can read from the top or jump directly to the acknowledgment and signature section.</span>
                   </div>
+                  <button className="secondary-btn agreement-jump-button" type="button" onClick={jumpToWizardSignature}>
+                    Jump to signature <ArrowDown size={17} />
+                  </button>
                 </div>
               )}
 
@@ -3895,7 +3910,7 @@ function WizardModal({
               </div>
 
               {!agreementSigned && (
-                <>
+                <div ref={agreementSignatureRef} className="agreement-signature-section" tabIndex="-1">
                   <div className="agreement-end-marker"><ArrowDown size={18} /> End of agreement — complete the signature below</div>
 
                   <label className="checkbox-row">
@@ -3910,15 +3925,18 @@ function WizardModal({
                     I have read and agree to the rental agreement.
                   </label>
 
-                  <input
-                    className="signature-input"
-                    placeholder="Type full legal name as signature"
-                    value={signatureName}
-                    onChange={(e) => {
-                      setWizardReminder(null);
-                      setSignatureName(e.target.value);
-                    }}
-                  />
+                  <label className="signature-field">
+                    <span>Full legal name</span>
+                    <input
+                      className="signature-input"
+                      placeholder="Type full legal name as signature"
+                      value={signatureName}
+                      onChange={(e) => {
+                        setWizardReminder(null);
+                        setSignatureName(e.target.value);
+                      }}
+                    />
+                  </label>
 
                   <SignaturePad value={signatureImageData} onChange={setSignatureImageData} />
 
@@ -3927,9 +3945,9 @@ function WizardModal({
                     signAgreement();
                   }} disabled={agreementSaving}>
                     <FileSignature size={18} />
-                    {agreementSaving ? 'Signing securely…' : 'Sign agreement & continue to payment'}
+                    {agreementSaving ? 'Saving signed agreement…' : 'Agree, sign & continue'}
                   </button>
-                </>
+                </div>
               )}
             </div>
           )}
@@ -4068,12 +4086,12 @@ function WizardModal({
           <button
             className="primary-btn"
             type="button"
-            onClick={nextWizardStep}
+            onClick={wizardStep === 5 && !agreementSigned ? jumpToWizardSignature : nextWizardStep}
           >
             {wizardStep === wizardSteps.length - 1
               ? 'Finish'
               : wizardStep === 5
-                ? agreementSigned ? 'Continue to secure payment' : 'Next — confirm signed agreement'
+                ? agreementSigned ? 'Continue to secure payment' : 'Jump to signature'
                 : 'Next'}
           </button>
         </div>
@@ -4128,6 +4146,8 @@ function AgreementModal({
 }) {
   const dialogRef = useDialogFocus(onClose);
   const scrollRef = useRef(null);
+  const signBoxRef = useRef(null);
+  const acknowledgmentRef = useRef(null);
   const alreadySigned = Boolean(currentRental?.agreement_snapshot);
   const [agreementReviewed, setAgreementReviewed] = useState(alreadySigned);
   const displayedAgreement = currentRental?.agreement_snapshot || agreementText;
@@ -4150,6 +4170,31 @@ function AgreementModal({
     if (reviewBox.scrollHeight <= reviewBox.clientHeight + 24) setAgreementReviewed(true);
   }, [alreadySigned, displayedAgreement]);
 
+  function jumpToSignature() {
+    const reviewBox = scrollRef.current;
+    if (!reviewBox) return;
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    reviewBox.scrollTo({
+      top: reviewBox.scrollHeight,
+      behavior: reduceMotion ? 'auto' : 'smooth',
+    });
+    window.setTimeout(() => {
+      setAgreementReviewed(true);
+      signBoxRef.current?.scrollTo({ top: 0, behavior: reduceMotion ? 'auto' : 'smooth' });
+      acknowledgmentRef.current?.focus({ preventScroll: true });
+    }, reduceMotion ? 0 : 400);
+  }
+
+  function returnToAgreement() {
+    const reviewBox = scrollRef.current;
+    if (!reviewBox) return;
+    reviewBox.scrollTo({
+      top: 0,
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    });
+    reviewBox.focus({ preventScroll: true });
+  }
+
   return (
     <div className="modal-backdrop" role="presentation">
       <div ref={dialogRef} className="agreement-modal" role="dialog" aria-modal="true" aria-labelledby="agreement-modal-title" tabIndex="-1">
@@ -4167,9 +4212,15 @@ function AgreementModal({
           {alreadySigned
             ? 'This is the exact signed agreement stored with your rental.'
             : agreementReviewed
-              ? 'Full agreement reviewed. The acknowledgment and signature fields are unlocked below.'
-              : 'Review the complete agreement and scroll to the bottom to unlock signing.'}
+              ? 'You reached the signature section. Confirm the acknowledgment and complete both signature fields.'
+              : 'Review the complete agreement, or jump to the signature section when you are ready.'}
         </div>
+
+        {!alreadySigned && <div className="agreement-quick-actions">
+          <button className="secondary-btn agreement-jump-button" type="button" onClick={jumpToSignature}>
+            Jump to signature <ArrowDown size={17} />
+          </button>
+        </div>}
 
         <div ref={scrollRef} className="agreement-scroll-box" onScroll={trackAgreementReview} tabIndex="0" aria-label="Complete rental agreement">
           <pre>{printableAgreement}</pre>
@@ -4179,9 +4230,10 @@ function AgreementModal({
           </div>}
         </div>
 
-        <div className="agreement-sign-box">
+        <div ref={signBoxRef} className="agreement-sign-box">
           {!alreadySigned && <><label className="checkbox-row">
             <input
+              ref={acknowledgmentRef}
               type="checkbox"
               checked={agreementChecked}
               onChange={(e) => setAgreementChecked(e.target.checked)}
@@ -4201,24 +4253,28 @@ function AgreementModal({
               </label>
 
           <SignaturePad value={signatureImageData} onChange={setSignatureImageData} />
-          </>}
 
-          <div className="button-row end-row agreement-sign-actions">
-            <button className="secondary-btn" type="button" onClick={onClose}>Cancel</button>
-            {currentRental?.agreement_snapshot && (
-              <button className="secondary-btn" type="button" onClick={() => downloadAgreement(currentRental)}>
-                Download Agreement
-              </button>
-            )}
-            {!alreadySigned && <button
-              className="primary-btn"
-              type="button"
-              onClick={signAgreement}
-              disabled={agreementSaving || !agreementReviewed || !agreementChecked || !signatureName.trim() || !signatureImageData}
-            >
-              <FileSignature size={17} /> {agreementSaving ? 'Signing...' : 'Sign Agreement'}
-            </button>}
-          </div>
+          <button className="link-btn agreement-back-to-review" type="button" onClick={returnToAgreement}>
+            <ArrowLeft size={16} /> Back to agreement
+          </button>
+          </>}
+        </div>
+
+        <div className="button-row end-row agreement-sign-actions">
+          {!alreadySigned && <button
+            className="primary-btn"
+            type="button"
+            onClick={signAgreement}
+            disabled={agreementSaving || !agreementReviewed || !agreementChecked || !signatureName.trim() || !signatureImageData}
+          >
+            <FileSignature size={17} /> {agreementSaving ? 'Saving signed agreement…' : 'Agree, sign & continue'}
+          </button>}
+          {currentRental?.agreement_snapshot && (
+            <button className="secondary-btn" type="button" onClick={() => downloadAgreement(currentRental)}>
+              Download Agreement
+            </button>
+          )}
+          <button className="secondary-btn" type="button" onClick={onClose}>{alreadySigned ? 'Close' : 'Finish later'}</button>
         </div>
       </div>
     </div>
@@ -4340,11 +4396,44 @@ function ServiceFeesSummary({ serviceFees, total }) {
   </div>;
 }
 
-function LoadingScreen() {
+function LoadingScreen({ stripeReturn = false }) {
+  const messages = stripeReturn
+    ? [
+        'Confirming your Stripe update…',
+        'Refreshing your rental checklist…',
+        'Opening your next required step…',
+      ]
+    : [
+        'Loading your secure rental portal…',
+        'Checking your booking details…',
+        'Preparing your next required step…',
+      ];
+  const [messageIndex, setMessageIndex] = useState(0);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setMessageIndex((current) => (current + 1) % messages.length);
+    }, 1600);
+    return () => window.clearInterval(interval);
+  }, [messages.length]);
+
   return (
     <div className="loading-screen" role="status" aria-live="polite">
-      <div className="road"><div className="loading-car">▰</div></div>
-      <h1>Getting your rental ready...</h1>
+      <div className="loading-card">
+        <img className="loading-logo" src={logoMobileUrl} alt="Rent Me CT" />
+        <div className="loading-motion" aria-hidden="true">
+          <div className="loading-road">
+            <Car className="loading-car" size={38} strokeWidth={2.4} />
+          </div>
+        </div>
+        <p className="eyebrow">{stripeReturn ? 'Secure Stripe return' : 'Secure customer portal'}</p>
+        <h1>{stripeReturn ? 'Finishing your Stripe step' : 'Getting your rental ready'}</h1>
+        <p className="loading-stage" key={messageIndex}>{messages[messageIndex]}</p>
+        <div className="loading-progress-dots" aria-hidden="true">
+          {messages.map((_, index) => <span key={index} className={index === messageIndex ? 'active' : ''} />)}
+        </div>
+        <small>Keep this page open. Your completed steps are saved.</small>
+      </div>
     </div>
   );
 }
