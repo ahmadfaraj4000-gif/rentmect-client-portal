@@ -286,8 +286,10 @@ function App() {
       setSession(initialSession);
       const metaBooking = initialSession?.user?.user_metadata?.pending_booking;
 
-      if (metaBooking) {
+      if (metaBooking && isPendingBookingStillUsable(metaBooking)) {
         localStorage.setItem('rentmect_pending_booking', JSON.stringify(metaBooking));
+      } else if (metaBooking) {
+        clearSavedBookingStorage();
       }
 
       if (adminBookingToken) {
@@ -588,26 +590,50 @@ function App() {
 
   const currentRental = useMemo(() => {
     const blockingRentals = rentals.filter((r) => BLOCKING_RENTAL_STATUSES.includes(r.status));
+    const priority = (status) => {
+      if (['active', 'overdue', 'return_initiated'].includes(status)) return 0;
+      if (['ready_for_pickup', 'approved'].includes(status)) return 1;
+      return 2;
+    };
+    const prioritizedRental = [...blockingRentals].sort((a, b) => priority(a.status) - priority(b.status))[0];
+
     if (adminBookingRentalId) {
-      return blockingRentals.find((rental) => rental.id === adminBookingRentalId);
+      return blockingRentals.find((rental) => rental.id === adminBookingRentalId) || prioritizedRental;
     }
+
+    // A live or pickup-ready rental is the customer's source of truth. A stale
+    // browser booking must never hide it or reset the guided-step checklist.
+    if (prioritizedRental && priority(prioritizedRental.status) < 2) {
+      return prioritizedRental;
+    }
+
     if (checkoutIntent && reservationForm.vehicleId) {
-      return blockingRentals.find((rental) => (
+      const checkoutRental = blockingRentals.find((rental) => (
         rental.vehicle_id === reservationForm.vehicleId &&
         rental.pickup_date === reservationForm.pickupDate &&
         rental.return_date === reservationForm.returnDate &&
         String(rental.pickup_time || '9:00 AM') === String(reservationForm.pickupTime || '9:00 AM') &&
         String(rental.return_time || '9:00 AM') === String(reservationForm.returnTime || '9:00 AM')
       ));
+      if (checkoutRental) return checkoutRental;
     }
 
-    const priority = (status) => {
-      if (['active', 'overdue', 'return_initiated'].includes(status)) return 0;
-      if (['ready_for_pickup', 'approved'].includes(status)) return 1;
-      return 2;
-    };
-    return [...blockingRentals].sort((a, b) => priority(a.status) - priority(b.status))[0];
+    return prioritizedRental;
   }, [rentals, adminBookingRentalId, checkoutIntent, reservationForm.vehicleId, reservationForm.pickupDate, reservationForm.returnDate, reservationForm.pickupTime, reservationForm.returnTime]);
+
+  useEffect(() => {
+    if (!portalDataReady || !currentRental?.id || adminBookingRentalId || getBookingIdFromUrl()) return;
+    if (!['active', 'overdue', 'return_initiated', 'ready_for_pickup', 'approved'].includes(currentRental.status)) return;
+    if (!checkoutIntent && !pendingBookingId && !pendingVehicleId && !pendingVehicleName) return;
+
+    setCheckoutIntent(false);
+    setCheckoutWizardStarted(false);
+    setPendingBookingId('');
+    setPendingVehicleId('');
+    setPendingVehicleName('');
+    setCheckoutExpiresAt(null);
+    clearSavedBookingStorage();
+  }, [portalDataReady, currentRental?.id, currentRental?.status, adminBookingRentalId, checkoutIntent, pendingBookingId, pendingVehicleId, pendingVehicleName]);
 
   useEffect(() => {
     if (!currentRental?.id) return;
@@ -1179,6 +1205,19 @@ function loadSavedBookingFromWebsite() {
 
       const params = new URLSearchParams(window.location.search);
       const parsed = saved ? JSON.parse(saved) : {};
+      const explicitHandoff = Boolean(
+        params.get('source') === 'cars2' ||
+        params.get('preview') === '1' ||
+        params.get('pickupDate') ||
+        params.get('returnDate') ||
+        params.get('selectedVehicleId') ||
+        params.get('vehicleId')
+      );
+
+      if (!explicitHandoff && !isPendingBookingStillUsable(parsed)) {
+        clearSavedBookingStorage();
+        return;
+      }
 
       applyBookingDataToPortal({
         pickupDate: params.get('pickupDate') || parsed.pickupDate || parsed.pickup_date || '',
@@ -1199,6 +1238,8 @@ function loadSavedBookingFromWebsite() {
           parsed.vehicleId ||
           parsed.vehicle_id ||
           '',
+        expiresAt: params.get('holdExpires') || parsed.expiresAt || parsed.expires_at || '',
+        status: parsed.status || 'pending',
       });
     } catch (error) {
       notify(error.message || 'Could not load saved booking.');
@@ -3035,7 +3076,7 @@ async function verifyPhoneCode(options = {}) {
             </section>}
             <section className="hero-panel compact-hero" id="reservation">
               <div>
-                <p className="eyebrow">Reservation Setup</p>
+                <p className="eyebrow">{currentRental ? 'Current Rental' : 'Reservation Setup'}</p>
                 {displayedVehicle && !isBookingFlowTestVehicle(displayedVehicle) && (
                   <div className="selected-vehicle-media">
                     <img src={getVehicleImage(displayedVehicle)} alt={`${displayedVehicle.name} rental vehicle`} loading="lazy" />
@@ -3043,7 +3084,9 @@ async function verifyPhoneCode(options = {}) {
                 )}
                 <h2>{displayedVehicle?.name || 'Finish Your Rental'}</h2>
                 <p>
-                  Complete your phone verification, vehicle, documents, agreement, and payment through the guided flow.
+                  {allGuidedStepsComplete
+                    ? 'All required steps are complete. This is the active vehicle and trip currently recorded by Rent Me CT.'
+                    : 'Complete your phone verification, vehicle, documents, agreement, and payment through the guided flow.'}
                 </p>
 
                 <div className="reservation-summary compact-summary">
@@ -5473,47 +5516,51 @@ function AuthScreen({
   return (
     <div className="auth-screen">
       <form className="auth-card" onSubmit={emailOtpSent ? verifyEmailOtp : handleAuth}>
-        <img className="auth-logo" src={logoMobileUrl} alt="Rent Me CT" />
-        <span className="auth-portal-label">Client</span>
-        <h2>{checkoutIntent ? 'Continue Your Booking' : 'Passwordless Client Login'}</h2>
-        <p className="muted">Enter your email once. We will securely sign you in—or create your account automatically if this is your first rental.</p>
+        <header className="auth-heading">
+          <img className="auth-logo" src={logoMobileUrl} alt="Rent Me CT" />
+          <span className="auth-portal-label">Client portal</span>
+          <h2>{checkoutIntent ? 'Continue your booking' : 'Secure sign in'}</h2>
+          <p className="muted">Enter your email and we’ll send a one-time code. No password required.</p>
+        </header>
 
         {checkoutIntent && checkoutSecondsRemaining !== null && (
           <CheckoutHoldTimer secondsRemaining={checkoutSecondsRemaining} expired={checkoutExpired} compact />
         )}
 
-        <label>
-          <span>Email address</span>
-          <input
-            type="email"
-            autoComplete="email"
-            placeholder="you@example.com"
-            value={authForm.email}
-            onChange={(e) => update('email', e.target.value)}
-            disabled={emailOtpSent || emailAuthBusy}
-            required
-          />
-        </label>
-
-        {emailOtpSent && (
-          <label>
-            <span>One-time email code</span>
+        <div className="auth-fields">
+          <label className="auth-field">
+            <span>Email address</span>
             <input
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              placeholder="Code from your email"
-              value={emailOtp}
-              onChange={(e) => setEmailOtp(e.target.value.replace(/\D/g, '').slice(0, 8))}
+              type="email"
+              autoComplete="email"
+              placeholder="you@example.com"
+              value={authForm.email}
+              onChange={(e) => update('email', e.target.value)}
+              disabled={emailOtpSent || emailAuthBusy}
               required
             />
           </label>
-        )}
+
+          {emailOtpSent && (
+            <label className="auth-field">
+              <span>One-time email code</span>
+              <input
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                placeholder="8-digit code"
+                value={emailOtp}
+                onChange={(e) => setEmailOtp(e.target.value.replace(/\D/g, '').slice(0, 8))}
+                required
+              />
+            </label>
+          )}
+        </div>
+
+        {message && <p className="auth-message" role="status">{message}</p>}
 
         <button className="primary-btn" type="submit" disabled={emailAuthBusy || checkoutExpired}>
           {emailAuthBusy ? 'Please wait…' : emailOtpSent ? 'Verify & Open Booking' : 'Email My Secure Sign-In'}
         </button>
-
-        {message && <p className="auth-message">{message}</p>}
 
         {emailOtpSent && <button className="link-btn" type="button" onClick={() => {
           setEmailOtp('');
@@ -5524,6 +5571,23 @@ function AuthScreen({
       </form>
     </div>
   );
+}
+
+function isPendingBookingStillUsable(booking) {
+  const expiresAt = booking?.expiresAt || booking?.expires_at;
+  if (!expiresAt) return false;
+  const expiry = new Date(expiresAt).getTime();
+  return Number.isFinite(expiry) && expiry > Date.now() && !['expired', 'cancelled', 'completed'].includes(String(booking?.status || 'pending').toLowerCase());
+}
+
+function clearSavedBookingStorage() {
+  try {
+    localStorage.removeItem('rentmect_pending_booking');
+    localStorage.removeItem('rentMeCtBooking');
+    localStorage.removeItem('pendingBooking');
+  } catch {
+    // A blocked storage API must not prevent the authenticated rental from loading.
+  }
 }
 
 function CheckoutHoldTimer({ secondsRemaining, expired, compact = false }) {
