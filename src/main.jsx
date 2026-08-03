@@ -79,6 +79,12 @@ const DEFAULT_UNDER_25_PRICING = {
   deposit_adjustment_value: 200,
   rental_markup_percentage: 10,
 };
+const DEFAULT_BOOKING_POLICY = {
+  minimum_rental_days: 1,
+  minimum_rental_hours: 24,
+  advance_notice_minutes: 0,
+  server_now: null,
+};
 const BOOKING_FLOW_TEST_VEHICLE_ID = '00000000-0000-4000-8000-000000000015';
 const BOOKING_FLOW_TEST_ENABLED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_BOOKING_FLOW_TEST === 'true';
 const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
@@ -158,6 +164,7 @@ function App() {
   const [rentalCharges, setRentalCharges] = useState([]);
   const [serviceFees, setServiceFees] = useState([]);
   const [under25Pricing, setUnder25Pricing] = useState(DEFAULT_UNDER_25_PRICING);
+  const [bookingPolicy, setBookingPolicy] = useState(DEFAULT_BOOKING_POLICY);
   const [supportText, setSupportText] = useState('');
   const [activeTab, setActiveTab] = useState('overview');
   const [isMobileClientNav, setIsMobileClientNav] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches);
@@ -623,6 +630,11 @@ function App() {
   }, [rentals, adminBookingRentalId, checkoutIntent, reservationForm.vehicleId, reservationForm.pickupDate, reservationForm.returnDate, reservationForm.pickupTime, reservationForm.returnTime]);
 
   useEffect(() => {
+    if (checkoutIntent || pendingBookingId || currentRental) return;
+    setReservationForm((current) => ensureCustomerMinimumReturn(current, bookingPolicy));
+  }, [bookingPolicy.minimum_rental_days, checkoutIntent, pendingBookingId, currentRental]);
+
+  useEffect(() => {
     if (!portalDataReady || !currentRental?.id || adminBookingRentalId || getBookingIdFromUrl()) return;
     if (!['active', 'overdue', 'return_initiated', 'ready_for_pickup', 'approved'].includes(currentRental.status)) return;
     if (!checkoutIntent && !pendingBookingId && !pendingVehicleId && !pendingVehicleName) return;
@@ -722,8 +734,9 @@ function App() {
       return null;
     }
 
-    const days = getRentalDays(reservationForm.pickupDate, reservationForm.returnDate);
-    if (days < 1) return { invalid: true, days };
+    const bookingWindow = getCustomerBookingWindow(reservationForm, bookingPolicy);
+    const days = bookingWindow.billableDays;
+    if (!bookingWindow.valid) return { invalid: true, days, error: bookingWindow.error, actualMinutes: bookingWindow.actualMinutes };
 
     const baseRentalTotal = Number(selectedVehicle.daily_rate || 0) * days;
     const under25 = isCustomerUnder25(profileForm.date_of_birth);
@@ -741,6 +754,7 @@ function App() {
 
     return {
       days,
+      actualMinutes: bookingWindow.actualMinutes,
       under25,
       baseRentalTotal,
       markupPercentage,
@@ -753,7 +767,7 @@ function App() {
       securityDeposit,
       checkoutTotal: rentalTotal + serviceFeeTotal + taxAmount,
     };
-  }, [selectedVehicle, reservationForm, profileForm.date_of_birth, under25Pricing, serviceFees]);
+  }, [selectedVehicle, reservationForm, profileForm.date_of_birth, under25Pricing, serviceFees, bookingPolicy]);
 
   const userEmail = session?.user?.email || '';
   const userName =
@@ -1268,6 +1282,7 @@ function loadSavedBookingFromWebsite() {
       fleetRentalsResult,
       serviceFeesResult,
       under25PricingResult,
+      bookingPolicyResult,
       rentalChargesResult,
     ] = await Promise.all([
       supabase.from('profiles').select('*').eq('id', userId).single(),
@@ -1309,6 +1324,7 @@ function loadSavedBookingFromWebsite() {
         .select('*')
         .eq('id', true)
         .maybeSingle(),
+      supabase.rpc('get_public_booking_policy'),
       supabase
         .from('rental_charge_items')
         .select('*')
@@ -1328,6 +1344,7 @@ function loadSavedBookingFromWebsite() {
       ['Availability', fleetRentalsResult.error],
       ['Fees', serviceFeesResult.error],
       ['Age-based pricing', under25PricingResult.error],
+      ['Booking rules', bookingPolicyResult.error],
       ['Additional charges', rentalChargesResult.error],
     ].filter(([, error]) => Boolean(error)).map(([label, error]) => ({
       label,
@@ -1367,6 +1384,7 @@ function loadSavedBookingFromWebsite() {
     if (fleetRentalsResult.data) setFleetRentals(fleetRentalsResult.data);
     if (serviceFeesResult.data) setServiceFees(serviceFeesResult.data);
     if (under25PricingResult.data) setUnder25Pricing(under25PricingResult.data);
+    if (bookingPolicyResult.data?.[0]) setBookingPolicy(bookingPolicyResult.data[0]);
     if (rentalChargesResult.data) setRentalCharges(rentalChargesResult.data);
 
     setPortalHealth({
@@ -1697,7 +1715,24 @@ async function verifyPhoneCode(options = {}) {
     }
 
     if (!estimate || estimate.invalid) {
-      notify('Return date must be after pickup date.');
+      notify(estimate?.error || `Rentals require at least ${Number(bookingPolicy.minimum_rental_hours || 24)} hours.`);
+      return null;
+    }
+
+    const { data: policyQuote, error: policyQuoteError } = await supabase.rpc('get_booking_quote', {
+      p_vehicle_id: selectedVehicle.id,
+      p_pickup_date: reservationForm.pickupDate,
+      p_pickup_time: reservationForm.pickupTime,
+      p_return_date: reservationForm.returnDate,
+      p_return_time: reservationForm.returnTime,
+    });
+    if (policyQuoteError) {
+      notify(policyQuoteError.message);
+      return null;
+    }
+    if (!policyQuote?.valid) {
+      notify(policyQuote?.error || 'These pickup and return times are not allowed.');
+      setWizardStep(1);
       return null;
     }
 
@@ -3670,6 +3705,7 @@ async function verifyPhoneCode(options = {}) {
           checkoutVehicleChoices={checkoutVehicleChoices}
           reservationForm={reservationForm}
           setReservationForm={setReservationForm}
+          bookingPolicy={bookingPolicy}
           selectedVehicle={selectedVehicle}
           estimate={estimate}
           createReservationIfNeeded={createReservationIfNeeded}
@@ -3826,6 +3862,7 @@ function WizardModal({
   checkoutVehicleChoices,
   reservationForm,
   setReservationForm,
+  bookingPolicy,
   selectedVehicle,
   estimate,
   createReservationIfNeeded,
@@ -3871,6 +3908,7 @@ function WizardModal({
   const correctingIdentity = Boolean(identityCorrectionTarget);
   const showCorrectionName = ['full_name', 'identity_details'].includes(identityCorrectionTarget);
   const showCorrectionBirthday = ['date_of_birth', 'identity_details'].includes(identityCorrectionTarget);
+  const bookingWindowState = getCustomerBookingWindow(reservationForm, bookingPolicy);
 
   function jumpToWizardSignature() {
     const signatureSection = agreementSignatureRef.current;
@@ -4018,14 +4056,7 @@ function WizardModal({
                   onChange={(e) => {
                     setWizardReminder(null);
                     const pickupDate = e.target.value || getTodayDateInputValue();
-                    const minReturnDate = getNextDateInputValue(pickupDate);
-                    setReservationForm({
-                      ...reservationForm,
-                      pickupDate,
-                      returnDate: reservationForm.returnDate && reservationForm.returnDate >= minReturnDate
-                        ? reservationForm.returnDate
-                        : minReturnDate,
-                    });
+                    setReservationForm((current) => ensureCustomerMinimumReturn({ ...current, pickupDate }, bookingPolicy));
                   }}
                 />
 
@@ -4043,7 +4074,7 @@ function WizardModal({
                   value={reservationForm.pickupTime}
                   onChange={(e) => {
                     setWizardReminder(null);
-                    setReservationForm({ ...reservationForm, pickupTime: e.target.value });
+                    setReservationForm((current) => ensureCustomerMinimumReturn({ ...current, pickupTime: e.target.value }, bookingPolicy));
                   }}
                 >
                   {timeOptions().map((t) => <option key={t}>{t}</option>)}
@@ -4060,10 +4091,17 @@ function WizardModal({
                 </select>
               </div>
 
+              <div className={`booking-policy-customer-note ${bookingWindowState.valid ? 'valid' : 'invalid'}`} role="status">
+                <Clock size={18}/>
+                <span>{bookingWindowState.valid
+                  ? `${formatCustomerAdvanceNotice(bookingPolicy)} This trip is ${formatCustomerDuration(bookingWindowState.actualMinutes)} and is billed as ${bookingWindowState.billableDays} day${bookingWindowState.billableDays === 1 ? '' : 's'}.`
+                  : bookingWindowState.error}</span>
+              </div>
+
               <div className="vehicle-picker-grid">
                 {checkoutVehicleChoices.map((vehicle) => {
                   const selected = reservationForm.vehicleId === vehicle.id;
-                  const bookable = isVehicleAvailableForDates(vehicle, reservationForm, fleetRentals, currentRental?.id);
+                  const bookable = bookingWindowState.valid && isVehicleAvailableForDates(vehicle, reservationForm, fleetRentals, currentRental?.id);
                   const statusLabel = bookable ? 'Available' : vehicleAvailabilityLabel(vehicle, reservationForm, fleetRentals, currentRental?.id);
 
                   return (
@@ -6067,6 +6105,89 @@ function getRentalDaysSafe(start, end) {
   if (!start || !end) return 'Pending';
   const days = getRentalDays(start, end);
   return days > 0 ? `${days} days` : 'Invalid';
+}
+
+function getCustomerBookingWindow(reservation, policy = DEFAULT_BOOKING_POLICY) {
+  const pickupAt = parseEasternBookingDateTime(reservation?.pickupDate, reservation?.pickupTime);
+  const returnAt = parseEasternBookingDateTime(reservation?.returnDate, reservation?.returnTime);
+  const minimumMinutes = Math.max(1, Number(policy.minimum_rental_days || 1)) * 1440;
+  const advanceMinutes = Math.max(0, Number(policy.advance_notice_minutes || 0));
+  if (!pickupAt || !returnAt) {
+    return { valid: false, actualMinutes: 0, billableDays: 0, error: 'Choose valid pickup and return dates and times.' };
+  }
+  const actualMinutes = Math.floor((returnAt.getTime() - pickupAt.getTime()) / 60000);
+  const earliestReturn = new Date(pickupAt.getTime() + minimumMinutes * 60000);
+  if (actualMinutes < minimumMinutes) {
+    return {
+      valid: false,
+      actualMinutes: Math.max(0, actualMinutes),
+      billableDays: 0,
+      error: `Rentals require at least ${minimumMinutes / 60} hours. The earliest return is ${formatRentalDate(easternDateInput(earliestReturn), earliestReturn.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }))}.`,
+    };
+  }
+  const earliestPickup = new Date(Date.now() + advanceMinutes * 60000);
+  if (pickupAt < earliestPickup) {
+    return {
+      valid: false,
+      actualMinutes,
+      billableDays: Math.ceil(actualMinutes / 1440),
+      error: `The earliest available pickup is ${earliestPickup.toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}.`,
+    };
+  }
+  return { valid: true, actualMinutes, billableDays: Math.ceil(actualMinutes / 1440), error: '' };
+}
+
+function ensureCustomerMinimumReturn(reservation, policy = DEFAULT_BOOKING_POLICY) {
+  const pickupAt = parseEasternBookingDateTime(reservation?.pickupDate, reservation?.pickupTime);
+  const returnAt = parseEasternBookingDateTime(reservation?.returnDate, reservation?.returnTime);
+  const minimumMilliseconds = Math.max(1, Number(policy.minimum_rental_days || 1)) * 86400000;
+  if (!pickupAt || (returnAt && returnAt.getTime() - pickupAt.getTime() >= minimumMilliseconds)) return reservation;
+  const earliestReturn = new Date(pickupAt.getTime() + minimumMilliseconds);
+  return {
+    ...reservation,
+    returnDate: easternDateInput(earliestReturn),
+    returnTime: earliestReturn.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true }),
+  };
+}
+
+function parseEasternBookingDateTime(dateValue, timeValue) {
+  const dateMatch = String(dateValue || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const timeMatch = String(timeValue || '').match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!dateMatch || !timeMatch) return null;
+  let hour = Number(timeMatch[1]) % 12;
+  if (timeMatch[3].toUpperCase() === 'PM') hour += 12;
+  const targetWallClock = Date.UTC(Number(dateMatch[1]), Number(dateMatch[2]) - 1, Number(dateMatch[3]), hour, Number(timeMatch[2]), 0);
+  let instant = targetWallClock;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const eastern = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+    }).formatToParts(new Date(instant)).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+    const observedWallClock = Date.UTC(Number(eastern.year), Number(eastern.month) - 1, Number(eastern.day), Number(eastern.hour), Number(eastern.minute), Number(eastern.second));
+    instant += targetWallClock - observedWallClock;
+  }
+  const parsed = new Date(instant);
+  return Number.isFinite(parsed.getTime()) ? parsed : null;
+}
+
+function easternDateInput(date) {
+  const eastern = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+  return `${eastern.year}-${eastern.month}-${eastern.day}`;
+}
+
+function formatCustomerDuration(minutes) {
+  const value = Math.max(0, Math.round(Number(minutes) || 0));
+  if (value % 1440 === 0) return `${value / 1440} day${value === 1440 ? '' : 's'}`;
+  if (value % 60 === 0) return `${value / 60} hour${value === 60 ? '' : 's'}`;
+  return `${Math.floor(value / 60)}h ${value % 60}m`;
+}
+
+function formatCustomerAdvanceNotice(policy = DEFAULT_BOOKING_POLICY) {
+  const minutes = Math.max(0, Number(policy.advance_notice_minutes || 0));
+  if (minutes === 0) return 'Same-day pickup is available.';
+  return `Pickup requires ${formatCustomerDuration(minutes)} advance notice.`;
 }
 
 function getTodayDateInputValue(date = new Date()) {

@@ -19,8 +19,10 @@ const TIME_OPTIONS = Array.from({ length: 30 }, (_, index) => {
 });
 
 function dateInput(offsetDays = 0) {
-  const date = new Date();
-  date.setDate(date.getDate() + offsetDays);
+  const eastern = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date()).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+  const date = new Date(Date.UTC(Number(eastern.year), Number(eastern.month) - 1, Number(eastern.day) + offsetDays, 12));
   return date.toISOString().slice(0, 10);
 }
 
@@ -55,16 +57,48 @@ function money(value) {
   return Number(value || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
-function rentalDays(start, end) {
-  if (!start || !end) return 0;
-  return Math.max(0, Math.ceil((new Date(`${end}T12:00:00`) - new Date(`${start}T12:00:00`)) / 86400000));
+function tripDateTime(dateValue, timeValue) {
+  const dateMatch = String(dateValue || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const match = String(timeValue || '').match(/^(\d{1,2}):(\d{2}) (AM|PM)$/);
+  if (!dateMatch || !match) return null;
+  let hour = Number(match[1]) % 12;
+  if (match[3] === 'PM') hour += 12;
+  const targetWallClock = Date.UTC(Number(dateMatch[1]), Number(dateMatch[2]) - 1, Number(dateMatch[3]), hour, Number(match[2]), 0);
+  let instant = targetWallClock;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const eastern = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+    }).formatToParts(new Date(instant)).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+    const observedWallClock = Date.UTC(Number(eastern.year), Number(eastern.month) - 1, Number(eastern.day), Number(eastern.hour), Number(eastern.minute), Number(eastern.second));
+    instant += targetWallClock - observedWallClock;
+  }
+  const value = new Date(instant);
+  return Number.isFinite(value.getTime()) ? value : null;
+}
+
+function rentalMinutes(trip) {
+  const start = tripDateTime(trip.pickupDate, trip.pickupTime);
+  const end = tripDateTime(trip.returnDate, trip.returnTime);
+  return start && end ? Math.max(0, Math.floor((end - start) / 60000)) : 0;
+}
+
+function rentalDays(trip) {
+  const minutes = rentalMinutes(trip);
+  return minutes > 0 ? Math.ceil(minutes / 1440) : 0;
+}
+
+function addDays(value, days) {
+  const date = new Date(`${value}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 export default function BookingPreviewFleet() {
   const url = new URL(window.location.href);
   const [trip, setTrip] = useState({
-    pickupDate: url.searchParams.get('pickupDate') || dateInput(1),
-    returnDate: url.searchParams.get('returnDate') || dateInput(3),
+    pickupDate: url.searchParams.get('pickupDate') || dateInput(0),
+    returnDate: url.searchParams.get('returnDate') || dateInput(1),
     pickupTime: url.searchParams.get('pickupTime') || '9:00 AM',
     returnTime: url.searchParams.get('returnTime') || '9:00 AM',
   });
@@ -78,10 +112,26 @@ export default function BookingPreviewFleet() {
   const [checking, setChecking] = useState(true);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState('');
+  const [policy, setPolicy] = useState({ minimum_rental_days: 1, minimum_rental_hours: 24, advance_notice_minutes: 0 });
+  const [quote, setQuote] = useState(null);
+
+  useEffect(() => {
+    setTrip((current) => {
+      const minimumMinutes = Math.max(1, Number(policy.minimum_rental_days || 1)) * 1440;
+      if (rentalMinutes(current) >= minimumMinutes) return current;
+      return {
+        ...current,
+        returnDate: addDays(current.pickupDate, Number(policy.minimum_rental_days || 1)),
+        returnTime: current.pickupTime,
+      };
+    });
+  }, [policy.minimum_rental_days]);
 
   useEffect(() => {
     let active = true;
     async function loadVehicles() {
+      const { data: policyRows } = await supabase.rpc('get_public_booking_policy');
+      if (active && policyRows?.[0]) setPolicy(policyRows[0]);
       let query = supabase.from('vehicles').select('*');
       query = TEST_VEHICLE_ENABLED
         ? query.or(`published.eq.true,id.eq.${TEST_VEHICLE_ID}`)
@@ -97,7 +147,7 @@ export default function BookingPreviewFleet() {
   }, []);
 
   useEffect(() => {
-    if (!trip.pickupDate || !trip.returnDate || trip.returnDate <= trip.pickupDate) {
+    if (!trip.pickupDate || !trip.returnDate) {
       setAvailability(new Map());
       setChecking(false);
       return;
@@ -105,6 +155,21 @@ export default function BookingPreviewFleet() {
     let active = true;
     setChecking(true);
     const timer = window.setTimeout(async () => {
+      const { data: bookingQuote, error: quoteError } = await supabase.rpc('get_booking_quote', {
+        p_vehicle_id: null,
+        p_pickup_date: trip.pickupDate,
+        p_pickup_time: trip.pickupTime,
+        p_return_date: trip.returnDate,
+        p_return_time: trip.returnTime,
+      });
+      if (!active) return;
+      setQuote(bookingQuote || null);
+      if (quoteError || !bookingQuote?.valid) {
+        setError(previewError(quoteError, bookingQuote?.error || 'These pickup and return times are not allowed.'));
+        setAvailability(new Map());
+        setChecking(false);
+        return;
+      }
       const { data, error: availabilityError } = await supabase.rpc('get_admin_calendar_fleet_availability', {
         p_pickup_date: trip.pickupDate,
         p_pickup_time: trip.pickupTime,
@@ -144,15 +209,15 @@ export default function BookingPreviewFleet() {
   }), [vehicles, availability, filter, search, availableOnly]);
   const selectedVehicle = vehicles.find((vehicle) => vehicle.id === selectedId);
   const selectedAvailability = selectedVehicle ? availability.get(selectedVehicle.id) : null;
-  const days = rentalDays(trip.pickupDate, trip.returnDate);
+  const days = quote?.valid ? Number(quote.billable_days || 0) : rentalDays(trip);
 
   function updateTrip(key, value) {
     setTrip((current) => {
       const next = { ...current, [key]: value };
-      if (key === 'pickupDate' && next.returnDate <= value) {
-        const returnDate = new Date(`${value}T12:00:00`);
-        returnDate.setDate(returnDate.getDate() + 1);
-        next.returnDate = returnDate.toISOString().slice(0, 10);
+      const minimumMinutes = Math.max(1, Number(policy.minimum_rental_days || 1)) * 1440;
+      if ((key === 'pickupDate' || key === 'pickupTime') && rentalMinutes(next) < minimumMinutes) {
+        next.returnDate = addDays(next.pickupDate, Number(policy.minimum_rental_days || 1));
+        next.returnTime = next.pickupTime;
       }
       return next;
     });
@@ -162,6 +227,18 @@ export default function BookingPreviewFleet() {
     if (!selectedVehicle || selectedAvailability?.available !== true) return;
     setStarting(true);
     setError('');
+    const { data: finalQuote, error: finalQuoteError } = await supabase.rpc('get_booking_quote', {
+      p_vehicle_id: selectedVehicle.id,
+      p_pickup_date: trip.pickupDate,
+      p_pickup_time: trip.pickupTime,
+      p_return_date: trip.returnDate,
+      p_return_time: trip.returnTime,
+    });
+    if (finalQuoteError || !finalQuote?.valid) {
+      setError(previewError(finalQuoteError, finalQuote?.error || 'These pickup and return times are not allowed.'));
+      setStarting(false);
+      return;
+    }
     const { data: bookingId, error: bookingError } = await supabase.rpc('create_website_pending_booking', {
       p_pickup_date: trip.pickupDate,
       p_return_date: trip.returnDate,
@@ -215,9 +292,10 @@ export default function BookingPreviewFleet() {
           <aside className="supabase-preview-booking-card">
             <div className="supabase-preview-price"><strong>{money(selectedVehicle.daily_rate)}</strong><span>/ day</span></div>
             <TripFields trip={trip} updateTrip={updateTrip} />
+            <p className={`supabase-preview-policy ${quote?.valid ? 'valid' : 'invalid'}`}>{Number(policy.advance_notice_minutes || 0) === 0 ? 'Same-day pickup is available.' : `Pickup requires ${Number(policy.advance_notice_minutes)} minutes advance notice.`} Rentals require at least {Number(policy.minimum_rental_hours || 24)} hours.</p>
             <div className={`supabase-preview-availability ${available ? 'available' : 'unavailable'}`}><span>{checking ? 'Checking calendar…' : available ? 'Available for these dates' : selectedAvailability?.reason || 'Unavailable for these dates'}</span></div>
             <div className="supabase-preview-total"><span>{days || 0} rental days</span><strong>{money(Number(selectedVehicle.daily_rate || 0) * days)}</strong></div>
-            <button type="button" onClick={startBooking} disabled={!available || checking || starting}>{starting ? 'Starting secure checkout…' : 'Book this vehicle'}<ChevronRight size={18}/></button>
+            <button type="button" onClick={startBooking} disabled={!quote?.valid || !available || checking || starting}>{starting ? 'Starting secure checkout…' : 'Book this vehicle'}<ChevronRight size={18}/></button>
             <small><ShieldCheck size={14}/> Availability is confirmed again before checkout starts.</small>
             {error && <p className="supabase-preview-error">{error}</p>}
           </aside>
@@ -230,7 +308,7 @@ export default function BookingPreviewFleet() {
     <PreviewHeader label="Rent Me CT Vehicles" />
     <main className="supabase-preview-fleet">
       <section className="supabase-preview-hero"><p className="eyebrow">Rent Me CT fleet</p><h1>Choose your rental</h1><p>Choose your dates, see available vehicles, and start your reservation.</p></section>
-      <section className="supabase-preview-date-panel"><h2>Choose rental dates</h2><TripFields trip={trip} updateTrip={updateTrip} /></section>
+      <section className="supabase-preview-date-panel"><h2>Choose rental dates</h2><TripFields trip={trip} updateTrip={updateTrip} /><p className={`supabase-preview-policy ${quote?.valid ? 'valid' : 'invalid'}`}>{Number(policy.advance_notice_minutes || 0) === 0 ? 'Same-day pickup is available.' : `Pickup requires ${Number(policy.advance_notice_minutes)} minutes advance notice.`} Every rental must be at least {Number(policy.minimum_rental_hours || 24)} hours.{quote?.error ? ` ${quote.error}` : ''}</p></section>
       <section className="supabase-preview-filterbar">
         <div className="supabase-preview-search"><Search size={18}/><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search the fleet" /></div>
         <button type="button" className={availableOnly ? 'active' : ''} aria-pressed={availableOnly} onClick={() => setAvailableOnly((current) => !current)}>Available only</button>
