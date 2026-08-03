@@ -1812,3 +1812,71 @@ summary:focus-visible {
   .identity-match-results { grid-template-columns: 1fr; }
   .identity-correction-button { width: 100%; }
 }
+
+/* Records page: agreements use the same full-width row system as documents. */
+.records-agreement-subsection {
+  width: 100%;
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 1px solid #d9e1df;
+}
+
+.records-agreement-subsection > .eyebrow {
+  margin: 0 0 6px !important;
+}
+
+.records-agreement-subsection > h3 {
+  margin: 0 !important;
+}
+
+.agreement-document-list {
+  margin-top: 14px !important;
+}
+
+.rental-agreement-record {
+  width: 100%;
+  min-height: 66px;
+  box-sizing: border-box;
+}
+
+.agreement-document-actions {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  gap: 12px !important;
+}
+
+.agreement-record-action {
+  width: auto !important;
+  min-width: 0 !important;
+  height: 42px !important;
+  min-height: 42px !important;
+  margin: 0 !important;
+  padding: 0 14px !important;
+  box-sizing: border-box !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 7px !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+}
+
+@media (max-width: 760px) {
+  .agreement-document-actions {
+    width: 100% !important;
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .agreement-record-action {
+    width: 100% !important;
+  }
+}
+
+@media (max-width: 520px) {
+  .agreement-document-actions {
+    grid-template-columns: 1fr;
+  }
+}

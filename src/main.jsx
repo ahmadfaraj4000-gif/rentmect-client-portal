@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Clock,
   CreditCard,
+  Download,
   FileSignature,
   FileText,
   LogOut,
@@ -3478,33 +3479,17 @@ async function verifyPhoneCode(options = {}) {
             {licenseUploaded && !currentRentalLicenseDocument && (
               <p className="document-on-file-note">Driver license on file. This rental only needs a fresh insurance declaration-page upload.</p>
             )}
-            <UploadedDocuments documents={documentsForActiveRental} currentRental={currentRental} openDocument={openDocument} replaceDocument={replaceDocument} busy={documentUploadBusy} />
+            <UploadedDocuments
+              documents={documentsForActiveRental}
+              currentRental={currentRental}
+              openDocument={openDocument}
+              replaceDocument={replaceDocument}
+              busy={documentUploadBusy}
+              agreementSigned={agreementSigned}
+              openAgreement={() => setAgreementModalOpen(true)}
+              downloadSignedAgreement={() => downloadAgreement(currentRental)}
+            />
           </>
-        )}
-
-        {activeTab === 'records' && (
-          <section className="panel centered-panel agreement-card-clean">
-            <p className="eyebrow">Agreement</p>
-            <h3>Rental Agreement</h3>
-            <p className="muted">
-              The agreement no longer sits across the whole portal. Open it, read it inside the pop-up, sign, and close.
-            </p>
-            <div className="agreement-status-box">
-              <FileSignature size={24} />
-              <div>
-                <strong>{agreementSigned ? 'Agreement Signed' : 'Agreement Not Signed Yet'}</strong>
-                <span>{agreementSigned ? 'You are all set for this step.' : 'Review and sign before pickup.'}</span>
-              </div>
-            </div>
-            <button className="primary-btn big-action" onClick={() => setAgreementModalOpen(true)}>
-              <FileSignature size={18} /> Review & Sign Agreement
-            </button>
-            {currentRental?.agreement_snapshot && (
-              <button className="secondary-btn big-action" type="button" onClick={() => downloadAgreement(currentRental)}>
-                Download Signed Agreement
-              </button>
-            )}
-          </section>
         )}
 
         {activeTab === 'payment' && (
@@ -5967,7 +5952,16 @@ function ActionCard({ icon: Icon, title, text, onClick }) {
   );
 }
 
-function UploadedDocuments({ documents, currentRental, openDocument, replaceDocument, busy = {} }) {
+function UploadedDocuments({
+  documents,
+  currentRental,
+  openDocument,
+  replaceDocument,
+  busy = {},
+  agreementSigned = false,
+  openAgreement,
+  downloadSignedAgreement,
+}) {
   const sortedDocuments = [...documents].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
 
   return (
@@ -6000,6 +5994,32 @@ function UploadedDocuments({ documents, currentRental, openDocument, replaceDocu
             </div>
           </div>
         ))}
+      </div>
+      <div className="records-agreement-subsection">
+        <p className="eyebrow">Rental Agreements</p>
+        <h3>Rental Agreement</h3>
+        <div className="uploaded-document-list agreement-document-list">
+          <div className="uploaded-document-row rental-agreement-record">
+            <div>
+              <strong>Rental agreement</strong>
+              <span>
+                {agreementSigned
+                  ? `Signed${currentRental?.agreement_signed_at ? ` • ${new Date(currentRental.agreement_signed_at).toLocaleString()}` : ''}`
+                  : currentRental ? 'Signature required before pickup' : 'Create a reservation before signing'}
+              </span>
+            </div>
+            <div className="document-actions agreement-document-actions" role="group" aria-label="Rental agreement actions">
+              <button className="primary-btn agreement-record-action" type="button" onClick={openAgreement} disabled={!currentRental}>
+                <FileSignature size={16} /> {agreementSigned ? 'View Signed Agreement' : 'Review & Sign Agreement'}
+              </button>
+              {currentRental?.agreement_snapshot && (
+                <button className="secondary-btn agreement-record-action" type="button" onClick={downloadSignedAgreement}>
+                  <Download size={16} /> Download Signed Agreement
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     </section>
   );
