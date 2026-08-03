@@ -383,6 +383,9 @@ function App() {
     if (returningFromStripePayment !== 'stripe_success') return;
 
     async function reconcileStripeReturn() {
+      const confirmingExtensionPayment = extensionRequests.some((request) =>
+        request.status === 'approved_pending_payment' && request.payment_status === 'pending'
+      );
       if (!stripeCheckoutSessionId) {
         await loadPortalData(session.user.id, { silent: true, stripeReturnRetry: true });
         clearStripeReturnParams();
@@ -414,7 +417,9 @@ function App() {
         setCheckoutIntent(false);
         setActiveTab('payment');
         clearStripeReturnParams();
-        notify('Payment confirmed. Your rental is recorded and ready for Rent Me CT review.', 'success');
+        notify(data?.targetType === 'extension' || confirmingExtensionPayment
+          ? 'Extension payment confirmed. Stripe and the admin portal are updating the active return date now.'
+          : 'Payment confirmed. Your rental is recorded and ready for Rent Me CT review.', 'success');
       } catch (error) {
         stripeReturnHandledRef.current = false;
         notify('Stripe received the payment, but the booking confirmation could not reconnect. Do not pay again; refresh or contact Rent Me CT.', 'error');
@@ -429,7 +434,9 @@ function App() {
   useEffect(() => {
     if (!session?.user?.id) return undefined;
     let refreshTimer;
+    let portalRefreshTimer;
     let calendarPoll;
+    let portalPoll;
     const refreshFleetCalendar = () => {
       window.clearTimeout(refreshTimer);
       refreshTimer = window.setTimeout(async () => {
@@ -452,7 +459,38 @@ function App() {
         }));
       }, 150);
     };
-    const refreshOnFocus = () => refreshFleetCalendar();
+    const refreshPortalExtensionData = async () => {
+      const [rentalsResult, documentsResult, messagesResult, extensionsResult] = await Promise.all([
+        supabase.from('rentals').select('*, vehicles(*)').eq('user_id', session.user.id).order('created_at', { ascending: false }),
+        supabase.from('rental_documents').select('*').eq('user_id', session.user.id).order('created_at', { ascending: false }),
+        supabase.from('rental_messages').select('*').eq('user_id', session.user.id).order('created_at', { ascending: true }),
+        supabase.from('rental_extension_requests').select('*').eq('user_id', session.user.id).order('created_at', { ascending: false }),
+      ]);
+      if (rentalsResult.data) setRentals(rentalsResult.data);
+      if (documentsResult.data) setDocuments(documentsResult.data);
+      if (messagesResult.data) setMessages(messagesResult.data);
+      if (extensionsResult.data) setExtensionRequests(extensionsResult.data);
+      const refreshError = rentalsResult.error || documentsResult.error || messagesResult.error || extensionsResult.error;
+      setPortalHealth((current) => ({
+        ...current,
+        errors: refreshError
+          ? [...(current.errors || []).filter((item) => item.label !== 'Extensions'), { label: 'Extensions', message: userFacingPortalError(refreshError, 'The extension status could not refresh.') }]
+          : (current.errors || []).filter((item) => item.label !== 'Extensions'),
+        lastUpdated: new Date().toISOString(),
+      }));
+    };
+    const refreshPortalExtensionState = () => {
+      window.clearTimeout(portalRefreshTimer);
+      portalRefreshTimer = window.setTimeout(() => {
+        if (document.visibilityState !== 'hidden') {
+          refreshPortalExtensionData();
+        }
+      }, 150);
+    };
+    const refreshOnFocus = () => {
+      refreshFleetCalendar();
+      refreshPortalExtensionState();
+    };
     const fleetChannel = supabase
       .channel('client-fleet-source-of-truth')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rentals' }, refreshFleetCalendar)
@@ -460,13 +498,25 @@ function App() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_availability_blocks' }, refreshFleetCalendar)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, () => loadPortalData(session.user.id, { silent: true }))
       .subscribe();
+    const extensionChannel = supabase
+      .channel(`client-extension-workflow-${session.user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rental_extension_requests', filter: `user_id=eq.${session.user.id}` }, refreshPortalExtensionState)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rental_documents', filter: `user_id=eq.${session.user.id}` }, refreshPortalExtensionState)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rental_messages', filter: `user_id=eq.${session.user.id}` }, refreshPortalExtensionState)
+      .subscribe();
     calendarPoll = window.setInterval(refreshFleetCalendar, 15 * 1000);
+    // Realtime is the fast path; polling is the recovery path for dropped mobile
+    // connections so an approval or insurance decision appears without a reload.
+    portalPoll = window.setInterval(refreshPortalExtensionState, 15 * 1000);
     window.addEventListener('focus', refreshOnFocus);
     return () => {
       window.clearTimeout(refreshTimer);
+      window.clearTimeout(portalRefreshTimer);
       window.clearInterval(calendarPoll);
+      window.clearInterval(portalPoll);
       window.removeEventListener('focus', refreshOnFocus);
       supabase.removeChannel(fleetChannel);
+      supabase.removeChannel(extensionChannel);
     };
   }, [session?.user?.id]);
 
@@ -2188,10 +2238,34 @@ async function verifyPhoneCode(options = {}) {
       return;
     }
 
+    const sameVehicleReadyForSubmission = extensionMode === 'extend' && extensionPreview?.same_vehicle_available;
     setExtensionSaving(true);
+
+    if (sameVehicleReadyForSubmission) {
+      const { data, error } = await supabase.rpc('request_customer_rental_extension', {
+        p_rental_id: currentRental.id,
+        p_requested_return_date: extensionForm.returnDate,
+        p_requested_return_time: extensionForm.returnTime,
+        p_customer_note: extensionForm.note,
+      });
+      setExtensionSaving(false);
+
+      if (error) {
+        setExtensionPreview(null);
+        notify(error.message);
+        return;
+      }
+
+      setExtensionRequests((prev) => [data, ...prev.filter((request) => request.id !== data.id)]);
+      setExtensionForm((prev) => ({ ...prev, note: '' }));
+      setExtensionPreview(null);
+      notify('Extension request sent. Upload the new insurance declaration page next; admin approval stays locked until it is approved.', 'success');
+      return;
+    }
+
     const previewRpc = extensionMode === 'switch'
-      ? 'preview_customer_vehicle_switch_continuation'
-      : 'preview_customer_rental_extension';
+      ? 'preview_customer_vehicle_switch_continuation_v2'
+      : 'preview_customer_rental_extension_v2';
     const { data: preview, error: previewError } = await supabase.rpc(previewRpc, {
       p_rental_id: currentRental.id,
       p_requested_return_date: extensionForm.returnDate,
@@ -2219,24 +2293,8 @@ async function verifyPhoneCode(options = {}) {
       notify('That vehicle is not available through the requested return time. Review the available alternatives below.');
       return;
     }
-
-    const { data, error } = await supabase.rpc('request_customer_rental_extension', {
-      p_rental_id: currentRental.id,
-      p_requested_return_date: extensionForm.returnDate,
-      p_requested_return_time: extensionForm.returnTime,
-      p_customer_note: extensionForm.note,
-    });
     setExtensionSaving(false);
-
-    if (error) {
-      notify(error.message);
-      return;
-    }
-
-    setExtensionRequests((prev) => [data, ...prev.filter((request) => request.id !== data.id)]);
-    setExtensionForm((prev) => ({ ...prev, note: '' }));
-    setExtensionPreview(null);
-    notify('Extension request sent for admin review.', 'success');
+    notify('This car is available for the requested extension. Review the estimate, then submit it for approval.', 'success');
   }
 
   async function cancelExtensionRequest() {
@@ -3129,7 +3187,7 @@ async function verifyPhoneCode(options = {}) {
                     <strong>Extension approved — payment ready</strong>
                     <span>Your approved extension can be paid directly here in the client portal.{approvedUnpaidExtension.payment_due_at ? ` Pay by ${new Date(approvedUnpaidExtension.payment_due_at).toLocaleString()} or the hold is released automatically.` : ''}</span>
                     <button className="primary-btn" type="button" onClick={startStripeCheckout} disabled={paymentSaving || extensionInsuranceRequired}>
-                      <CreditCard size={18} /> {extensionInsuranceRequired ? 'Upload New Insurance First' : paymentSaving ? 'Opening Stripe…' : 'Pay Approved Extension'}
+                      <CreditCard size={18} /> {extensionInsuranceRequired ? 'Upload New Insurance First' : paymentSaving ? 'Opening Stripe…' : `Pay ${money(approvedUnpaidExtension.extension_total_amount)}`}
                     </button>
                   </div>}
                   {openExtensionRequest && <div className={`extension-insurance-step ${extensionInsuranceDocument?.status || 'missing'}`}>
@@ -3196,8 +3254,24 @@ async function verifyPhoneCode(options = {}) {
                           ? 'Payment Required'
                           : extensionMode === 'switch'
                             ? 'Find Switch Vehicles'
-                            : 'Request Extension'}
+                            : extensionPreview?.same_vehicle_available
+                              ? 'Submit Extension for Approval'
+                              : 'Check Car Availability'}
                   </button>
+                  {extensionPreview?.same_vehicle_available && extensionMode === 'extend' && (
+                    <div className="extension-availability-card available" role="status">
+                      <strong><CheckCircle2 size={17}/> This car is available for the requested extension</strong>
+                      <span>{formatRentalDate(extensionForm.returnDate, extensionForm.returnTime)} • availability and price will be rechecked when submitted</span>
+                      <div className="extension-quote-grid">
+                        <small><b>{extensionPreview.quote?.extension_days || 0}</b> extension day(s)</small>
+                        <small><b>{money(extensionPreview.quote?.extension_rental_amount || 0)}</b> rental</small>
+                        <small><b>{money(extensionPreview.quote?.extension_tax_amount || 0)}</b> tax</small>
+                        <small><b>{money(extensionPreview.quote?.deposit_carried_amount || 0)}</b> existing deposit carried</small>
+                      </div>
+                      <strong>Estimated extension payment: {money(extensionPreview.quote?.extension_total_amount || 0)}</strong>
+                      <small>No second security deposit is charged for keeping the same car. After submitting, upload a new insurance declaration page for admin review.</small>
+                    </div>
+                  )}
                   {extensionPreview && (extensionMode === 'switch' || !extensionPreview.same_vehicle_available) && (
                     <div className="extension-alternatives">
                       <p className="auth-message">
@@ -3220,7 +3294,7 @@ async function verifyPhoneCode(options = {}) {
                                       ? 'Same brand'
                                       : 'Available option'}
                               </span>
-                              <small>{money(vehicle.daily_rate)}/day • {money(vehicle.continuation_deposit ?? vehicle.security_deposit)} required deposit; your current hold carries over and only the difference changes • Request switch</small>
+                              <small>{money(vehicle.daily_rate)}/day • estimated payment {money(vehicle.quote?.extension_total_amount || 0)} • {money(vehicle.quote?.deposit_carried_amount || 0)} of your current deposit carries over{Number(vehicle.quote?.deposit_increase_amount || 0) > 0 ? ` and ${money(vehicle.quote.deposit_increase_amount)} additional deposit is included` : ''}{Number(vehicle.quote?.deposit_decrease_amount || 0) > 0 ? `; ${money(vehicle.quote.deposit_decrease_amount)} remains protected until the original car passes inspection` : ''} • Request switch</small>
                             </button>
                           ))}
                         </div>
