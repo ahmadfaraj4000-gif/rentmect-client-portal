@@ -99,6 +99,8 @@ const SMS_PRIVACY_URL = 'https://rentmect.com/privacy-policy.html#sms-privacy';
 const BLOCKING_RENTAL_STATUSES = ['pending', 'documents_needed', 'document_review', 'ready_for_pickup', 'approved', 'active', 'overdue', 'return_initiated', 'checkout_hold', 'calendar_block'];
 const AVAILABILITY_RENTAL_STATUSES = [...BLOCKING_RENTAL_STATUSES, 'completed'];
 const BLOCKING_VEHICLE_STATUSES = ['maintenance', 'unavailable', 'inactive'];
+const ACTIVE_POSSESSION_RENTAL_STATUSES = ['active', 'rented', 'overdue', 'return_initiated'];
+const SINGLE_RENTAL_BOOKING_MESSAGE = 'You already have an active rental. Rent Me CT allows one rental at a time. To keep your current vehicle longer, open Manage Rental in the client portal and request an extension.';
 const TURNAROUND_BUFFER_MINUTES = 180;
 
 function App() {
@@ -628,6 +630,13 @@ function App() {
 
     return prioritizedRental;
   }, [rentals, adminBookingRentalId, checkoutIntent, reservationForm.vehicleId, reservationForm.pickupDate, reservationForm.returnDate, reservationForm.pickupTime, reservationForm.returnTime]);
+
+  const activeRentalConflict = useMemo(() => {
+    if (!cars2BookingHandoff || !checkoutIntent) return null;
+    return rentals.find((rental) =>
+      ACTIVE_POSSESSION_RENTAL_STATUSES.includes(String(rental.status || '').toLowerCase())
+    ) || null;
+  }, [cars2BookingHandoff, checkoutIntent, rentals]);
 
   useEffect(() => {
     if (checkoutIntent || pendingBookingId || currentRental) return;
@@ -2917,7 +2926,7 @@ async function verifyPhoneCode(options = {}) {
   if (bookingPreviewCheckoutMode && checkoutIntent && !previewPortalOpen) {
     return (
       <>
-        {notice && (
+        {notice && !activeRentalConflict && (
           <div className="preview-notice-wrap">
             <Notice notice={notice} onDismiss={() => setNotice(null)} />
           </div>
@@ -2949,6 +2958,7 @@ async function verifyPhoneCode(options = {}) {
           continueContact={continuePreviewContact}
           reservationSaving={reservationSaving}
           currentRental={currentRental}
+          activeRentalConflict={activeRentalConflict}
           vehicle={selectedVehicle || currentRental?.vehicles}
           identityStatus={identityStatus}
           identityErrorCode={identityErrorCode}
@@ -2976,7 +2986,11 @@ async function verifyPhoneCode(options = {}) {
           checkoutExpired={checkoutExpired}
           changeCheckoutDatesOrVehicle={changeCheckoutDatesOrVehicle}
           signOut={signOut}
-          openPortal={() => setPreviewPortalOpen(true)}
+          openPortal={() => {
+            setActiveTab('overview');
+            setTripManagerOpen(true);
+            setPreviewPortalOpen(true);
+          }}
           adminBookingHandoff={adminBookingHandoff}
         />
         {agreementModalOpen && (
@@ -4769,6 +4783,9 @@ function userFacingPortalError(error, fallback = 'Something went wrong. Please t
     typeof error === 'string' ? error : '',
   ].filter(Boolean).join(' ').trim();
   if (!message) return fallback;
+  if (/already has an active rental|already have an active rental|one rental vehicle at a time|only one rental at a time/i.test(message)) {
+    return SINGLE_RENTAL_BOOKING_MESSAGE;
+  }
   if (/failed to fetch|network|load failed|connection|timeout/i.test(message)) return 'The connection was interrupted. Check your internet connection and try again.';
   if (/jwt|token|session|not authenticated/i.test(message)) return 'Your secure session needs to be refreshed. Sign in again and retry.';
   if (/already uses this mobile number|profiles_normalized_phone_unique_idx/i.test(message)) {
@@ -5236,6 +5253,7 @@ function PreviewCheckout({
   continueContact,
   reservationSaving,
   currentRental,
+  activeRentalConflict,
   vehicle,
   identityStatus,
   identityErrorCode,
@@ -5286,6 +5304,26 @@ function PreviewCheckout({
     if (activeSection === 'documents' && documentsComplete) setActiveSection('agreement');
     if (activeSection === 'agreement' && agreementSigned) setActiveSection('payment');
   }, [activeSection, identityVerified, documentsComplete, agreementSigned, paymentPaid, setActiveSection]);
+
+  if (activeRentalConflict) {
+    return (
+      <div className="preview-checkout-shell">
+        <PreviewTopbar />
+        <main className="preview-confirmation preview-booking-blocked" role="alert" aria-live="assertive">
+          <AlertTriangle size={54} />
+          <p className="eyebrow">Reservation not created</p>
+          <h1>You already have an active rental.</h1>
+          <p>Rent Me CT allows one rental at a time. This second reservation was not confirmed.</p>
+          <div className="preview-confirmation-trip">
+            <strong>{activeRentalConflict.vehicles?.name || 'Your current Rent Me CT vehicle'}</strong>
+            <span>Current return: {formatRentalDate(activeRentalConflict.return_date, activeRentalConflict.return_time)}</span>
+          </div>
+          <p>To keep your current vehicle longer, open Manage Rental and request an extension.</p>
+          <button className="preview-primary-button" type="button" onClick={openPortal}>Open Manage Rental <ChevronRight size={18} /></button>
+        </main>
+      </div>
+    );
+  }
 
   if (paymentPaid) {
     return (
