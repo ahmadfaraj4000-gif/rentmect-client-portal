@@ -122,6 +122,7 @@ function App() {
   const [emailOtp, setEmailOtp] = useState('');
   const [emailAuthBusy, setEmailAuthBusy] = useState(false);
   const [notice, setNotice] = useState(null);
+  const noticeTimeoutRef = useRef(null);
   const [reservationSaving, setReservationSaving] = useState(false);
   const [agreementSaving, setAgreementSaving] = useState(false);
   const [paymentSaving, setPaymentSaving] = useState(false);
@@ -249,9 +250,9 @@ function App() {
       ? 'error'
       : type;
     setNotice({ text: safeText, type: resolvedType });
-    window.clearTimeout(notify.timeout);
+    window.clearTimeout(noticeTimeoutRef.current);
     if (resolvedType !== 'error') {
-      notify.timeout = window.setTimeout(() => setNotice(null), 5200);
+      noticeTimeoutRef.current = window.setTimeout(() => setNotice(null), 7000);
     }
   }
 
@@ -2852,6 +2853,7 @@ async function verifyPhoneCode(options = {}) {
 
   function selectClientTab(key) {
     setActiveTab(key);
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }));
     if (isMobileClientNav) setNavCollapsed(true);
   }
 
@@ -2927,7 +2929,7 @@ async function verifyPhoneCode(options = {}) {
     return (
       <>
         {notice && !activeRentalConflict && (
-          <div className="preview-notice-wrap">
+          <div className="portal-notice-wrap">
             <Notice notice={notice} onDismiss={() => setNotice(null)} />
           </div>
         )}
@@ -3065,7 +3067,7 @@ async function verifyPhoneCode(options = {}) {
       )}
 
       <main id="portal-main-content" className="portal-main compact-main">
-        {notice && <Notice notice={notice} onDismiss={() => setNotice(null)} />}
+        {notice && <div className="portal-notice-wrap"><Notice notice={notice} onDismiss={() => setNotice(null)} /></div>}
         <header className="portal-header compact-header">
           {isMobileClientNav && navCollapsed && (
             <button
@@ -3918,11 +3920,16 @@ function WizardModal({
   const Icon = step.icon;
   const [vehicleReminder, setVehicleReminder] = useState(null);
   const dialogRef = useDialogFocus(() => setWizardOpen(false));
+  const wizardBodyRef = useRef(null);
   const agreementSignatureRef = useRef(null);
   const correctingIdentity = Boolean(identityCorrectionTarget);
   const showCorrectionName = ['full_name', 'identity_details'].includes(identityCorrectionTarget);
   const showCorrectionBirthday = ['date_of_birth', 'identity_details'].includes(identityCorrectionTarget);
   const bookingWindowState = getCustomerBookingWindow(reservationForm, bookingPolicy);
+
+  useEffect(() => {
+    wizardBodyRef.current?.scrollTo({ top: 0, behavior: 'auto' });
+  }, [wizardStep]);
 
   function jumpToWizardSignature() {
     const signatureSection = agreementSignatureRef.current;
@@ -3976,7 +3983,7 @@ function WizardModal({
           </div>
         )}
 
-        <div className="wizard-body">
+        <div ref={wizardBodyRef} className="wizard-body">
           {wizardStep === 0 && (
             <div className="portal-form">
               <p className="muted">
@@ -4749,10 +4756,12 @@ function LoadingScreen({ stripeReturn = false }) {
 
 function Notice({ notice, onDismiss }) {
   const isError = notice.type === 'error';
+  const Icon = isError ? AlertTriangle : CheckCircle2;
   return (
     <div className={`notice-banner ${notice.type || 'info'}`} role={isError ? 'alert' : 'status'} aria-live={isError ? 'assertive' : 'polite'} aria-atomic="true">
+      <Icon className="notice-icon" size={21} aria-hidden="true" />
       <span>{notice.text}</span>
-      <button type="button" onClick={onDismiss} aria-label="Dismiss notification">Dismiss</button>
+      <button type="button" className="notice-dismiss" onClick={onDismiss} aria-label="Dismiss notification"><X size={17}/></button>
     </div>
   );
 }
@@ -5045,6 +5054,8 @@ function PreviewGuestExperience({
   adminBookingHandoff = null,
   changeCheckoutDatesOrVehicle,
 }) {
+  const emailInputRef = useRef(null);
+  const emailCodeInputRef = useRef(null);
   const days = Math.max(1, getRentalDays(reservationForm.pickupDate, reservationForm.returnDate));
   const displayVehicle = vehicle || { id: BOOKING_FLOW_TEST_VEHICLE_ID, name: 'Booking Flow Test Vehicle', brand: 'Rent Me CT', model: 'Checkout Preview', vehicle_type: 'Internal Test', daily_rate: 1, security_deposit: 300, description: 'Internal test vehicle for the booking flow.', features: TEST_VEHICLE_FEATURES };
   const features = getVehicleFeatures(displayVehicle);
@@ -5054,6 +5065,20 @@ function PreviewGuestExperience({
   const deposit = Number(estimate?.securityDeposit ?? displayVehicle.security_deposit ?? 300);
   const total = rental + serviceFeeTotal + tax + deposit;
   const update = (key, value) => setAuthForm({ ...authForm, [key]: value });
+
+  useEffect(() => {
+    if (page !== 'checkout') return;
+    window.scrollTo({ top: 0, behavior: 'auto' });
+    window.requestAnimationFrame(() => emailInputRef.current?.focus({ preventScroll: true }));
+  }, [page]);
+
+  useEffect(() => {
+    if (!emailOtpSent || page !== 'checkout') return;
+    window.requestAnimationFrame(() => {
+      emailCodeInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      emailCodeInputRef.current?.focus({ preventScroll: true });
+    });
+  }, [emailOtpSent, page]);
 
   if (checkoutExpired) {
     return <CheckoutExpiredScreen reservationForm={reservationForm} />;
@@ -5101,6 +5126,7 @@ function PreviewGuestExperience({
                 <label>
                   <span>Email address</span>
                   <input
+                    ref={emailInputRef}
                     type="email"
                     placeholder="you@example.com"
                     value={authForm.email}
@@ -5113,6 +5139,7 @@ function PreviewGuestExperience({
                   <label>
                     <span>One-time email code</span>
                     <input
+                      ref={emailCodeInputRef}
                       inputMode="numeric"
                       autoComplete="one-time-code"
                       placeholder="Enter the code from your email"
@@ -5126,7 +5153,7 @@ function PreviewGuestExperience({
                   {emailAuthBusy ? 'Please wait…' : emailOtpSent ? 'Verify email & continue' : 'Continue with email'}
                   <ChevronRight size={18} />
                 </button>
-                {message && <p className="preview-inline-message">{message}</p>}
+                {message && <p className="preview-inline-message" role="status" aria-live="polite">{message}</p>}
                 {emailOtpSent && (
                   <button className="preview-text-button" type="button" onClick={() => {
                     setEmailOtp('');
@@ -5211,6 +5238,10 @@ function PreviewGuestExperience({
           </aside>
         </div>
       </main>
+      <div className="preview-mobile-checkout-bar">
+        <span><small>Due today</small><strong>{money(total)}</strong></span>
+        <button type="button" onClick={() => setPage('checkout')} disabled={checkoutExpired}>Continue to checkout <ChevronRight size={18}/></button>
+      </div>
     </div>
   );
 }
@@ -5305,6 +5336,15 @@ function PreviewCheckout({
     if (activeSection === 'agreement' && agreementSigned) setActiveSection('payment');
   }, [activeSection, identityVerified, documentsComplete, agreementSigned, paymentPaid, setActiveSection]);
 
+  useEffect(() => {
+    const section = document.querySelector(`[data-checkout-section="${activeSection}"]`);
+    if (!section) return;
+    window.requestAnimationFrame(() => section.scrollIntoView({
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+      block: 'start',
+    }));
+  }, [activeSection]);
+
   if (activeRentalConflict) {
     return (
       <div className="preview-checkout-shell">
@@ -5378,7 +5418,7 @@ function PreviewCheckout({
             <button className="preview-text-button" type="button" onClick={signOut}>Sign out</button>
           </div>
 
-          <PreviewCheckoutSection number="1" title="Contact information" summary={contactStepCompleted ? `${profileForm.full_name} • Phone verified` : 'Tell us who will be driving'} completed={contactStepCompleted} open={activeSection === 'contact'} onOpen={() => setActiveSection('contact')}>
+          <PreviewCheckoutSection sectionKey="contact" number="1" title="Contact information" summary={contactStepCompleted ? `${profileForm.full_name} • Phone verified` : 'Tell us who will be driving'} completed={contactStepCompleted} open={activeSection === 'contact'} onOpen={() => setActiveSection('contact')}>
             {correctingIdentity && <div className="identity-correction-notice" role="status">
               <strong>Correct only the highlighted identity information.</strong>
               <span>Your verified email and phone number will not be changed or verified again.</span>
@@ -5416,7 +5456,7 @@ function PreviewCheckout({
             {(correctingIdentity || phoneVerified) && <button className="preview-primary-button" type="button" onClick={continueContact} disabled={reservationSaving || checkoutExpired}>{reservationSaving ? 'Saving…' : correctingIdentity ? 'Save correction & return to Identity' : currentRental ? 'Continue' : 'Save & continue'} <ChevronRight size={18} /></button>}
           </PreviewCheckoutSection>
 
-          <PreviewCheckoutSection number="2" title="Identity verification" summary={identityVerified ? 'Verified once and saved for returning rentals' : identityStatus === 'processing' ? 'Verification processing' : 'Government ID and selfie'} completed={identityVerified} open={activeSection === 'identity'} onOpen={() => setActiveSection('identity')}>
+          <PreviewCheckoutSection sectionKey="identity" number="2" title="Identity verification" summary={identityVerified ? 'Verified once and saved for returning rentals' : identityStatus === 'processing' ? 'Verification processing' : 'Government ID and selfie'} completed={identityVerified} open={activeSection === 'identity'} onOpen={() => setActiveSection('identity')}>
             <IdentityVerificationPanel
               status={identityStatus}
               errorCode={identityErrorCode}
@@ -5431,7 +5471,7 @@ function PreviewCheckout({
             />
           </PreviewCheckoutSection>
 
-          <PreviewCheckoutSection number="3" title="Driver documents" summary={documentsComplete ? `${licenseUploaded && returningAdminPath ? 'Saved license reused' : 'License uploaded'} • Insurance uploaded` : `${licenseUploaded ? (returningAdminPath ? 'Saved license reused' : 'License uploaded') : 'License required'} • ${insuranceUploaded ? 'Insurance uploaded' : 'Insurance required'}`} completed={documentsComplete} open={activeSection === 'documents'} onOpen={() => setActiveSection('documents')}>
+          <PreviewCheckoutSection sectionKey="documents" number="3" title="Driver documents" summary={documentsComplete ? `${licenseUploaded && returningAdminPath ? 'Saved license reused' : 'License uploaded'} • Insurance uploaded` : `${licenseUploaded ? (returningAdminPath ? 'Saved license reused' : 'License uploaded') : 'License required'} • ${insuranceUploaded ? 'Insurance uploaded' : 'Insurance required'}`} completed={documentsComplete} open={activeSection === 'documents'} onOpen={() => setActiveSection('documents')}>
             <div className="preview-upload-grid">
               <PreviewUploadCard title="Driver license" text="PDF, JPEG, PNG, or WebP up to 10 MB. Reused for future rentals." complete={licenseUploaded} busy={Boolean(documentUploadBusy?.license)} onUpload={(event) => uploadDocument(event, 'license')} />
               <div>
@@ -5441,7 +5481,7 @@ function PreviewCheckout({
             </div>
           </PreviewCheckoutSection>
 
-          <PreviewCheckoutSection number="4" title="Rental agreement" summary={agreementSigned ? 'Agreement signed' : 'Review the terms and add your signature'} completed={agreementSigned} open={activeSection === 'agreement'} onOpen={() => setActiveSection('agreement')}>
+          <PreviewCheckoutSection sectionKey="agreement" number="4" title="Rental agreement" summary={agreementSigned ? 'Agreement signed' : 'Review the terms and add your signature'} completed={agreementSigned} open={activeSection === 'agreement'} onOpen={() => setActiveSection('agreement')}>
             <div className="preview-agreement-summary">
               <FileSignature size={28} />
               <div><strong>{agreementSigned ? 'Agreement signed successfully' : 'Open the agreement and scroll down to sign'}</strong><p>{agreementSigned ? 'This requirement is complete. Payment is your final step.' : 'The acknowledgment, typed name, signature pad, and green sign button are below the agreement text.'}</p></div>
@@ -5449,7 +5489,7 @@ function PreviewCheckout({
             <button className="preview-primary-button" type="button" onClick={openAgreement} disabled={!documentsComplete}>{agreementSigned ? 'View signed agreement' : 'Review, scroll & sign agreement'} <ChevronRight size={18} /></button>
           </PreviewCheckoutSection>
 
-          <PreviewCheckoutSection number="5" title="Payment" summary={paymentPaid ? 'Payment complete' : `Due today ${money(total)}`} completed={paymentPaid} open={activeSection === 'payment'} onOpen={() => setActiveSection('payment')}>
+          <PreviewCheckoutSection sectionKey="payment" number="5" title="Payment" summary={paymentPaid ? 'Payment complete' : `Due today ${money(total)}`} completed={paymentPaid} open={activeSection === 'payment'} onOpen={() => setActiveSection('payment')}>
             {currentRental?.discount_code ? (
               <div className="preview-discount-applied" role="status">
                 <span><strong>{currentRental.discount_code}</strong> applied</span>
@@ -5496,9 +5536,9 @@ function PreviewCheckout({
   );
 }
 
-function PreviewCheckoutSection({ number, title, summary, completed, open, onOpen, children }) {
+function PreviewCheckoutSection({ sectionKey, number, title, summary, completed, open, onOpen, children }) {
   return (
-    <section className={`preview-checkout-section ${open ? 'open' : ''} ${completed ? 'complete' : ''}`}>
+    <section data-checkout-section={sectionKey} className={`preview-checkout-section ${open ? 'open' : ''} ${completed ? 'complete' : ''}`}>
       <button className="preview-checkout-section-header" type="button" onClick={onOpen} aria-expanded={open}>
         <span className="preview-section-number">{completed ? <CheckCircle2 size={18} /> : number}</span>
         <span><strong>{title}</strong><small>{summary}</small></span>
@@ -5568,6 +5608,16 @@ function AuthScreen({
   checkoutSecondsRemaining,
   checkoutExpired
 }) {
+  const emailCodeInputRef = useRef(null);
+
+  useEffect(() => {
+    if (!emailOtpSent) return;
+    window.requestAnimationFrame(() => {
+      emailCodeInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      emailCodeInputRef.current?.focus({ preventScroll: true });
+    });
+  }, [emailOtpSent]);
+
   if (checkoutIntent && checkoutExpired) {
     return <CheckoutExpiredScreen reservationForm={reservationForm} />;
   }
@@ -5606,6 +5656,7 @@ function AuthScreen({
             <label className="auth-field">
               <span>One-time email code</span>
               <input
+                ref={emailCodeInputRef}
                 inputMode="numeric"
                 autoComplete="one-time-code"
                 placeholder="8-digit code"
@@ -5617,7 +5668,7 @@ function AuthScreen({
           )}
         </div>
 
-        {message && <p className="auth-message" role="status">{message}</p>}
+        {message && <p className="auth-message" role="status" aria-live="polite">{message}</p>}
 
         <button className="primary-btn" type="submit" disabled={emailAuthBusy || checkoutExpired}>
           {emailAuthBusy ? 'Please wait…' : emailOtpSent ? 'Verify & Open Booking' : 'Email My Secure Sign-In'}
