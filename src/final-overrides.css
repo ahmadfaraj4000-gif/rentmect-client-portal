@@ -2246,6 +2246,24 @@ summary:focus-visible {
 .return-confirmation-warning svg { flex: 0 0 auto; }
 .return-confirmation-check { margin: 16px 0 !important; }
 
+.under25-pricing-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  margin: 0 0 16px;
+  padding: 14px;
+  border: 1px solid #d7b85d;
+  border-radius: 12px;
+  background: #fff9e8;
+  color: #4c3b0f;
+}
+
+.under25-pricing-notice > svg { flex: 0 0 auto; margin-top: 1px; }
+.under25-pricing-notice > div { display: grid; gap: 4px; min-width: 0; }
+.under25-pricing-notice strong { color: #342805; }
+.under25-pricing-notice p { margin: 0; line-height: 1.48; }
+.under25-pricing-notice span { font-weight: 750; }
+
 @media (max-width: 700px) {
   .extension-heading { display: grid !important; }
   .extension-progress { width: 100%; max-width: none; }

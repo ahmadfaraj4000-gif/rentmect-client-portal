@@ -457,90 +457,115 @@ function App() {
 
   useEffect(() => {
     if (!session?.user?.id) return undefined;
-    let refreshTimer;
-    let portalRefreshTimer;
-    let calendarPoll;
-    let portalPoll;
-    const refreshFleetCalendar = () => {
-      window.clearTimeout(refreshTimer);
-      refreshTimer = window.setTimeout(async () => {
-        const { data, error } = await supabase.rpc('get_vehicle_booking_blocks');
-        if (error) {
-          setPortalHealth((current) => ({
-            ...current,
-            errors: [
-              ...(current.errors || []).filter((item) => item.label !== 'Availability'),
-              { label: 'Availability', message: userFacingPortalError(error, 'Live vehicle availability could not refresh.') },
-            ],
-          }));
-          return;
-        }
-        if (data) setFleetRentals(data);
-        setPortalHealth((current) => ({
-          ...current,
-          errors: (current.errors || []).filter((item) => item.label !== 'Availability'),
-          lastUpdated: new Date().toISOString(),
-        }));
-      }, 150);
-    };
-    const refreshPortalExtensionData = async () => {
-      const [rentalsResult, documentsResult, messagesResult, extensionsResult] = await Promise.all([
-        supabase.from('rentals').select('*, vehicles(*)').eq('user_id', session.user.id).order('created_at', { ascending: false }),
-        supabase.from('rental_documents').select('*').eq('user_id', session.user.id).order('created_at', { ascending: false }),
-        supabase.from('rental_messages').select('*').eq('user_id', session.user.id).order('created_at', { ascending: true }),
-        supabase.from('rental_extension_requests').select('*').eq('user_id', session.user.id).order('created_at', { ascending: false }),
-      ]);
-      if (rentalsResult.data) setRentals(rentalsResult.data);
-      if (documentsResult.data) setDocuments(documentsResult.data);
-      if (messagesResult.data) setMessages(messagesResult.data);
-      if (extensionsResult.data) setExtensionRequests(extensionsResult.data);
-      const refreshError = rentalsResult.error || documentsResult.error || messagesResult.error || extensionsResult.error;
+    const refreshTimers = new Map();
+    let recoveryPoll;
+    let lastRecoveryAt = 0;
+    const updateRefreshHealth = (label, error, fallback) => {
       setPortalHealth((current) => ({
         ...current,
-        errors: refreshError
-          ? [...(current.errors || []).filter((item) => item.label !== 'Extensions'), { label: 'Extensions', message: userFacingPortalError(refreshError, 'The extension status could not refresh.') }]
-          : (current.errors || []).filter((item) => item.label !== 'Extensions'),
+        errors: error
+          ? [...(current.errors || []).filter((item) => item.label !== label), { label, message: userFacingPortalError(error, fallback) }]
+          : (current.errors || []).filter((item) => item.label !== label),
         lastUpdated: new Date().toISOString(),
       }));
     };
-    const refreshPortalExtensionState = () => {
-      window.clearTimeout(portalRefreshTimer);
-      portalRefreshTimer = window.setTimeout(() => {
-        if (document.visibilityState !== 'hidden') {
-          refreshPortalExtensionData();
-        }
-      }, 150);
+    const runRefresh = async (label, request, setter, fallback) => {
+      if (document.visibilityState === 'hidden') return;
+      const { data, error } = await request();
+      if (data) setter(data);
+      updateRefreshHealth(label, error, fallback);
     };
-    const refreshOnFocus = () => {
-      refreshFleetCalendar();
-      refreshPortalExtensionState();
+    const refreshFleetCalendar = () => runRefresh(
+      'Availability',
+      () => supabase.rpc('get_vehicle_booking_blocks'),
+      setFleetRentals,
+      'Live vehicle availability could not refresh.',
+    );
+    const refreshVehicles = () => runRefresh(
+      'Fleet',
+      () => {
+        let query = supabase.from('vehicles').select('*');
+        query = BOOKING_FLOW_TEST_ENABLED
+          ? query.or(`published.eq.true,id.eq.${BOOKING_FLOW_TEST_VEHICLE_ID}`)
+          : query.eq('published', true);
+        return query.order('created_at', { ascending: false });
+      },
+      setVehicles,
+      'The vehicle list could not refresh.',
+    );
+    const refreshRentals = () => runRefresh(
+      'Rentals',
+      () => supabase.from('rentals').select('*, vehicles(*)').eq('user_id', session.user.id).order('created_at', { ascending: false }),
+      setRentals,
+      'Your rental status could not refresh.',
+    );
+    const refreshDocuments = () => runRefresh(
+      'Documents',
+      () => supabase.from('rental_documents').select('*').eq('user_id', session.user.id).order('created_at', { ascending: false }),
+      setDocuments,
+      'Your document status could not refresh.',
+    );
+    const refreshMessages = () => runRefresh(
+      'Messages',
+      () => supabase.from('rental_messages').select('*').eq('user_id', session.user.id).order('created_at', { ascending: true }),
+      setMessages,
+      'Your messages could not refresh.',
+    );
+    const refreshExtensions = () => runRefresh(
+      'Extensions',
+      () => supabase.from('rental_extension_requests').select('*').eq('user_id', session.user.id).order('created_at', { ascending: false }),
+      setExtensionRequests,
+      'The extension status could not refresh.',
+    );
+    const scheduleRefresh = (key, refresh) => {
+      window.clearTimeout(refreshTimers.get(key));
+      refreshTimers.set(key, window.setTimeout(() => { void refresh(); }, 180));
+    };
+    const refreshRecoveryState = () => {
+      if (document.visibilityState === 'hidden' || Date.now() - lastRecoveryAt < 30_000) return;
+      lastRecoveryAt = Date.now();
+      void Promise.all([
+        refreshFleetCalendar(),
+        refreshVehicles(),
+        refreshRentals(),
+        refreshDocuments(),
+        refreshMessages(),
+        refreshExtensions(),
+      ]);
+    };
+    const refreshOnVisibility = () => {
+      if (document.visibilityState === 'visible') refreshRecoveryState();
     };
     const fleetChannel = supabase
       .channel('client-fleet-source-of-truth')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'rentals' }, refreshFleetCalendar)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'pending_bookings' }, refreshFleetCalendar)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_availability_blocks' }, refreshFleetCalendar)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, () => loadPortalData(session.user.id, { silent: true }))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rentals' }, () => scheduleRefresh('availability', refreshFleetCalendar))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'pending_bookings' }, () => scheduleRefresh('availability', refreshFleetCalendar))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_availability_blocks' }, () => scheduleRefresh('availability', refreshFleetCalendar))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, () => {
+        scheduleRefresh('vehicles', refreshVehicles);
+        scheduleRefresh('availability', refreshFleetCalendar);
+      })
       .subscribe();
-    const extensionChannel = supabase
-      .channel(`client-extension-workflow-${session.user.id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'rental_extension_requests', filter: `user_id=eq.${session.user.id}` }, refreshPortalExtensionState)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'rental_documents', filter: `user_id=eq.${session.user.id}` }, refreshPortalExtensionState)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'rental_messages', filter: `user_id=eq.${session.user.id}` }, refreshPortalExtensionState)
+    const portalChannel = supabase
+      .channel(`client-portal-state-${session.user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rentals', filter: `user_id=eq.${session.user.id}` }, () => scheduleRefresh('rentals', refreshRentals))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rental_extension_requests', filter: `user_id=eq.${session.user.id}` }, () => scheduleRefresh('extensions', refreshExtensions))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rental_documents', filter: `user_id=eq.${session.user.id}` }, () => scheduleRefresh('documents', refreshDocuments))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rental_messages', filter: `user_id=eq.${session.user.id}` }, () => scheduleRefresh('messages', refreshMessages))
       .subscribe();
-    calendarPoll = window.setInterval(refreshFleetCalendar, 15 * 1000);
-    // Realtime is the fast path; polling is the recovery path for dropped mobile
-    // connections so an approval or insurance decision appears without a reload.
-    portalPoll = window.setInterval(refreshPortalExtensionState, 15 * 1000);
-    window.addEventListener('focus', refreshOnFocus);
+    // Realtime is the fast path. A five-minute visible-page recovery pass and
+    // focus/visibility refresh heal dropped mobile connections without broad
+    // 15-second polling.
+    recoveryPoll = window.setInterval(refreshRecoveryState, 5 * 60 * 1000);
+    window.addEventListener('focus', refreshRecoveryState);
+    document.addEventListener('visibilitychange', refreshOnVisibility);
     return () => {
-      window.clearTimeout(refreshTimer);
-      window.clearTimeout(portalRefreshTimer);
-      window.clearInterval(calendarPoll);
-      window.clearInterval(portalPoll);
-      window.removeEventListener('focus', refreshOnFocus);
+      refreshTimers.forEach((timer) => window.clearTimeout(timer));
+      window.clearInterval(recoveryPoll);
+      window.removeEventListener('focus', refreshRecoveryState);
+      document.removeEventListener('visibilitychange', refreshOnVisibility);
       supabase.removeChannel(fleetChannel);
-      supabase.removeChannel(extensionChannel);
+      supabase.removeChannel(portalChannel);
     };
   }, [session?.user?.id]);
 
@@ -3535,6 +3560,7 @@ async function verifyPhoneCode(options = {}) {
             <p className="muted">
               Review the exact amount due today before payment. Your security deposit is refundable after return if there are no unpaid tolls, tickets, excess mileage, cleaning, smoking, late, or damage charges.
             </p>
+            <Under25PricingNotice rental={currentRental} estimate={estimate} />
             <div className="payment-summary-grid">
               <div className="invoice-row"><span>Rental Days</span><strong>{currentRental ? getRentalDaysSafe(currentRental.pickup_date, currentRental.return_date) : estimate ? `${estimate.days} days` : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Base Rental</span><strong>{currentRental ? money(currentRental.base_rental_total ?? currentRental.rental_total) : estimate ? money(estimate.baseRentalTotal) : 'Pending'}</strong></div>
@@ -3542,7 +3568,7 @@ async function verifyPhoneCode(options = {}) {
               {Number(currentRental?.discount_amount || 0) > 0 && <div className="invoice-row discount-row"><span>Discount ({currentRental.discount_code})</span><strong>−{money(currentRental.discount_amount)}</strong></div>}
               <div className="invoice-row"><span>Rental Total</span><strong>{currentRental ? money(currentRental.rental_total) : estimate ? money(estimate.rentalTotal) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>CT Sales Tax</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
-              <div className="invoice-row"><span>Security Deposit</span><strong>{currentRental?.discount_waives_security_deposit ? 'Waived' : currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
+              <div className="invoice-row"><span>Refundable Security Deposit{currentRental?.under_25_deposit_adjustment_type || estimate?.under25 ? ' (Age 21–24)' : ''}</span><strong>{currentRental?.discount_waives_security_deposit ? 'Waived' : currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
               <ServiceFeesSummary serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
               <div className="invoice-row total-row"><span>Total Due Today</span><strong>{currentRental ? money(Number(currentRental.rental_total || 0) + Number(currentRental.service_fee_total || 0) + Number(currentRental.tax_amount || 0) + Number(currentRental.security_deposit || 0)) : estimate && !estimate.invalid ? money(estimate.checkoutTotal + estimate.securityDeposit) : 'Pending'}</strong></div>
             </div>
@@ -4310,13 +4336,15 @@ function WizardModal({
                 Confirm the totals, refundable deposit rules, mileage, pickup address, and required items before continuing to payment.
               </p>
 
+              <Under25PricingNotice rental={currentRental} estimate={estimate} />
+
               <div className="invoice-row"><span>Rental Days</span><strong>{currentRental ? getRentalDaysSafe(currentRental.pickup_date, currentRental.return_date) : estimate ? `${estimate.days} days` : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Base Rental</span><strong>{currentRental ? money(currentRental.base_rental_total ?? currentRental.rental_total) : estimate ? money(estimate.baseRentalTotal) : 'Pending'}</strong></div>
               {Number(currentRental?.under_25_markup_amount || estimate?.markupAmount || 0) > 0 && <div className="invoice-row"><span>Under-25 Rental Markup ({Number(currentRental?.under_25_markup_percentage ?? estimate?.markupPercentage ?? 0)}%)</span><strong>{money(currentRental?.under_25_markup_amount ?? estimate?.markupAmount)}</strong></div>}
               {Number(currentRental?.discount_amount || 0) > 0 && <div className="invoice-row discount-row"><span>Discount ({currentRental.discount_code})</span><strong>−{money(currentRental.discount_amount)}</strong></div>}
               <div className="invoice-row"><span>Rental Total</span><strong>{currentRental ? money(currentRental.rental_total) : estimate ? money(estimate.rentalTotal) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Taxes</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
-              <div className="invoice-row"><span>Security Deposit</span><strong>{currentRental?.discount_waives_security_deposit ? 'Waived' : currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
+              <div className="invoice-row"><span>Refundable Security Deposit{currentRental?.under_25_deposit_adjustment_type || estimate?.under25 ? ' (Age 21–24)' : ''}</span><strong>{currentRental?.discount_waives_security_deposit ? 'Waived' : currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
               <ServiceFeesSummary serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
               <div className="invoice-row"><span>Mileage</span><strong>{MILEAGE_POLICY}</strong></div>
               <div className="invoice-row"><span>Pickup</span><strong>{RENTMECT_ADDRESS}</strong></div>
@@ -5506,6 +5534,7 @@ function PreviewCheckout({
           </PreviewCheckoutSection>
 
           <PreviewCheckoutSection sectionKey="payment" number="5" title="Payment" summary={paymentPaid ? 'Payment complete' : `Due today ${money(total)}`} completed={paymentPaid} open={activeSection === 'payment'} onOpen={() => setActiveSection('payment')}>
+            <Under25PricingNotice rental={currentRental} estimate={estimate} total={total} />
             {currentRental?.discount_code ? (
               <div className="preview-discount-applied" role="status">
                 <span><strong>{currentRental.discount_code}</strong> applied</span>
@@ -5537,7 +5566,7 @@ function PreviewCheckout({
             <div className="preview-payment-breakdown">
               <div><span>Rental</span><strong>{money(rentalTotal)}</strong></div>
               <div><span>CT sales tax</span><strong>{money(taxAmount)}</strong></div>
-              <div><span>Refundable security deposit</span><strong>{depositWaived ? 'Waived' : money(securityDeposit)}</strong></div>
+              <div><span>Refundable security deposit{currentRental?.under_25_deposit_adjustment_type || estimate?.under25 ? ' (Age 21–24)' : ''}</span><strong>{depositWaived ? 'Waived' : money(securityDeposit)}</strong></div>
               <ServiceFeesSummary serviceFees={serviceFees} total={serviceFeeTotal} />
               <div className="preview-payment-total"><span>Total due today</span><strong>{money(total)}</strong></div>
             </div>
@@ -5546,7 +5575,7 @@ function PreviewCheckout({
           </PreviewCheckoutSection>
         </section>
 
-        <PreviewTripSummary reservationForm={reservationForm} rentalTotal={rentalTotal} serviceFeeTotal={serviceFeeTotal} taxAmount={taxAmount} securityDeposit={securityDeposit} depositWaived={depositWaived} total={total} secondsRemaining={checkoutSecondsRemaining} expired={checkoutExpired} vehicle={vehicle} />
+        <PreviewTripSummary reservationForm={reservationForm} rentalTotal={rentalTotal} serviceFeeTotal={serviceFeeTotal} taxAmount={taxAmount} securityDeposit={securityDeposit} depositWaived={depositWaived} total={total} secondsRemaining={checkoutSecondsRemaining} expired={checkoutExpired} vehicle={vehicle} under25={Boolean(currentRental?.under_25_deposit_adjustment_type || estimate?.under25)} />
       </main>
     </div>
   );
@@ -5577,7 +5606,32 @@ function PreviewUploadCard({ title, text, complete, busy = false, onUpload }) {
   );
 }
 
-function PreviewTripSummary({ reservationForm, rentalTotal, serviceFeeTotal = 0, taxAmount, securityDeposit, depositWaived = false, total, secondsRemaining, expired, vehicle }) {
+function Under25PricingNotice({ rental, estimate, total }) {
+  const markupAmount = Number(rental?.under_25_markup_amount ?? estimate?.markupAmount ?? 0);
+  const markupPercentage = Number(rental?.under_25_markup_percentage ?? estimate?.markupPercentage ?? 0);
+  const baseDeposit = Number(rental?.base_security_deposit ?? estimate?.baseSecurityDeposit ?? rental?.security_deposit ?? estimate?.securityDeposit ?? 0);
+  const adjustedDeposit = Number(rental?.security_deposit ?? estimate?.securityDeposit ?? 0);
+  const applies = Boolean(rental?.under_25_deposit_adjustment_type || estimate?.under25 || markupAmount > 0);
+  if (!applies) return null;
+  const dueToday = Number(total ?? (
+    Number(rental?.rental_total ?? estimate?.rentalTotal ?? 0) +
+    Number(rental?.service_fee_total ?? estimate?.serviceFeeTotal ?? 0) +
+    Number(rental?.tax_amount ?? estimate?.taxAmount ?? 0) +
+    adjustedDeposit
+  ));
+  return (
+    <div className="under25-pricing-notice" role="status" aria-live="polite">
+      <ShieldCheck size={21} />
+      <div>
+        <strong>Age 21–24 pricing applied</strong>
+        <p>Your saved date of birth shows the driver is under 25. The rental adjustment is {money(markupAmount)}{markupPercentage > 0 ? ` (${markupPercentage}%)` : ''}, and the refundable security deposit is {money(adjustedDeposit)}{baseDeposit !== adjustedDeposit ? ` instead of ${money(baseDeposit)}` : ''}.</p>
+        <span>Your updated total due today is {money(dueToday)}.</span>
+      </div>
+    </div>
+  );
+}
+
+function PreviewTripSummary({ reservationForm, rentalTotal, serviceFeeTotal = 0, taxAmount, securityDeposit, depositWaived = false, total, secondsRemaining, expired, vehicle, under25 = false }) {
   const displayVehicle = vehicle || { name: 'Booking Flow Test Vehicle', id: BOOKING_FLOW_TEST_VEHICLE_ID };
   const features = getVehicleFeatures(displayVehicle);
   return (
@@ -5599,7 +5653,7 @@ function PreviewTripSummary({ reservationForm, rentalTotal, serviceFeeTotal = 0,
         <div><span>Rental</span><strong>{money(rentalTotal)}</strong></div>
         {Number(serviceFeeTotal) > 0 && <div><span>Booking fees</span><strong>{money(serviceFeeTotal)}</strong></div>}
         <div><span>Estimated tax</span><strong>{money(taxAmount)}</strong></div>
-        <div><span>Refundable deposit</span><strong>{depositWaived ? 'Waived' : money(securityDeposit)}</strong></div>
+        <div><span>Refundable deposit{under25 ? ' (Age 21–24)' : ''}</span><strong>{depositWaived ? 'Waived' : money(securityDeposit)}</strong></div>
         <div className="preview-total-row"><span>Due today</span><strong>{money(total)}</strong></div>
       </div>
       <p><ShieldCheck size={15} /> Secure checkout • Your progress is saved</p>
@@ -6333,7 +6387,7 @@ function splitLegalName(value) {
 }
 function isCustomerUnder25(dateOfBirth) {
   const age = customerAge(dateOfBirth);
-  return age !== null && age < 25;
+  return age !== null && age >= 21 && age < 25;
 }
 
 function getNextDateInputValue(value) {
