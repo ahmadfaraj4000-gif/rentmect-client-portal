@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, CalendarDays, Car, CheckCircle2, ChevronRight, Search, ShieldCheck } from 'lucide-react';
 import { supabase } from './supabaseClient';
+import { withRequestDeadline } from './requestDeadline';
 import logoMobileUrl from './assets/logo-mobile.png';
 import FLEET_GALLERY_IMAGES from './fleetGalleryImages';
 import './booking-preview-fleet.css';
@@ -130,13 +131,17 @@ export default function BookingPreviewFleet() {
   useEffect(() => {
     let active = true;
     async function loadVehicles() {
-      const { data: policyRows } = await supabase.rpc('get_public_booking_policy');
-      if (active && policyRows?.[0]) setPolicy(policyRows[0]);
       let query = supabase.from('vehicles').select('*');
       query = TEST_VEHICLE_ENABLED
         ? query.or(`published.eq.true,id.eq.${TEST_VEHICLE_ID}`)
         : query.eq('published', true);
-      const { data, error: loadError } = await query.order('daily_rate', { ascending: true });
+      const [policyResult, vehicleResult] = await Promise.all([
+        withRequestDeadline(supabase.rpc('get_public_booking_policy'), 'Booking rules'),
+        withRequestDeadline(query.order('daily_rate', { ascending: true }), 'Fleet'),
+      ]);
+      const { data: policyRows } = policyResult;
+      if (active && policyRows?.[0]) setPolicy(policyRows[0]);
+      const { data, error: loadError } = vehicleResult;
       if (!active) return;
       if (loadError) setError(previewError(loadError, 'The fleet could not load. Refresh the page to try again.'));
       else setVehicles(data || []);
@@ -155,13 +160,13 @@ export default function BookingPreviewFleet() {
     let active = true;
     setChecking(true);
     const timer = window.setTimeout(async () => {
-      const { data: bookingQuote, error: quoteError } = await supabase.rpc('get_booking_quote', {
+      const { data: bookingQuote, error: quoteError } = await withRequestDeadline(supabase.rpc('get_booking_quote', {
         p_vehicle_id: null,
         p_pickup_date: trip.pickupDate,
         p_pickup_time: trip.pickupTime,
         p_return_date: trip.returnDate,
         p_return_time: trip.returnTime,
-      });
+      }), 'Booking quote');
       if (!active) return;
       setQuote(bookingQuote || null);
       if (quoteError || !bookingQuote?.valid) {
@@ -170,12 +175,12 @@ export default function BookingPreviewFleet() {
         setChecking(false);
         return;
       }
-      const { data, error: availabilityError } = await supabase.rpc('get_admin_calendar_fleet_availability', {
+      const { data, error: availabilityError } = await withRequestDeadline(supabase.rpc('get_admin_calendar_fleet_availability', {
         p_pickup_date: trip.pickupDate,
         p_pickup_time: trip.pickupTime,
         p_return_date: trip.returnDate,
         p_return_time: trip.returnTime,
-      });
+      }), 'Availability');
       if (!active) return;
       if (availabilityError) {
         setError(previewError(availabilityError, 'Live availability could not be verified. Please try again.'));
@@ -227,26 +232,26 @@ export default function BookingPreviewFleet() {
     if (!selectedVehicle || selectedAvailability?.available !== true) return;
     setStarting(true);
     setError('');
-    const { data: finalQuote, error: finalQuoteError } = await supabase.rpc('get_booking_quote', {
+    const { data: finalQuote, error: finalQuoteError } = await withRequestDeadline(supabase.rpc('get_booking_quote', {
       p_vehicle_id: selectedVehicle.id,
       p_pickup_date: trip.pickupDate,
       p_pickup_time: trip.pickupTime,
       p_return_date: trip.returnDate,
       p_return_time: trip.returnTime,
-    });
+    }), 'Booking quote');
     if (finalQuoteError || !finalQuote?.valid) {
       setError(previewError(finalQuoteError, finalQuote?.error || 'These pickup and return times are not allowed.'));
       setStarting(false);
       return;
     }
-    const { data: bookingId, error: bookingError } = await supabase.rpc('create_website_pending_booking', {
+    const { data: bookingId, error: bookingError } = await withRequestDeadline(supabase.rpc('create_website_pending_booking', {
       p_pickup_date: trip.pickupDate,
       p_return_date: trip.returnDate,
       p_pickup_time: trip.pickupTime,
       p_return_time: trip.returnTime,
       p_vehicle_id: selectedVehicle.id,
       p_selected_vehicle_name: selectedVehicle.name,
-    });
+    }), 'Checkout');
     if (bookingError || !bookingId) {
       setError(previewError(bookingError, 'The checkout session could not be created. Please retry.'));
       setStarting(false);
@@ -276,8 +281,8 @@ export default function BookingPreviewFleet() {
       <PreviewHeader onBack={() => setSelectedId('')} label="Back to all vehicles" />
       <main className="supabase-preview-detail">
         <section className="supabase-preview-gallery">
-          <img className="featured" src={images[0]} alt={selectedVehicle.name} onError={(event) => { event.currentTarget.src = FALLBACK_IMAGE; }} />
-          <div>{images.slice(1, 5).map((image, index) => <img key={`${image}-${index}`} src={image} alt={`${selectedVehicle.name} view ${index + 2}`} onError={(event) => { event.currentTarget.hidden = true; }} />)}</div>
+          <img className="featured" src={images[0]} alt={selectedVehicle.name} loading="eager" fetchPriority="high" decoding="async" onError={(event) => { event.currentTarget.src = FALLBACK_IMAGE; }} />
+          <div>{images.slice(1, 5).map((image, index) => <img key={`${image}-${index}`} src={image} alt={`${selectedVehicle.name} view ${index + 2}`} loading="lazy" decoding="async" onError={(event) => { event.currentTarget.hidden = true; }} />)}</div>
           {TEST_VEHICLE_ENABLED && selectedVehicle.id === TEST_VEHICLE_ID && <span>Internal test vehicle</span>}
         </section>
         <div className="supabase-preview-detail-grid">
@@ -320,7 +325,7 @@ export default function BookingPreviewFleet() {
           const result = availability.get(vehicle.id);
           const available = result?.available === true;
           return <article className="supabase-preview-vehicle-card" key={vehicle.id}>
-            <div className="image"><img src={vehicleImages(vehicle)[0]} alt={vehicle.name} onError={(event) => { event.currentTarget.src = FALLBACK_IMAGE; }}/>{TEST_VEHICLE_ENABLED && vehicle.id === TEST_VEHICLE_ID && <em>Test lane</em>}</div>
+            <div className="image"><img src={vehicleImages(vehicle)[0]} alt={vehicle.name} loading="lazy" decoding="async" onError={(event) => { event.currentTarget.src = FALLBACK_IMAGE; }}/>{TEST_VEHICLE_ENABLED && vehicle.id === TEST_VEHICLE_ID && <em>Test lane</em>}</div>
             <div className="body"><span className={`status ${available ? 'available' : 'unavailable'}`}>{checking ? 'Checking…' : available ? 'Available' : result?.reason || 'Unavailable'}</span><h2>{vehicle.name}</h2><p>{[vehicle.vehicle_type, vehicle.brand, vehicle.model].filter(Boolean).join(' • ')}</p><ul><li>200 miles per day included</li><li>{money(vehicle.security_deposit || 300)} refundable deposit</li><li>Three-hour turnaround protected</li></ul><div className="price"><strong>{money(vehicle.daily_rate)}</strong><span>/ day</span></div><button type="button" disabled={checking || !available} onClick={() => setSelectedId(vehicle.id)}>{checking ? 'Checking dates…' : available ? 'View & book' : 'Unavailable'}{available && !checking ? <ChevronRight size={17}/> : null}</button></div>
           </article>;
         })}

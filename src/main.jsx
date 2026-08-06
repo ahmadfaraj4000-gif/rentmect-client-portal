@@ -24,6 +24,7 @@ import {
   X,
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
+import { withRequestDeadline } from './requestDeadline';
 import BookingPreviewFleet from './BookingPreviewFleet';
 import BirthdayInput from './BirthdayInput';
 import FLEET_GALLERY_IMAGES from './fleetGalleryImages';
@@ -218,6 +219,8 @@ function App() {
   const paymentReturnHandledRef = useRef(false);
   const stripeReturnHandledRef = useRef(false);
   const extensionDateSourceRef = useRef('');
+  const portalSectionLoadsRef = useRef(new Map());
+  const loadedPortalSectionsRef = useRef(new Set());
 
   const [profileForm, setProfileForm] = useState({
     first_name: '',
@@ -409,7 +412,16 @@ function App() {
         request.status === 'approved_pending_payment' && request.payment_status === 'pending'
       );
       if (!stripeCheckoutSessionId) {
-        await loadPortalData(session.user.id, { silent: true, stripeReturnRetry: true });
+        const returnUrl = new URL(window.location.href);
+        const chargeId = returnUrl.searchParams.get('charge') || '';
+        const extensionId = returnUrl.searchParams.get('extension') || extensionRequests.find((request) =>
+          request.status === 'approved_pending_payment' && request.payment_status === 'pending'
+        )?.id || '';
+        await reconcilePaymentTarget(
+          chargeId ? 'charge' : extensionId ? 'extension' : 'rental',
+          chargeId || extensionId,
+          session.user.id,
+        );
         clearStripeReturnParams();
         notify('Stripe returned successfully. Payment confirmation is refreshing; do not submit another payment.');
         return;
@@ -434,7 +446,7 @@ function App() {
           return;
         }
 
-        await loadPortalData(session.user.id, { silent: true, stripeReturnRetry: true });
+        await reconcilePaymentTarget(data?.targetType, data?.targetId, session.user.id);
         setCheckoutExpiresAt(null);
         setCheckoutIntent(false);
         const extensionPaymentConfirmed = data?.targetType === 'extension' || confirmingExtensionPayment;
@@ -592,6 +604,18 @@ function App() {
       setSignatureName(profile.full_name);
     }
   }, [profile, signatureName]);
+
+  useEffect(() => {
+    if (!session?.user?.id || !portalDataReady) return;
+    if (activeTab === 'messages') void loadPortalSection('messages', session.user.id);
+    if (activeTab === 'records' || activeTab === 'history') void loadPortalSection('reports', session.user.id);
+    if (activeTab === 'payment') {
+      void loadPortalSection('billing', session.user.id);
+      void loadPortalSection('charges', session.user.id);
+    }
+    if (checkoutIntent) void loadPortalSection('billing', session.user.id);
+    if (activeTab === 'guided' || tripManagerOpen || checkoutIntent) void loadPortalSection('inventory', session.user.id);
+  }, [activeTab, checkoutIntent, tripManagerOpen, portalDataReady, session?.user?.id]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60 * 1000);
@@ -1015,9 +1039,11 @@ function App() {
       }
       paymentReturnPendingRef.current = { type: 'extension', id: extensionPaymentReturnId };
       notify('Stripe returned successfully. Confirming your extension payment now…');
-      const refreshOne = window.setTimeout(() => loadPortalData(session.user.id, { silent: true }), 1200);
-      const refreshTwo = window.setTimeout(() => loadPortalData(session.user.id, { silent: true }), 3500);
-      const refreshThree = window.setTimeout(() => loadPortalData(session.user.id, { silent: true }), 6500);
+      const refreshExtension = () => reconcilePaymentTarget('extension', extensionPaymentReturnId, session.user.id);
+      void refreshExtension();
+      const refreshOne = window.setTimeout(refreshExtension, 1200);
+      const refreshTwo = window.setTimeout(refreshExtension, 3500);
+      const refreshThree = window.setTimeout(refreshExtension, 6500);
       return () => {
         window.clearTimeout(refreshOne);
         window.clearTimeout(refreshTwo);
@@ -1037,13 +1063,15 @@ function App() {
     }
     notify('Stripe returned successfully. Confirming your payment now…');
 
-    const refreshOne = window.setTimeout(() => loadPortalData(session.user.id, { silent: true }), 1200);
-    const refreshTwo = window.setTimeout(() => loadPortalData(session.user.id, { silent: true }), 3500);
+    const refreshRental = () => reconcilePaymentTarget('rental', currentRental?.id || '', session.user.id);
+    void refreshRental();
+    const refreshOne = window.setTimeout(refreshRental, 1200);
+    const refreshTwo = window.setTimeout(refreshRental, 3500);
     return () => {
       window.clearTimeout(refreshOne);
       window.clearTimeout(refreshTwo);
     };
-  }, [portalDataReady, session?.user?.id, bookingPreviewCheckoutMode]);
+  }, [portalDataReady, session?.user?.id, bookingPreviewCheckoutMode, currentRental?.id]);
 
   useEffect(() => {
     const pendingReturn = paymentReturnPendingRef.current;
@@ -1294,144 +1322,173 @@ function loadSavedBookingFromWebsite() {
     }
   }
 
-  async function loadPortalData(userId, { silent = false, stripeReturnRetry = false } = {}) {
+  function recordPortalResults(results) {
+    const attemptedLabels = new Set(results.map(([label]) => label));
+    const nextErrors = results
+      .filter(([, result]) => Boolean(result?.error))
+      .map(([label, result]) => ({
+        label,
+        message: userFacingPortalError(result.error, `${label} could not refresh.`),
+      }));
+    setPortalHealth((current) => ({
+      refreshing: false,
+      errors: [
+        ...(current.errors || []).filter((item) => !attemptedLabels.has(item.label)),
+        ...nextErrors,
+      ],
+      lastUpdated: new Date().toISOString(),
+    }));
+    return nextErrors;
+  }
+
+  function applyCustomerProfile(nextProfile) {
+    if (!nextProfile) return;
+    const legalName = splitLegalName(nextProfile.full_name);
+    setProfile(nextProfile);
+    setProfileForm({
+      first_name: legalName.firstName,
+      last_name: legalName.lastName,
+      full_name: nextProfile.full_name || '',
+      date_of_birth: nextProfile.date_of_birth || '',
+      phone: nextProfile.phone || '',
+      intended_vehicle_use: nextProfile.intended_vehicle_use || '',
+      email_marketing_opt_in: Boolean(nextProfile.email_marketing_opt_in && !nextProfile.email_marketing_unsubscribed_at),
+      sms_transactional_opt_in: Boolean(nextProfile.sms_transactional_opt_in && !nextProfile.sms_transactional_opted_out_at),
+    });
+    setConfirmedBirthDate(nextProfile.date_of_birth || '');
+    setPhoneVerified(Boolean(nextProfile.phone_verified));
+  }
+
+  async function loadPortalSection(section, userId, { force = false } = {}) {
+    if (!userId) return;
+    if (!force && loadedPortalSectionsRef.current.has(section)) return;
+    if (portalSectionLoadsRef.current.has(section)) return portalSectionLoadsRef.current.get(section);
+    setPortalHealth((current) => ({ ...current, refreshing: true }));
+
+    const request = (async () => {
+      let results = [];
+      if (section === 'inventory') {
+        let vehiclesQuery = supabase.from('vehicles').select('*');
+        vehiclesQuery = BOOKING_FLOW_TEST_ENABLED
+          ? vehiclesQuery.or(`published.eq.true,id.eq.${BOOKING_FLOW_TEST_VEHICLE_ID}`)
+          : vehiclesQuery.eq('published', true);
+        const [vehiclesResult, fleetRentalsResult] = await Promise.all([
+          withRequestDeadline(vehiclesQuery.order('created_at', { ascending: false }), 'Fleet'),
+          withRequestDeadline(supabase.rpc('get_vehicle_booking_blocks'), 'Availability'),
+        ]);
+        if (vehiclesResult.data) setVehicles(vehiclesResult.data);
+        if (fleetRentalsResult.data) setFleetRentals(fleetRentalsResult.data);
+        results = [['Fleet', vehiclesResult], ['Availability', fleetRentalsResult]];
+      } else if (section === 'billing') {
+        const [serviceFeesResult, under25PricingResult, bookingPolicyResult] = await Promise.all([
+          withRequestDeadline(supabase.from('service_fees').select('*').eq('active', true).order('created_at', { ascending: false }), 'Fees'),
+          withRequestDeadline(supabase.from('under_25_pricing_settings').select('*').eq('id', true).maybeSingle(), 'Age-based pricing'),
+          withRequestDeadline(supabase.rpc('get_public_booking_policy'), 'Booking rules'),
+        ]);
+        if (serviceFeesResult.data) setServiceFees(serviceFeesResult.data);
+        if (under25PricingResult.data) setUnder25Pricing(under25PricingResult.data);
+        if (bookingPolicyResult.data?.[0]) setBookingPolicy(bookingPolicyResult.data[0]);
+        results = [['Fees', serviceFeesResult], ['Age-based pricing', under25PricingResult], ['Booking rules', bookingPolicyResult]];
+      } else if (section === 'charges') {
+        const result = await withRequestDeadline(supabase.from('rental_charge_items').select('*').eq('user_id', userId).order('created_at', { ascending: false }), 'Additional charges');
+        if (result.data) setRentalCharges(result.data);
+        results = [['Additional charges', result]];
+      } else if (section === 'messages') {
+        const result = await withRequestDeadline(supabase.from('rental_messages').select('*').eq('user_id', userId).order('created_at', { ascending: true }), 'Messages');
+        if (result.data) setMessages(result.data);
+        results = [['Messages', result]];
+      } else if (section === 'documents') {
+        const result = await withRequestDeadline(supabase.from('rental_documents').select('*').eq('user_id', userId).order('created_at', { ascending: false }), 'Documents');
+        if (result.data) setDocuments(result.data);
+        results = [['Documents', result]];
+      } else if (section === 'extensions') {
+        const result = await withRequestDeadline(supabase.from('rental_extension_requests').select('*').eq('user_id', userId).order('created_at', { ascending: false }), 'Extensions');
+        if (result.data) setExtensionRequests(result.data);
+        results = [['Extensions', result]];
+      } else if (section === 'reports') {
+        const result = await withRequestDeadline(supabase.from('vehicle_reports').select('*, rentals(*, vehicles(*))').eq('user_id', userId).order('created_at', { ascending: false }), 'Reports');
+        if (result.data) setReports(result.data);
+        results = [['Reports', result]];
+      } else if (section === 'exceptions') {
+        const result = await withRequestDeadline(supabase.rpc('get_my_rental_emergency_exceptions'), 'Rental exceptions');
+        if (result.data) setEmergencyExceptions(result.data);
+        results = [['Rental exceptions', result]];
+      }
+      const errors = recordPortalResults(results);
+      if (!errors.length) loadedPortalSectionsRef.current.add(section);
+    })().finally(() => portalSectionLoadsRef.current.delete(section));
+
+    portalSectionLoadsRef.current.set(section, request);
+    return request;
+  }
+
+  async function loadPortalData(userId, { silent = false } = {}) {
     if (!silent) setLoading(true);
     setPortalHealth((current) => ({ ...current, refreshing: true }));
-    let vehiclesQuery = supabase.from('vehicles').select('*');
-    vehiclesQuery = BOOKING_FLOW_TEST_ENABLED
-      ? vehiclesQuery.or(`published.eq.true,id.eq.${BOOKING_FLOW_TEST_VEHICLE_ID}`)
-      : vehiclesQuery.eq('published', true);
-    vehiclesQuery = vehiclesQuery.order('created_at', { ascending: false });
-
-    const [
-      profileResult,
-      vehiclesResult,
-      rentalsResult,
-      documentsResult,
-      messagesResult,
-      reportsResult,
-      extensionsResult,
-      emergencyExceptionsResult,
-      fleetRentalsResult,
-      serviceFeesResult,
-      under25PricingResult,
-      bookingPolicyResult,
-      rentalChargesResult,
-    ] = await Promise.all([
-      supabase.from('profiles').select('*').eq('id', userId).single(),
-      vehiclesQuery,
-      supabase
-        .from('rentals')
-        .select('*, vehicles(*)')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('rental_documents')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('rental_messages')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: true }),
-      supabase
-        .from('vehicle_reports')
-        .select('*, rentals(*, vehicles(*))')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('rental_extension_requests')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false }),
-      supabase.rpc('get_my_rental_emergency_exceptions'),
-      supabase.rpc('get_vehicle_booking_blocks'),
-      supabase
-        .from('service_fees')
-        .select('*')
-        .eq('active', true)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('under_25_pricing_settings')
-        .select('*')
-        .eq('id', true)
-        .maybeSingle(),
-      supabase.rpc('get_public_booking_policy'),
-      supabase
-        .from('rental_charge_items')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false }),
+    const [profileResult, rentalsResult, documentsResult, extensionsResult] = await Promise.all([
+      withRequestDeadline(supabase.from('profiles').select('*').eq('id', userId).single(), 'Profile'),
+      withRequestDeadline(supabase.from('rentals').select('*, vehicles(*)').eq('user_id', userId).order('created_at', { ascending: false }), 'Rentals'),
+      withRequestDeadline(supabase.from('rental_documents').select('*').eq('user_id', userId).order('created_at', { ascending: false }), 'Documents'),
+      withRequestDeadline(supabase.from('rental_extension_requests').select('*').eq('user_id', userId).order('created_at', { ascending: false }), 'Extensions'),
     ]);
 
-    const dataErrors = [
-      ['Profile', profileResult.error],
-      ['Fleet', vehiclesResult.error],
-      ['Rentals', rentalsResult.error],
-      ['Documents', documentsResult.error],
-      ['Messages', messagesResult.error],
-      ['Reports', reportsResult.error],
-      ['Extensions', extensionsResult.error],
-      ['Rental exceptions', emergencyExceptionsResult.error],
-      ['Availability', fleetRentalsResult.error],
-      ['Fees', serviceFeesResult.error],
-      ['Age-based pricing', under25PricingResult.error],
-      ['Booking rules', bookingPolicyResult.error],
-      ['Additional charges', rentalChargesResult.error],
-    ].filter(([, error]) => Boolean(error)).map(([label, error]) => ({
-      label,
-      message: userFacingPortalError(error, `${label} could not refresh.`),
-    }));
-    const transientErrors = stripeReturnRetry
-      ? dataErrors.filter((item) => isTransientPortalError(item.message))
-      : [];
-    const visibleDataErrors = stripeReturnRetry
-      ? dataErrors.filter((item) => !isTransientPortalError(item.message))
-      : dataErrors;
-
-    if (profileResult.data) {
-      const legalName = splitLegalName(profileResult.data.full_name);
-      setProfile(profileResult.data);
-      setProfileForm({
-        first_name: legalName.firstName,
-        last_name: legalName.lastName,
-        full_name: profileResult.data.full_name || '',
-        date_of_birth: profileResult.data.date_of_birth || '',
-        phone: profileResult.data.phone || '',
-        intended_vehicle_use: profileResult.data.intended_vehicle_use || '',
-        email_marketing_opt_in: Boolean(profileResult.data.email_marketing_opt_in && !profileResult.data.email_marketing_unsubscribed_at),
-        sms_transactional_opt_in: Boolean(profileResult.data.sms_transactional_opt_in && !profileResult.data.sms_transactional_opted_out_at),
-      });
-      setConfirmedBirthDate(profileResult.data.date_of_birth || '');
-      setPhoneVerified(Boolean(profileResult.data.phone_verified));
-    }
-
-    if (vehiclesResult.data) setVehicles(vehiclesResult.data);
+    applyCustomerProfile(profileResult.data);
     if (rentalsResult.data) setRentals(rentalsResult.data);
     if (documentsResult.data) setDocuments(documentsResult.data);
-    if (messagesResult.data) setMessages(messagesResult.data);
-    if (reportsResult.data) setReports(reportsResult.data);
     if (extensionsResult.data) setExtensionRequests(extensionsResult.data);
-    if (emergencyExceptionsResult.data) setEmergencyExceptions(emergencyExceptionsResult.data);
-    if (fleetRentalsResult.data) setFleetRentals(fleetRentalsResult.data);
-    if (serviceFeesResult.data) setServiceFees(serviceFeesResult.data);
-    if (under25PricingResult.data) setUnder25Pricing(under25PricingResult.data);
-    if (bookingPolicyResult.data?.[0]) setBookingPolicy(bookingPolicyResult.data[0]);
-    if (rentalChargesResult.data) setRentalCharges(rentalChargesResult.data);
-
-    setPortalHealth({
-      refreshing: false,
-      errors: visibleDataErrors,
-      lastUpdated: new Date().toISOString(),
-    });
+    recordPortalResults([
+      ['Profile', profileResult],
+      ['Rentals', rentalsResult],
+      ['Documents', documentsResult],
+      ['Extensions', extensionsResult],
+    ]);
     setPortalDataReady(true);
     if (!silent) setLoading(false);
-    if (transientErrors.length) {
-      window.setTimeout(() => {
-        loadPortalData(userId, { silent: true });
-      }, 900);
+
+    const secondarySections = checkoutIntent ? ['billing', 'inventory', 'exceptions'] : ['billing', 'exceptions'];
+    const loadSecondary = () => secondarySections.forEach((section) => {
+      void loadPortalSection(section, userId);
+    });
+    if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(loadSecondary, { timeout: 700 });
+    else window.setTimeout(loadSecondary, 0);
+  }
+
+  async function reconcilePaymentTarget(targetType, targetId, userId) {
+    if (targetType === 'extension' && targetId) {
+      const extensionResult = await withRequestDeadline(
+        supabase.from('rental_extension_requests').select('*').eq('id', targetId).eq('user_id', userId).single(),
+        'Extensions',
+      );
+      if (extensionResult.data) {
+        setExtensionRequests((current) => [extensionResult.data, ...current.filter((item) => item.id !== extensionResult.data.id)]);
+      }
+      const rentalResult = extensionResult.data?.rental_id
+        ? await withRequestDeadline(supabase.from('rentals').select('*, vehicles(*)').eq('id', extensionResult.data.rental_id).eq('user_id', userId).single(), 'Rentals')
+        : { data: null, error: null };
+      if (rentalResult.data) setRentals((current) => [rentalResult.data, ...current.filter((item) => item.id !== rentalResult.data.id)]);
+      recordPortalResults([['Extensions', extensionResult], ['Rentals', rentalResult]]);
+      return;
     }
+    if (targetType === 'charge' && targetId) {
+      const chargeResult = await withRequestDeadline(
+        supabase.from('rental_charge_items').select('*').eq('id', targetId).eq('user_id', userId).single(),
+        'Additional charges',
+      );
+      if (chargeResult.data) setRentalCharges((current) => [chargeResult.data, ...current.filter((item) => item.id !== chargeResult.data.id)]);
+      recordPortalResults([['Additional charges', chargeResult]]);
+      return;
+    }
+    const rentalResult = await withRequestDeadline(
+      targetId
+        ? supabase.from('rentals').select('*, vehicles(*)').eq('id', targetId).eq('user_id', userId).single()
+        : supabase.from('rentals').select('*, vehicles(*)').eq('user_id', userId).order('created_at', { ascending: false }),
+      'Rentals',
+    );
+    if (rentalResult.data) {
+      if (Array.isArray(rentalResult.data)) setRentals(rentalResult.data);
+      else setRentals((current) => [rentalResult.data, ...current.filter((item) => item.id !== rentalResult.data.id)]);
+    }
+    recordPortalResults([['Rentals', rentalResult]]);
   }
 
   async function handleAuth(event) {
@@ -2888,6 +2945,25 @@ async function verifyPhoneCode(options = {}) {
     if (isMobileClientNav) setNavCollapsed(true);
   }
 
+  function retryPortalSection(label) {
+    const sectionByLabel = {
+      Fleet: 'inventory',
+      Availability: 'inventory',
+      Fees: 'billing',
+      'Age-based pricing': 'billing',
+      'Booking rules': 'billing',
+      'Additional charges': 'charges',
+      Messages: 'messages',
+      Reports: 'reports',
+      'Rental exceptions': 'exceptions',
+      Documents: 'documents',
+      Extensions: 'extensions',
+    };
+    const section = sectionByLabel[label];
+    if (section) return loadPortalSection(section, session.user.id, { force: true });
+    return loadPortalData(session.user.id, { silent: true });
+  }
+
   if (bookingPreviewFleetMode) return <BookingPreviewFleet />;
 
   if (loading) return <LoadingScreen stripeReturn={returningFromStripeIdentity || returningFromStripePayment} />;
@@ -3127,7 +3203,7 @@ async function verifyPhoneCode(options = {}) {
           </div>
         </header>
 
-        <PortalDataHealth health={portalHealth} onRetry={() => loadPortalData(session.user.id, { silent: true })} />
+        <PortalDataHealth health={portalHealth} onRetry={retryPortalSection} />
 
         {checkoutHoldActive && (
           <CheckoutHoldTimer
@@ -4815,9 +4891,9 @@ function PortalDataHealth({ health, onRetry }) {
     <div>
       <strong>Some information could not refresh</strong>
       <span>{health.errors.map((item) => item.label).join(', ')} may be incomplete. Your existing information has not been changed.</span>
-      <details><summary>View details</summary><ul>{health.errors.map((item) => <li key={item.label}><strong>{item.label}:</strong> {item.message}</li>)}</ul></details>
+      <details><summary>View details</summary><ul>{health.errors.map((item) => <li key={item.label}><strong>{item.label}:</strong> {item.message} <button type="button" onClick={() => onRetry(item.label)} disabled={health.refreshing}>Retry section</button></li>)}</ul></details>
     </div>
-    <button type="button" className="secondary-btn" onClick={onRetry} disabled={health.refreshing}>{health.refreshing ? 'Retrying…' : 'Try again'}</button>
+    <button type="button" className="secondary-btn" onClick={() => health.errors.forEach((item) => onRetry(item.label))} disabled={health.refreshing}>{health.refreshing ? 'Retrying…' : 'Retry failed sections'}</button>
   </section>;
 }
 
