@@ -4229,14 +4229,14 @@ function WizardModal({
                   : bookingWindowState.error}</span>
               </div>
 
-              {inventoryStatus === 'loading' && checkoutVehicleChoices.length === 0 && (
+              {(inventoryStatus === 'loading' || inventoryStatus === 'idle') && (
                 <div className="vehicle-picker-status" role="status">
                   <span className="loading-spinner" aria-hidden="true" />
                   <strong>Loading available vehicles…</strong>
                 </div>
               )}
 
-              {inventoryStatus === 'error' && checkoutVehicleChoices.length === 0 && (
+              {inventoryStatus === 'error' && (
                 <div className="vehicle-picker-status error" role="alert">
                   <strong>Vehicles could not load.</strong>
                   <span>Try again without closing your reservation.</span>
@@ -4251,7 +4251,7 @@ function WizardModal({
                 </div>
               )}
 
-              {checkoutVehicleChoices.length > 0 && <div className="vehicle-picker-grid">
+              {inventoryStatus === 'ready' && checkoutVehicleChoices.length > 0 && <div className="vehicle-picker-grid">
                 {checkoutVehicleChoices.map((vehicle) => {
                   const selected = reservationForm.vehicleId === vehicle.id;
                   const bookable = bookingWindowState.valid && isVehicleAvailableForDates(vehicle, reservationForm, fleetRentals, currentRental?.id);
