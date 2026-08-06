@@ -28,6 +28,13 @@ import BookingPreviewFleet from './BookingPreviewFleet';
 import BirthdayInput from './BirthdayInput';
 import FLEET_GALLERY_IMAGES from './fleetGalleryImages';
 import { AGREEMENT_TEXT, AGREEMENT_VERSION } from './rentalAgreement';
+import {
+  formatRentMeCtDateTime,
+  getExtensionRequestWindow,
+  getExtensionWorkflowStage,
+  getReturnCountdown,
+  validateExtensionReturn,
+} from './extensionWorkflow';
 import logoUrl from './assets/logo-sidebar.png';
 import logoMobileUrl from './assets/logo-mobile.png';
 import './styles.css';
@@ -139,7 +146,9 @@ function App() {
   const [extensionSaving, setExtensionSaving] = useState(false);
   const [extensionPreview, setExtensionPreview] = useState(null);
   const [extensionMode, setExtensionMode] = useState('extend');
+  const [selectedExtensionVehicleId, setSelectedExtensionVehicleId] = useState('');
   const [tripChangeChoice, setTripChangeChoice] = useState('');
+  const [returnConfirmationOpen, setReturnConfirmationOpen] = useState(false);
   const [portalDataReady, setPortalDataReady] = useState(false);
   const [portalHealth, setPortalHealth] = useState({ refreshing: false, errors: [], lastUpdated: null });
   const [documentUploadBusy, setDocumentUploadBusy] = useState({});
@@ -428,9 +437,11 @@ function App() {
         await loadPortalData(session.user.id, { silent: true, stripeReturnRetry: true });
         setCheckoutExpiresAt(null);
         setCheckoutIntent(false);
-        setActiveTab('payment');
+        const extensionPaymentConfirmed = data?.targetType === 'extension' || confirmingExtensionPayment;
+        setActiveTab(extensionPaymentConfirmed ? 'overview' : 'payment');
+        if (extensionPaymentConfirmed) setTripManagerOpen(true);
         clearStripeReturnParams();
-        notify(data?.targetType === 'extension' || confirmingExtensionPayment
+        notify(extensionPaymentConfirmed
           ? 'Extension payment confirmed. Stripe and the admin portal are updating the active return date now.'
           : 'Payment confirmed. Your rental is recorded and ready for Rent Me CT review.', 'success');
       } catch (error) {
@@ -838,12 +849,6 @@ function App() {
     : null;
   const extensionInsuranceUploaded = isUsableDocument(extensionInsuranceDocument);
   const extensionInsuranceRequired = Boolean(openExtensionRequest && !extensionInsuranceUploaded);
-  const approvedSwitchExtension = currentRentalExtensions.find((request) =>
-    request.status === 'approved_pending_payment' &&
-    request.request_kind === 'switch_car_continuation'
-  );
-  const approvedSwitchVehicle = vehicles.find((vehicle) => vehicle.id === approvedSwitchExtension?.replacement_vehicle_id);
-  const activatedExtension = currentRentalExtensions.find((request) => request.status === 'activated');
   const latestExtensionStatus = [...currentRentalExtensions]
     .sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0))[0];
   const paidSwitchContinuation = extensionRequests.find((request) =>
@@ -893,7 +898,6 @@ function App() {
   const canManageTrip = ['active', 'overdue', 'return_initiated'].includes(currentRental?.status);
   const effectiveTripChangeChoice = tripChangeChoice || currentRental?.trip_change_intent || '';
   const showTripManager = Boolean(canManageTrip && (tripManagerOpen || returnConfirmationSent || pendingExtension || approvedUnpaidExtension));
-  const showApprovedSwitchVehicle = Boolean(returnConfirmationSent && approvedSwitchExtension && approvedSwitchVehicle);
   const mobileStatusItems = [
     currentRental
       ? {
@@ -912,30 +916,23 @@ function App() {
           ? 'Your license and phone can stay on file. Choose new dates and upload insurance for the next rental.'
           : 'Complete the next guided step. We will keep each action clear as you go.',
       },
-    latestExtensionStatus
-      ? {
-        key: 'extension',
-        tone: latestExtensionStatus.status === 'activated'
-          ? 'success'
-          : latestExtensionStatus.status === 'rejected'
-            ? 'danger'
-            : latestExtensionStatus.status === 'approved_pending_payment'
-              ? 'warning'
-              : 'info',
-        title: extensionStatusTitle(latestExtensionStatus),
-        text: extensionStatusText(latestExtensionStatus),
-      }
-      : null,
-    showApprovedSwitchVehicle
-      ? {
-        key: 'replacement',
-        tone: 'warning',
-        title: `${approvedSwitchVehicle.name} approved next`,
-        text: 'Return confirmation is in. Payment is still required before this replacement activates.',
-      }
-      : null,
   ].filter(Boolean);
   const extensionWindow = getExtensionRequestWindow(currentRental, now);
+  const extensionReturnValidation = validateExtensionReturn(currentRental, extensionForm, now);
+  const extensionWorkflowStage = getExtensionWorkflowStage({
+    choice: effectiveTripChangeChoice,
+    pendingExtension,
+    approvedExtension: approvedUnpaidExtension,
+    latestExtension: latestExtensionStatus,
+    insuranceDocument: extensionInsuranceDocument,
+    preview: extensionPreview,
+  });
+  const selectedExtensionVehicle = extensionPreview?.recommended_vehicles?.find((vehicle) =>
+    vehicle.id === selectedExtensionVehicleId
+  ) || null;
+  const displayedExtensionMode = openExtensionRequest?.request_kind === 'switch_car_continuation'
+    ? 'switch'
+    : extensionMode;
   const vehicleStepCompleted = Boolean(currentRental?.vehicles || (!currentRental && selectedVehicle));
   const allGuidedStepsComplete = Boolean(contactStepCompleted && vehicleStepCompleted && identityVerified && licenseUploaded && insuranceUploaded && agreementSigned && paymentPaid);
 
@@ -969,11 +966,12 @@ function App() {
     url.searchParams.delete('extension');
     window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
     setPreviewCheckoutSection('payment');
-    setActiveTab(extensionPaymentReturnId ? 'payment' : 'overview');
+    setActiveTab('overview');
+    if (extensionPaymentReturnId) setTripManagerOpen(true);
 
     if (paymentReturn === 'stripe_cancelled') {
       if (extensionPaymentReturnId) {
-        notify('Extension payment was not completed. Your approved extension is still waiting in Billing.', 'error');
+        notify('Extension payment was not completed. Reopen Manage This Trip to pay the approved request before its deadline.', 'error');
         return undefined;
       }
       if (!bookingPreviewCheckoutMode) {
@@ -2245,12 +2243,22 @@ async function verifyPhoneCode(options = {}) {
     }
 
     if (!returnCountdown.canConfirm) {
-      notify(`Return confirmation unlocks at ${formatRentalDate(currentRental.return_date, currentRental.return_time)}.`);
+      notify(`Return confirmation unlocks ${formatRentMeCtDateTime(returnCountdown.unlockAt)}.`);
       return;
     }
 
     setReturnSaving(true);
-    const { data: messageData, error } = await supabase
+    const { data: returnedRental, error: statusError } = await supabase.rpc('initiate_customer_rental_return', {
+      p_rental_id: currentRental.id,
+    });
+
+    if (statusError) {
+      setReturnSaving(false);
+      notify(statusError.message);
+      return;
+    }
+
+    const { data: messageData, error: messageError } = await supabase
       .from('rental_messages')
       .insert({
         user_id: session.user.id,
@@ -2262,22 +2270,8 @@ async function verifyPhoneCode(options = {}) {
       })
       .select()
       .single();
-
-    if (error) {
-      setReturnSaving(false);
-      notify(error.message);
-      return;
-    }
-
-    const { data: returnedRental, error: statusError } = await supabase.rpc('initiate_customer_rental_return', {
-      p_rental_id: currentRental.id,
-    });
     setReturnSaving(false);
-
-    if (statusError) {
-      notify(statusError.message);
-      return;
-    }
+    setReturnConfirmationOpen(false);
 
     const { data: updatedRental, error: reloadError } = await supabase
       .from('rentals')
@@ -2290,15 +2284,19 @@ async function verifyPhoneCode(options = {}) {
       return;
     }
 
-    setMessages([...messages, messageData]);
+    if (messageData) setMessages([...messages, messageData]);
     setRentals((prev) => prev.map((item) => (item.id === updatedRental.id ? updatedRental : item)));
     setFleetRentals((prev) => prev.map((item) => (item.id === updatedRental.id ? { ...item, status: updatedRental.status } : item)));
-    notify('Return initiated. Rent Me CT will inspect and close out your rental.', 'success');
+    notify(messageError
+      ? 'Return recorded. Rent Me CT was notified through the operations queue; the message thread could not refresh.'
+      : 'Return reported. Rent Me CT will inspect the vehicle before closing the rental or releasing the deposit.', 'success');
   }
 
   async function chooseTripChange(choice) {
     if (!currentRental?.id || !['return', 'extend', 'exchange'].includes(choice)) return;
     setTripChangeChoice(choice);
+    setExtensionPreview(null);
+    setSelectedExtensionVehicleId('');
     if (choice === 'extend') setExtensionMode('extend');
     if (choice === 'exchange') setExtensionMode('switch');
 
@@ -2324,6 +2322,10 @@ async function verifyPhoneCode(options = {}) {
       notify(extensionWindow.message);
       return;
     }
+    if (!extensionReturnValidation.valid) {
+      notify(extensionReturnValidation.message);
+      return;
+    }
 
     const sameVehicleReadyForSubmission = extensionMode === 'extend' && extensionPreview?.same_vehicle_available;
     setExtensionSaving(true);
@@ -2346,6 +2348,7 @@ async function verifyPhoneCode(options = {}) {
       setExtensionRequests((prev) => [data, ...prev.filter((request) => request.id !== data.id)]);
       setExtensionForm((prev) => ({ ...prev, note: '' }));
       setExtensionPreview(null);
+      setSelectedExtensionVehicleId('');
       notify('Extension request sent. Upload the new insurance declaration page next; admin approval stays locked until it is approved.', 'success');
       return;
     }
@@ -2366,6 +2369,7 @@ async function verifyPhoneCode(options = {}) {
     }
 
     setExtensionPreview(preview);
+    setSelectedExtensionVehicleId('');
 
     if (extensionMode === 'switch') {
       setExtensionSaving(false);
@@ -2400,6 +2404,7 @@ async function verifyPhoneCode(options = {}) {
 
     setExtensionRequests((prev) => prev.map((request) => (request.id === data.id ? data : request)));
     setExtensionPreview(null);
+    setSelectedExtensionVehicleId('');
     notify('Extension request cancelled.', 'success');
   }
 
@@ -2421,6 +2426,7 @@ async function verifyPhoneCode(options = {}) {
     if (error) return notify(error.message);
     setExtensionRequests((prev) => [data, ...prev.filter((request) => request.id !== data.id)]);
     setExtensionPreview(null);
+    setSelectedExtensionVehicleId('');
     notify(`Switch request sent for ${vehicle.name}. Your current rental return stays unchanged until a replacement is paid.`, 'success');
   }
 
@@ -3030,7 +3036,7 @@ async function verifyPhoneCode(options = {}) {
       {isMobileClientNav && (
         <aside className={`mobile-drawer client-mobile-drawer ${navCollapsed ? '' : 'open'}`} aria-label="Client navigation">
           <div className="mobile-drawer-brand">
-            <img src={logoUrl} alt="Rent Me CT" />
+            <img src={logoUrl} alt="Rent Me CT" width="512" height="180" />
           </div>
           <button className="mobile-drawer-close" type="button" onClick={() => setNavCollapsed(true)} aria-label="Close client navigation">
             <X size={22} />
@@ -3050,7 +3056,7 @@ async function verifyPhoneCode(options = {}) {
       {!isMobileClientNav && (
         <aside className={`sidebar ${navCollapsed ? 'collapsed' : ''}`} aria-label="Client navigation">
           <div className="brand-block">
-            <img className="brand-logo" src={logoUrl} alt="Rent Me CT" />
+            <img className="brand-logo" src={logoUrl} alt="Rent Me CT" width="512" height="180" />
           </div>
           <button className="nav-toggle" type="button" onClick={() => setNavCollapsed(!navCollapsed)} aria-expanded={!navCollapsed} aria-controls="client-primary-navigation" aria-label={navCollapsed ? 'Expand client navigation' : 'Collapse client navigation'}>
             {navCollapsed ? <Menu size={17} /> : <X size={17} />}<span>{navCollapsed ? 'Expand' : 'Collapse'}</span>
@@ -3131,7 +3137,7 @@ async function verifyPhoneCode(options = {}) {
                 <p className="eyebrow">{currentRental ? 'Current Rental' : 'Reservation Setup'}</p>
                 {displayedVehicle && !isBookingFlowTestVehicle(displayedVehicle) && (
                   <div className="selected-vehicle-media">
-                    <img src={getVehicleImage(displayedVehicle)} alt={`${displayedVehicle.name} rental vehicle`} loading="lazy" />
+                    <img src={getVehicleImage(displayedVehicle)} alt={`${displayedVehicle.name} rental vehicle`} width="640" height="400" loading="lazy" />
                   </div>
                 )}
                 <h2>{displayedVehicle?.name || 'Finish Your Rental'}</h2>
@@ -3159,7 +3165,7 @@ async function verifyPhoneCode(options = {}) {
 
             {currentRental && (
               <section className="panel return-panel">
-                <p className="eyebrow">Return Status</p>
+                <p className="eyebrow">Manage Rental</p>
                 <h3>{returnCountdown.label}</h3>
                 <div className="reservation-summary compact-summary">
                   <SummaryItem label="Due" value={formatRentalDate(currentRental.return_date, currentRental.return_time)} />
@@ -3173,26 +3179,28 @@ async function verifyPhoneCode(options = {}) {
                 {canManageTrip && (
                   <div className="trip-change-chooser" aria-label="What would you like to do with this rental?">
                     <div>
-                      <strong>What happens next?</strong>
-                      <span>Choose one path. You can change it until a return or paid continuation is finalized.</span>
+                      <span className="extension-step-label">Step 1</span>
+                      <strong>What do you need to do?</strong>
+                      <span>Choose one goal. We will show only the steps for that path.</span>
                     </div>
                     <div className="trip-change-options">
                       <button type="button" className={effectiveTripChangeChoice === 'return' ? 'active' : ''} onClick={() => chooseTripChange('return')}>
                         <CheckCircle2 size={18}/> Return this car
                       </button>
                       <button type="button" className={effectiveTripChangeChoice === 'extend' ? 'active' : ''} onClick={() => chooseTripChange('extend')}>
-                        <Clock size={18}/> Extend this car
+                        <Clock size={18}/> Keep this car longer
                       </button>
                       <button type="button" className={effectiveTripChangeChoice === 'exchange' ? 'active' : ''} onClick={() => chooseTripChange('exchange')}>
-                        <Car size={18}/> Exchange cars
+                        <Car size={18}/> Switch to another car
                       </button>
                     </div>
                   </div>
                 )}
-                <div className="return-workflow-grid">
-                  {(!canManageTrip || effectiveTripChangeChoice === 'return' || returnConfirmationSent) && <div className="return-action-block">
+                {(!canManageTrip || effectiveTripChangeChoice === 'return' || returnConfirmationSent) && <div className="return-action-block trip-stage-card">
+                    <span className="extension-step-label">Step 2</span>
+                    <h4>Report physical dropoff</h4>
                     <p className="muted">
-                      Send return confirmation after dropoff. Rent Me CT inspects mileage, fuel, and condition before closing the rental and deposit.
+                      Use this only after the vehicle is parked at the return location and the keys have been dropped off. Rent Me CT must inspect mileage, fuel, and condition before closing the rental or releasing the deposit.
                     </p>
                     {returnConfirmationSent && (
                       <div className="return-confirmation-box">
@@ -3203,168 +3211,122 @@ async function verifyPhoneCode(options = {}) {
                         </div>
                       </div>
                     )}
-                    {showApprovedSwitchVehicle && (
-                      <div className="next-vehicle-card">
-                        <span className="next-vehicle-image">
-                          <img src={getVehicleImage(approvedSwitchVehicle)} alt={`${approvedSwitchVehicle.name} replacement rental vehicle`} loading="lazy" />
-                        </span>
-                        <div>
-                          <strong>{approvedSwitchVehicle.name}</strong>
-                          <span>Approved replacement vehicle</span>
-                          <small>
-                            Starts after this return. Payment is required before the replacement rental activates.
-                          </small>
-                        </div>
-                      </div>
+                    {!returnConfirmationSent && !returnCountdown.canConfirm && (
+                      <p className="return-unlock-note" role="status">
+                        <Clock size={18}/>
+                        <span>Return confirmation unlocks {formatRentMeCtDateTime(returnCountdown.unlockAt)}. If plans changed, message Rent Me CT instead of reporting the car returned.</span>
+                      </p>
                     )}
-                    <button className="primary-btn" onClick={confirmReturn} disabled={returnSaving || returnConfirmationSent || Boolean(pendingSameVehicleExtension) || !returnCountdown.canConfirm}>
-                      <CheckCircle2 size={18} /> {returnSaving ? 'Sending Return Confirmation...' : returnConfirmationSent ? 'Return Confirmation Sent' : pendingSameVehicleExtension ? 'Extension Decision Pending' : returnCountdown.canConfirm ? 'Confirm Vehicle Returned' : 'Return Confirmation Locked'}
+                    <button className="primary-btn" type="button" onClick={() => setReturnConfirmationOpen(true)} disabled={returnSaving || returnConfirmationSent || Boolean(pendingSameVehicleExtension) || !returnCountdown.canConfirm}>
+                      <CheckCircle2 size={18} /> {returnSaving ? 'Recording Return...' : returnConfirmationSent ? 'Return Reported' : pendingSameVehicleExtension ? 'Extension Decision Pending' : returnCountdown.canConfirm ? 'Report Vehicle Dropped Off' : 'Return Confirmation Locked'}
                     </button>
-                    {approvedUnpaidExtension && (
-                      <p className="extension-payment-note">
-                        {approvedUnpaidExtension.request_kind === 'switch_car_continuation'
-                          ? `Switch approved through ${formatRentalDate(approvedUnpaidExtension.requested_return_date, approvedUnpaidExtension.requested_return_time)}. Payment is required before the replacement vehicle activates.`
-                          : `Extension approved through ${formatRentalDate(approvedUnpaidExtension.requested_return_date, approvedUnpaidExtension.requested_return_time)}. Payment is required before the longer return window activates.`}
-                      </p>
-                    )}
-                    {activatedExtension && (
-                      <p className="extension-payment-note paid">
-                        Extension payment recorded. This rental now returns {formatRentalDate(currentRental.return_date, currentRental.return_time)}.
-                      </p>
-                    )}
                   </div>}
-                  {(!canManageTrip || ['extend', 'exchange'].includes(effectiveTripChangeChoice) || pendingExtension || approvedUnpaidExtension) && <form className="portal-form extension-form" onSubmit={requestExtension}>
+
+                  {(['extend', 'exchange'].includes(effectiveTripChangeChoice) || pendingExtension || approvedUnpaidExtension || (latestExtensionStatus && !effectiveTripChangeChoice)) && <section className="extension-form" aria-labelledby="extensionWorkflowTitle">
                     <div className="extension-heading">
-                      <strong>Need more time?</strong>
-                      <span>{extensionWindow.open
-                        ? extensionMode === 'switch'
-                          ? 'Choose a replacement that can start when this rental is due back.'
-                          : 'Check this vehicle before asking for admin approval.'
-                        : extensionWindow.message}</span>
+                      <div>
+                        <span className="extension-step-label">Your continuation</span>
+                        <strong id="extensionWorkflowTitle">{displayedExtensionMode === 'switch' ? 'Switch vehicle' : 'Keep this car longer'}</strong>
+                      </div>
+                      <ExtensionProgress stage={extensionWorkflowStage}/>
                     </div>
-                  {latestExtensionStatus && (
-                    <div className={`mobile-extension-status ${latestExtensionStatus.status}`}>
-                      <strong>{extensionStatusTitle(latestExtensionStatus)}</strong>
-                      <span>{extensionStatusText(latestExtensionStatus)}</span>
-                    </div>
-                  )}
-                  {(extensionWindow.open || pendingExtension || approvedUnpaidExtension) && <>
-                  <div className="extension-mode" role="group" aria-label="Continuation type">
-                    <button
-                      type="button"
-                      className={extensionMode === 'extend' ? 'active' : ''}
-                      onClick={() => {
-                        setExtensionMode('extend');
-                        setExtensionPreview(null);
-                      }}
-                    >
-                      Keep This Car
-                    </button>
-                    <button
-                      type="button"
-                      className={extensionMode === 'switch' ? 'active' : ''}
-                      onClick={() => {
-                        setExtensionMode('switch');
-                        setExtensionPreview(null);
-                      }}
-                    >
-                      Switch Vehicle
-                    </button>
-                  </div>
-                  {pendingExtension && <div className="extension-pending-actions">
-                    <p className="auth-message">
-                      Pending {pendingExtension.request_kind === 'switch_car_continuation' ? 'switch' : 'extension'} request:
-                      {' '}{formatRentalDate(pendingExtension.requested_return_date, pendingExtension.requested_return_time)}
-                    </p>
-                    <button className="secondary-btn" type="button" onClick={cancelExtensionRequest} disabled={extensionSaving}>Cancel Extension Request</button>
-                  </div>}
-                  {approvedUnpaidExtension && <div className="extension-payment-ready" role="status">
-                    <strong>Extension approved — payment ready</strong>
-                    <span>Your approved extension can be paid directly here in the client portal.{approvedUnpaidExtension.payment_due_at ? ` Pay by ${new Date(approvedUnpaidExtension.payment_due_at).toLocaleString()} or the hold is released automatically.` : ''}</span>
-                    <button className="primary-btn" type="button" onClick={startStripeCheckout} disabled={paymentSaving || extensionInsuranceRequired}>
-                      <CreditCard size={18} /> {extensionInsuranceRequired ? 'Upload New Insurance First' : paymentSaving ? 'Opening Stripe…' : `Pay ${money(approvedUnpaidExtension.extension_total_amount)}`}
-                    </button>
-                  </div>}
-                  {openExtensionRequest && <div className={`extension-insurance-step ${extensionInsuranceDocument?.status || 'missing'}`}>
-                    <div>
-                      <strong>New insurance required — declaration page only</strong>
-                      <span>
-                        {extensionInsuranceDocument?.status === 'approved'
-                          ? 'Approved for this extension.'
-                          : extensionInsuranceDocument?.status === 'pending_review'
-                            ? 'Uploaded and waiting for Rent Me CT approval.'
-                            : extensionInsuranceDocument?.status === 'rejected'
-                              ? 'The extension insurance was rejected. Upload a replacement.'
-                              : 'Upload the declaration page showing the policyholder, active dates, and coverage for the requested continuation dates. Other insurance documents will be rejected.'}
-                      </span>
-                    </div>
-                    {(!extensionInsuranceDocument || extensionInsuranceDocument.status === 'rejected') && <label className="secondary-btn">
-                      <Upload size={16}/> {documentUploadBusy.extensionInsurance ? 'Uploading…' : 'Upload Declaration Page'}
-                      <input
-                        type="file"
-                        accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
-                        disabled={Boolean(documentUploadBusy.extensionInsurance)}
-                        onChange={(event) => uploadDocument(event, 'insurance', {
-                          createNew: true,
-                          extensionRequestId: openExtensionRequest.id,
-                        })}
-                        style={{ display: 'none' }}
-                      />
-                    </label>}
-                  </div>}
-                  <label className="extension-date-field">
-                    <span>New return date</span>
-                    <input
-                      type="date"
-                      min={currentRental.return_date}
-                      value={extensionForm.returnDate}
-                      onChange={(event) => {
-                        setExtensionPreview(null);
-                        setExtensionForm({ ...extensionForm, returnDate: event.target.value });
-                      }}
-                      required
-                    />
-                    <small>Your current return is {formatRentalDate(currentRental.return_date, currentRental.return_time)}. The next day is preselected so the date box is never blank.</small>
-                  </label>
-                  <label className="extension-time-field">
-                    <span>New return time</span>
-                    <select value={extensionForm.returnTime} onChange={(event) => {
-                      setExtensionPreview(null);
-                      setExtensionForm({ ...extensionForm, returnTime: event.target.value });
-                    }}>
-                      {timeOptions().map((time) => <option key={time}>{time}</option>)}
-                    </select>
-                  </label>
-                  <input
-                    placeholder="Optional note for Rent Me CT"
-                    value={extensionForm.note}
-                    onChange={(event) => setExtensionForm({ ...extensionForm, note: event.target.value })}
-                  />
-                  <button className="secondary-btn" disabled={extensionSaving || Boolean(pendingExtension) || Boolean(approvedUnpaidExtension)}>
-                    {extensionSaving
-                      ? 'Checking...'
-                      : pendingExtension
-                        ? 'Request Pending'
-                        : approvedUnpaidExtension
-                          ? 'Payment Required'
-                          : extensionMode === 'switch'
-                            ? 'Find Switch Vehicles'
-                            : extensionPreview?.same_vehicle_available
-                              ? 'Submit Extension for Approval'
-                              : 'Check Car Availability'}
-                  </button>
+
+                    {latestExtensionStatus && <div className={`extension-status-card ${latestExtensionStatus.status}`}>
+                      <div className="extension-status-heading" aria-live="polite">
+                        <span>{openExtensionRequest ? 'Current status' : 'Most recent request'}</span>
+                        <strong>{extensionStatusTitle(latestExtensionStatus)}</strong>
+                      </div>
+                      <p>{extensionStatusText(latestExtensionStatus)}</p>
+                      {pendingExtension && <p className="extension-status-detail">
+                        Requested return: <strong>{formatRentalDate(pendingExtension.requested_return_date, pendingExtension.requested_return_time)}</strong>
+                      </p>}
+                      {pendingExtension && <p className="extension-status-detail"><strong>Your original return is still binding</strong> until this request is approved and paid.</p>}
+                      {approvedUnpaidExtension && <p className="extension-status-detail">
+                        Pay <strong>{money(approvedUnpaidExtension.extension_total_amount)}</strong>{approvedUnpaidExtension.payment_due_at ? ` by ${new Date(approvedUnpaidExtension.payment_due_at).toLocaleString()}` : ''}. The original return remains binding until payment activates this request.
+                      </p>}
+                      {extensionWorkflowStage === 'insurance' && <div className={`extension-insurance-step ${extensionInsuranceDocument?.status || 'missing'}`}>
+                        <div>
+                          <strong>Upload a new insurance declaration page</strong>
+                          <span>{extensionInsuranceDocument?.status === 'rejected'
+                            ? 'The previous file was rejected. Upload a declaration page showing active coverage through the requested return.'
+                            : 'It must show the policyholder, active dates, and coverage through the requested return.'}</span>
+                        </div>
+                        <label className="primary-btn">
+                          <Upload size={16}/> {documentUploadBusy.extensionInsurance ? 'Uploading…' : 'Upload Declaration Page'}
+                          <input
+                            type="file"
+                            accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
+                            disabled={Boolean(documentUploadBusy.extensionInsurance)}
+                            onChange={(event) => uploadDocument(event, 'insurance', {
+                              createNew: true,
+                              extensionRequestId: openExtensionRequest.id,
+                            })}
+                            hidden
+                          />
+                        </label>
+                      </div>}
+                      {extensionWorkflowStage === 'insurance_review' && <p className="extension-waiting-note"><Clock size={17}/> Insurance uploaded. Rent Me CT must approve it before deciding the request.</p>}
+                      {extensionWorkflowStage === 'admin_review' && <p className="extension-waiting-note"><Clock size={17}/> Insurance approved. The extension decision is now with Rent Me CT.</p>}
+                      {extensionWorkflowStage === 'payment' && <button className="primary-btn" type="button" onClick={startStripeCheckout} disabled={paymentSaving || extensionInsuranceRequired}>
+                        <CreditCard size={18}/> {paymentSaving ? 'Opening Stripe…' : `Pay ${money(approvedUnpaidExtension.extension_total_amount)}`}
+                      </button>}
+                      {pendingExtension && <button className="text-action" type="button" onClick={cancelExtensionRequest} disabled={extensionSaving}>Cancel this request</button>}
+                      {['rejected', 'cancelled', 'expired'].includes(latestExtensionStatus.status) && <p className="extension-recovery-note">Choose “Keep this car longer” or “Switch to another car” above to check a different return or vehicle. You can also message Rent Me CT for help.</p>}
+                    </div>}
+
+                    {!openExtensionRequest && ['extend', 'exchange'].includes(effectiveTripChangeChoice) && extensionWindow.open && <form className="portal-form extension-request-form" onSubmit={requestExtension}>
+                      <div className="original-return-binding">
+                        <AlertTriangle size={19}/>
+                        <span>Your current return remains <strong>{formatRentalDate(currentRental.return_date, currentRental.return_time)}</strong> until Rent Me CT approves this request and payment activates it.</span>
+                      </div>
+                      <div className="extension-date-time-grid">
+                        <label className="extension-date-field">
+                          <span>New return date</span>
+                          <input
+                            type="date"
+                            min={currentRental.return_date}
+                            value={extensionForm.returnDate}
+                            onChange={(event) => {
+                              setExtensionPreview(null);
+                              setSelectedExtensionVehicleId('');
+                              setExtensionForm({ ...extensionForm, returnDate: event.target.value });
+                            }}
+                            required
+                          />
+                        </label>
+                        <label className="extension-time-field">
+                          <span>New return time</span>
+                          <select value={extensionForm.returnTime} onChange={(event) => {
+                            setExtensionPreview(null);
+                            setSelectedExtensionVehicleId('');
+                            setExtensionForm({ ...extensionForm, returnTime: event.target.value });
+                          }}>
+                            {timeOptions().map((time) => <option key={time}>{time}</option>)}
+                          </select>
+                        </label>
+                      </div>
+                      {!extensionReturnValidation.valid && <p className="field-error" role="alert">{extensionReturnValidation.message}</p>}
+                      <label>
+                        <span>Note for Rent Me CT <small>(optional)</small></span>
+                        <textarea
+                          rows="3"
+                          placeholder="Anything we should know about this request?"
+                          value={extensionForm.note}
+                          onChange={(event) => setExtensionForm({ ...extensionForm, note: event.target.value })}
+                        />
+                      </label>
+
                   {extensionPreview?.same_vehicle_available && extensionMode === 'extend' && (
                     <div className="extension-availability-card available" role="status">
-                      <strong><CheckCircle2 size={17}/> This car is available for the requested extension</strong>
-                      <span>{formatRentalDate(extensionForm.returnDate, extensionForm.returnTime)} • availability and price will be rechecked when submitted</span>
+                      <strong><CheckCircle2 size={17}/> Available through {formatRentalDate(extensionForm.returnDate, extensionForm.returnTime)}</strong>
+                      <span>Review the full estimate before submitting. Availability and price are checked again when the request is created.</span>
                       <div className="extension-quote-grid">
-                        <small><b>{extensionPreview.quote?.extension_days || 0}</b> extension day(s)</small>
-                        <small><b>{money(extensionPreview.quote?.extension_rental_amount || 0)}</b> rental</small>
-                        <small><b>{money(extensionPreview.quote?.extension_tax_amount || 0)}</b> tax</small>
-                        <small><b>{money(extensionPreview.quote?.deposit_carried_amount || 0)}</b> existing deposit carried</small>
+                        <small><span>Added rental</span><b>{money(extensionPreview.quote?.extension_rental_amount || 0)}</b></small>
+                        <small><span>Tax and fees</span><b>{money(extensionPreview.quote?.extension_tax_amount || 0)}</b></small>
+                        <small><span>Existing deposit</span><b>{money(extensionPreview.quote?.deposit_carried_amount || 0)} carried</b></small>
+                        <small><span>Due after approval</span><b>{money(extensionPreview.quote?.extension_total_amount || 0)}</b></small>
                       </div>
-                      <strong>Estimated extension payment: {money(extensionPreview.quote?.extension_total_amount || 0)}</strong>
-                      <small>No second security deposit is charged for keeping the same car. After submitting, upload a new insurance declaration page for admin review.</small>
+                      <small>No second security deposit is charged for keeping the same car. After submission, a new insurance declaration page is required. Approval creates a payment deadline; the longer return activates only after payment.</small>
                     </div>
                   )}
                   {extensionPreview && (extensionMode === 'switch' || !extensionPreview.same_vehicle_available) && (
@@ -3375,31 +3337,54 @@ async function verifyPhoneCode(options = {}) {
                           : `${extensionPreview.current_vehicle?.name || 'This vehicle'} is already blocked for that longer return window.`}
                         {extensionPreview.recommended_vehicles?.length ? ' Available replacement vehicles:' : ' No alternate vehicle is available for that window right now.'}
                       </p>
-                      {extensionPreview.recommended_vehicles?.length > 0 && (
-                        <div className="extension-alternative-list">
+                      {extensionPreview.recommended_vehicles?.length > 0 && (<>
+                        <h4 className="extension-quote-heading">Review quote and select one vehicle</h4>
+                        <div className="extension-alternative-list" role="radiogroup" aria-label="Available replacement vehicles">
                           {extensionPreview.recommended_vehicles.map((vehicle) => (
-                            <button className="extension-alternative" type="button" key={vehicle.id} onClick={() => askForExtensionAlternative(vehicle)}>
-                              <strong>{vehicle.name}</strong>
-                              <span>
-                                {vehicle.similarity_rank === 0
-                                  ? 'Same model'
-                                  : vehicle.similarity_rank === 1
-                                    ? 'Similar type'
-                                    : vehicle.similarity_rank === 2
-                                      ? 'Same brand'
-                                      : 'Available option'}
+                            <button className={`extension-alternative ${selectedExtensionVehicleId === vehicle.id ? 'selected' : ''}`} type="button" role="radio" aria-checked={selectedExtensionVehicleId === vehicle.id} key={vehicle.id} onClick={() => setSelectedExtensionVehicleId(vehicle.id)}>
+                              <img src={getVehicleImage(vehicle)} alt="" width="640" height="400" loading="lazy" />
+                              <span className="extension-alternative-copy">
+                                <strong>{vehicle.name}</strong>
+                                <small>{vehicle.similarity_rank === 0 ? 'Same model' : vehicle.similarity_rank === 1 ? 'Similar type' : vehicle.similarity_rank === 2 ? 'Same brand' : 'Available option'} • {money(vehicle.daily_rate)}/day</small>
+                                <span className="extension-alternative-quote">
+                                  <small><span>Added rental</span><b>{money(vehicle.quote?.extension_rental_amount || 0)}</b></small>
+                                  <small><span>Tax and fees</span><b>{money(vehicle.quote?.extension_tax_amount || 0)}</b></small>
+                                  <small><span>Deposit carried</span><b>{money(vehicle.quote?.deposit_carried_amount || 0)}</b></small>
+                                  <small><span>Due after approval</span><b>{money(vehicle.quote?.extension_total_amount || 0)}</b></small>
+                                </span>
+                                <small>{Number(vehicle.quote?.deposit_increase_amount || 0) > 0 ? `${money(vehicle.quote.deposit_increase_amount)} additional deposit is included above. ` : ''}{Number(vehicle.quote?.deposit_decrease_amount || 0) > 0 ? `${money(vehicle.quote.deposit_decrease_amount)} remains protected until inspection. ` : ''}New insurance is required. Approval creates a payment deadline; nothing changes until payment.</small>
                               </span>
-                              <small>{money(vehicle.daily_rate)}/day • estimated payment {money(vehicle.quote?.extension_total_amount || 0)} • {money(vehicle.quote?.deposit_carried_amount || 0)} of your current deposit carries over{Number(vehicle.quote?.deposit_increase_amount || 0) > 0 ? ` and ${money(vehicle.quote.deposit_increase_amount)} additional deposit is included` : ''}{Number(vehicle.quote?.deposit_decrease_amount || 0) > 0 ? `; ${money(vehicle.quote.deposit_decrease_amount)} remains protected until the original car passes inspection` : ''} • Request switch</small>
                             </button>
                           ))}
                         </div>
-                      )}
+                      </>)}
+                      {selectedExtensionVehicle && <p className="selected-alternative-summary" role="status"><CheckCircle2 size={17}/> {selectedExtensionVehicle.name} selected. Review the estimate above, then submit one request.</p>}
                     </div>
                   )}
-                  </>}
-                  </form>}
-                </div>
+
+                      {!extensionPreview && <button className="primary-btn" disabled={extensionSaving || !extensionReturnValidation.valid}>
+                        {extensionSaving ? 'Checking Availability…' : extensionMode === 'switch' ? 'Find Available Vehicles' : 'Check Availability'}
+                      </button>}
+                      {extensionPreview?.same_vehicle_available && extensionMode === 'extend' && <button className="primary-btn" disabled={extensionSaving}>
+                        {extensionSaving ? 'Submitting Request…' : 'Submit Extension Request'}
+                      </button>}
+                      {extensionPreview && (extensionMode === 'switch' || !extensionPreview.same_vehicle_available) && <button className="primary-btn" type="button" onClick={() => askForExtensionAlternative(selectedExtensionVehicle)} disabled={extensionSaving || !selectedExtensionVehicle}>
+                        {extensionSaving ? 'Submitting Request…' : selectedExtensionVehicle ? `Request ${selectedExtensionVehicle.name}` : 'Select a Vehicle to Continue'}
+                      </button>}
+                    </form>}
+
+                    {!extensionWindow.open && !openExtensionRequest && ['extend', 'exchange'].includes(effectiveTripChangeChoice) && <div className="extension-window-closed" role="status">
+                      <Clock size={20}/><div><strong>Request window not open yet</strong><span>{extensionWindow.message}</span></div>
+                    </div>}
+                  </section>}
                 </>}
+
+                {returnConfirmationOpen && <ReturnConfirmationModal
+                  rental={currentRental}
+                  saving={returnSaving}
+                  onClose={() => !returnSaving && setReturnConfirmationOpen(false)}
+                  onConfirm={confirmReturn}
+                />}
               </section>
             )}
 
@@ -3603,19 +3588,14 @@ async function verifyPhoneCode(options = {}) {
             {paymentPaid && <p className="auth-message">{currentRental?.discount_waives_security_deposit ? 'Booking completed with the security deposit waived.' : 'Payment recorded. Deposit is marked as held.'}</p>}
             {approvedUnpaidExtension && (
               <div className="extension-payment-card">
-                <strong>Extension Payment Required</strong>
-                <span>Approved return: {formatRentalDate(approvedUnpaidExtension.requested_return_date, approvedUnpaidExtension.requested_return_time)}</span>
-                <span>Extension due: {money(approvedUnpaidExtension.extension_total_amount)}</span>
-                {approvedUnpaidExtension.request_kind === 'switch_car_continuation' && <span>{money(approvedUnpaidExtension.deposit_carried_amount || 0)} deposit carries forward{Number(approvedUnpaidExtension.deposit_increase_amount || 0) > 0 ? `; ${money(approvedUnpaidExtension.deposit_increase_amount)} additional deposit is included` : ''}{Number(approvedUnpaidExtension.deposit_decrease_amount || 0) > 0 ? `; ${money(approvedUnpaidExtension.deposit_decrease_amount)} will be refunded after the original vehicle passes inspection` : ''}.</span>}
-                {approvedUnpaidExtension.request_kind !== 'switch_car_continuation' && <span>Your existing security deposit remains held; no second deposit is charged.</span>}
-                <small>{extensionInsuranceRequired ? 'Upload new insurance for this extension before Stripe payment unlocks.' : 'New insurance is on file. Pay securely with Stripe before the longer return window activates.'}</small>
+                <strong>Manage this extension with your trip</strong>
+                <span>The extension status, insurance requirement, payment deadline, and secure payment action are kept together under Manage This Trip.</span>
+                <button className="secondary-btn" type="button" onClick={() => { setActiveTab('overview'); setTripManagerOpen(true); }}>Open Approved Extension</button>
               </div>
             )}
-            <button className="primary-btn big-action" onClick={startStripeCheckout} disabled={paymentSaving || checkoutExpired || extensionInsuranceRequired || (paymentPaid && !approvedUnpaidExtension)}>
-              <CreditCard size={18} /> {approvedUnpaidExtension
-                ? extensionInsuranceRequired ? 'Upload New Insurance First' : paymentSaving ? 'Opening Stripe...' : 'Pay Approved Extension'
-                : paymentPaid ? 'Payment Complete' : paymentSaving ? 'Opening Stripe...' : 'Pay With Stripe'}
-            </button>
+            {!approvedUnpaidExtension && <button className="primary-btn big-action" onClick={startStripeCheckout} disabled={paymentSaving || checkoutExpired || paymentPaid}>
+              <CreditCard size={18} /> {paymentPaid ? 'Payment Complete' : paymentSaving ? 'Opening Stripe...' : 'Pay With Stripe'}
+            </button>}
           </section>
         )}
 
@@ -3850,6 +3830,64 @@ function SmsTransactionalPreference({ profileForm, setProfileForm }) {
 
 function SmsVerificationDisclosure() {
   return <p className="sms-verification-disclosure">Selecting the verification-code button requests one automated security text from Rent Me CT. Message and data rates may apply.</p>;
+}
+
+function ExtensionProgress({ stage }) {
+  const stepByStage = {
+    goal: 1,
+    details: 2,
+    quote: 4,
+    insurance: 5,
+    insurance_review: 6,
+    admin_review: 6,
+    payment: 7,
+    active: 7,
+    recovery: 1,
+  };
+  const currentStep = stepByStage[stage] || 1;
+  return <div className="extension-progress" aria-label={`Extension step ${currentStep} of 7`}>
+    <span>Step {currentStep} of 7</span>
+    <div aria-hidden="true">{Array.from({ length: 7 }, (_, index) => <i className={index < currentStep ? 'complete' : ''} key={index}/>)}</div>
+  </div>;
+}
+
+function ReturnConfirmationModal({ rental, saving, onClose, onConfirm }) {
+  const [confirmed, setConfirmed] = useState(false);
+  const dialogRef = useDialogFocus(onClose);
+  return <div className="modal-backdrop return-confirmation-modal-backdrop" role="presentation">
+    <section ref={dialogRef} className="return-confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="returnConfirmationTitle" aria-describedby="returnConfirmationDescription" tabIndex="-1">
+      <div className="modal-header">
+        <div><p className="eyebrow">Physical dropoff</p><h2 id="returnConfirmationTitle">Has the vehicle actually been returned?</h2></div>
+        <button type="button" className="wizard-close" onClick={onClose} disabled={saving} aria-label="Close return confirmation"><X size={20}/></button>
+      </div>
+      <p id="returnConfirmationDescription">Only continue after <strong>{rental?.vehicles?.name || 'the vehicle'}</strong> is parked at {RENTMECT_ADDRESS} and the keys have been dropped off.</p>
+      <div className="return-confirmation-warning"><AlertTriangle size={20}/><span>This reports physical dropoff to Rent Me CT. It does not close the rental or release the deposit; an administrator must inspect the vehicle first.</span></div>
+      <label className="checkbox-row return-confirmation-check">
+        <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} disabled={saving}/>
+        I confirm the vehicle and keys have been physically returned.
+      </label>
+      <div className="modal-actions">
+        <button type="button" className="secondary-btn" onClick={onClose} disabled={saving}>Not yet</button>
+        <button type="button" className="primary-btn" onClick={onConfirm} disabled={!confirmed || saving}>{saving ? 'Recording Return…' : 'Report Vehicle Dropped Off'}</button>
+      </div>
+    </section>
+  </div>;
+}
+
+function VehicleReminderModal({ vehicle, onClose }) {
+  const dialogRef = useDialogFocus(onClose);
+  return <div className="vehicle-reminder-backdrop" role="presentation">
+    <section ref={dialogRef} className="vehicle-reminder-modal" role="dialog" aria-modal="true" aria-labelledby="vehicleReminderTitle" tabIndex="-1">
+      <button className="wizard-close" type="button" onClick={onClose} aria-label="Close vehicle reminder"><X size={20}/></button>
+      <p className="eyebrow">Before Checkout</p>
+      <h3 id="vehicleReminderTitle">Have these ready for {vehicle.name}</h3>
+      <div className="vehicle-reminder-list">
+        <div><FileText size={20}/><span>Driver's license number</span></div>
+        <div><ShieldCheck size={20}/><span>Insurance declaration page if you are using your own coverage</span></div>
+      </div>
+      <button className="primary-btn" type="button" onClick={onClose}>Continue</button>
+    </section>
+  </div>;
 }
 
 function WizardModal({
@@ -4169,7 +4207,7 @@ function WizardModal({
                       <span className="vehicle-picker-image">
                         {isBookingFlowTestVehicle(vehicle)
                           ? <span className="test-vehicle-placeholder"><Car size={28} /><small>No photo — test only</small></span>
-                          : <img src={getVehicleImage(vehicle)} alt={`${vehicle.name} rental vehicle`} loading="lazy" />}
+                          : <img src={getVehicleImage(vehicle)} alt={`${vehicle.name} rental vehicle`} width="640" height="400" loading="lazy" />}
                       </span>
                       <span className="vehicle-picker-info">
                         <strong>{vehicle.name}</strong>
@@ -4412,35 +4450,7 @@ function WizardModal({
           )}
         </div>
 
-        {vehicleReminder && (
-          <div className="vehicle-reminder-backdrop" role="presentation">
-            <div className="vehicle-reminder-modal" role="dialog" aria-modal="true" aria-labelledby="vehicleReminderTitle">
-              <button
-                className="wizard-close"
-                type="button"
-                onClick={() => setVehicleReminder(null)}
-                aria-label="Close vehicle reminder"
-              >
-                <X size={20} />
-              </button>
-              <p className="eyebrow">Before Checkout</p>
-              <h3 id="vehicleReminderTitle">Have these ready for {vehicleReminder.name}</h3>
-              <div className="vehicle-reminder-list">
-                <div>
-                  <FileText size={20} />
-                  <span>Driver's license number</span>
-                </div>
-                <div>
-                  <ShieldCheck size={20} />
-                  <span>Insurance declaration page if you opt out of Wheelbase insurance</span>
-                </div>
-              </div>
-              <button className="primary-btn" type="button" onClick={() => setVehicleReminder(null)}>
-                Continue
-              </button>
-            </div>
-          </div>
-        )}
+        {vehicleReminder && <VehicleReminderModal vehicle={vehicleReminder} onClose={() => setVehicleReminder(null)}/>}
       </div>
     </div>
   );
@@ -4542,7 +4552,7 @@ function AgreementModal({
           <pre>{printableAgreement}</pre>
           {alreadySigned && displayedSignatureImage && <div className="agreement-stored-signature">
             <strong>Stored electronic signature</strong>
-            <img src={displayedSignatureImage} alt={`Electronic signature for ${currentRental.agreement_signature_name || 'renter'}`} />
+            <img src={displayedSignatureImage} alt={`Electronic signature for ${currentRental.agreement_signature_name || 'renter'}`} width="900" height="300" />
           </div>}
         </div>
 
@@ -4738,7 +4748,7 @@ function LoadingScreen({ stripeReturn = false }) {
   return (
     <div className="loading-screen" role="status" aria-live="polite">
       <div className="loading-card">
-        <img className="loading-logo" src={logoMobileUrl} alt="Rent Me CT" />
+        <img className="loading-logo" src={logoMobileUrl} alt="Rent Me CT" width="360" height="112" />
         <div className="client-loading-spinner" aria-hidden="true">
           <span />
         </div>
@@ -4843,8 +4853,12 @@ function useDialogFocus(onClose) {
     window.requestAnimationFrame(() => (firstFocusable || dialog).focus());
     document.body.style.overflow = 'hidden';
     const handleKeyDown = (event) => {
+      const openDialogs = [...document.querySelectorAll('[role="dialog"][aria-modal="true"]')]
+        .filter((element) => element instanceof HTMLElement && element.offsetParent !== null);
+      if (openDialogs.at(-1) !== dialog) return;
       if (event.key === 'Escape') {
         event.preventDefault();
+        event.stopPropagation();
         closeRef.current?.();
         return;
       }
@@ -5003,6 +5017,8 @@ function PreviewVehicleGallery({ vehicle, compact = false, badge = '' }) {
         <img
           src={images[activeIndex]}
           alt={`${vehicle?.name || 'Vehicle'} photo ${activeIndex + 1} of ${images.length}`}
+          width="960"
+          height="600"
           onError={(event) => recoverImage(event, activeIndex)}
         />
         {badge && <span className="preview-badge">{badge}</span>}
@@ -5024,7 +5040,7 @@ function PreviewVehicleGallery({ vehicle, compact = false, badge = '' }) {
             aria-label={`Show ${vehicle?.name || 'vehicle'} photo ${index + 1}`}
             aria-current={index === activeIndex ? 'true' : undefined}
           >
-            <img src={image} alt="" onError={(event) => recoverImage(event, index)} />
+            <img src={image} alt="" width="240" height="150" onError={(event) => recoverImage(event, index)} />
           </button>
         ))}
       </div>
@@ -5188,11 +5204,11 @@ function PreviewGuestExperience({
     <div className="preview-detail-shell">
       <PreviewTopbar />
       <main className="preview-detail-main">
-        <PreviewVehicleGallery vehicle={displayVehicle} badge="Preview vehicle" />
+        <PreviewVehicleGallery vehicle={displayVehicle} badge="Selected vehicle" />
 
         <div className="preview-detail-layout">
           <div className="preview-detail-copy">
-            <p className="eyebrow">Booking Preview</p>
+            <p className="eyebrow">Your rental</p>
             <h1>{displayVehicle.name}</h1>
             <p className="preview-vehicle-subtitle">{[displayVehicle.brand, displayVehicle.model, displayVehicle.vehicle_type].filter(Boolean).join(' • ')}</p>
             <div className="preview-spec-pills">
@@ -5246,14 +5262,14 @@ function PreviewGuestExperience({
   );
 }
 
-function PreviewTopbar({ onBack, label = 'Booking Preview' }) {
+function PreviewTopbar({ onBack, label = 'Rent Me CT' }) {
   return (
     <header className="preview-topbar">
       <div className="preview-topbar-inner">
         {onBack ? (
           <button type="button" onClick={onBack}><ArrowLeft size={18} /> {label}</button>
         ) : <span className="preview-mode-label">{label}</span>}
-        <img src={logoMobileUrl} alt="Rent Me CT" />
+        <img src={logoMobileUrl} alt="Rent Me CT" width="360" height="112" />
         <span className="preview-secure-label"><ShieldCheck size={16} /> Secure booking</span>
       </div>
     </header>
@@ -5567,7 +5583,7 @@ function PreviewTripSummary({ reservationForm, rentalTotal, serviceFeeTotal = 0,
   return (
     <aside className="preview-trip-summary">
       <div className="preview-trip-vehicle">
-        <div><span>Booking Preview</span><strong>{displayVehicle.name}</strong></div>
+        <div><span>Your booking</span><strong>{displayVehicle.name}</strong></div>
         <PreviewVehicleGallery vehicle={displayVehicle} compact />
         <div className="preview-trip-features">
           {features.map((feature) => <span key={feature}><CheckCircle2 size={13} /> {feature}</span>)}
@@ -5628,7 +5644,7 @@ function AuthScreen({
     <div className="auth-screen">
       <form className="auth-card" onSubmit={emailOtpSent ? verifyEmailOtp : handleAuth}>
         <header className="auth-heading">
-          <img className="auth-logo" src={logoMobileUrl} alt="Rent Me CT" />
+          <img className="auth-logo" src={logoMobileUrl} alt="Rent Me CT" width="360" height="112" />
           <span className="auth-portal-label">Client portal</span>
           <h2>{checkoutIntent ? 'Continue your booking' : 'Secure sign in'}</h2>
           <p className="muted">Enter your email and we’ll send a one-time code. No password required.</p>
@@ -6456,56 +6472,6 @@ function getVehicleFeatures(vehicle) {
   return ['Sedan', 'Luxury', 'Comfortable'];
 }
 
-function parseRentalDateTime(date, time) {
-  if (!date) return null;
-  const normalizedTime = convertTo24HourTime(time || '11:59 PM');
-  return new Date(`${date}T${normalizedTime}:00`);
-}
-
-function convertTo24HourTime(value) {
-  const match = String(value || '').trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i);
-  if (!match) return '23:59';
-  let hour = Number(match[1]);
-  const minute = match[2] || '00';
-  const meridiem = match[3]?.toUpperCase();
-  if (meridiem === 'PM' && hour < 12) hour += 12;
-  if (meridiem === 'AM' && hour === 12) hour = 0;
-  return `${String(hour).padStart(2, '0')}:${minute}`;
-}
-
-function getReturnCountdown(date, time, now = Date.now()) {
-  const due = parseRentalDateTime(date, time);
-  if (!due) return { label: 'No Active Return Due', value: 'Pending', canConfirm: false };
-
-  const ms = due.getTime() - now;
-  const abs = Math.abs(ms);
-  const days = Math.floor(abs / 86400000);
-  const hours = Math.floor((abs % 86400000) / 3600000);
-  const minutes = Math.floor((abs % 3600000) / 60000);
-  const value = days > 0 ? `${days}d ${hours}h` : `${hours}h ${minutes}m`;
-
-  if (ms <= 0) return { label: 'Return Is Due', value: ms < 0 ? `${value} overdue` : 'Due now', canConfirm: true };
-  return { label: 'Return Countdown', value, canConfirm: true };
-}
-
-function getExtensionRequestWindow(rental, now = Date.now()) {
-  if (!rental?.id) return { open: false, message: 'Extensions open after a rental is active.' };
-
-  const status = String(rental.status || '').toLowerCase();
-  if (!['active', 'overdue'].includes(status)) {
-    return { open: false, message: 'Extensions open after the rental is active and within 24 hours of return.' };
-  }
-
-  const due = parseRentalDateTime(rental.return_date, rental.return_time);
-  if (!due) return { open: false, message: 'Return time is missing for this rental.' };
-
-  if (now < due.getTime() - 86400000) {
-    return { open: false, message: 'Extension requests open 24 hours before the booked return time.' };
-  }
-
-  return { open: true, message: '' };
-}
-
 function prettyStatus(status) {
   const map = {
     none: 'No Active Rental',
@@ -6569,8 +6535,8 @@ function extensionStatusText(request) {
 
   if (request.status === 'approved_pending_payment') {
     return request.request_kind === 'switch_car_continuation'
-      ? `Approved through ${requestedReturn}. Payment is ready in Billing and must be completed before the replacement vehicle activates.`
-      : `Approved through ${requestedReturn}. Payment is ready in Billing and must be completed before the new return time activates.`;
+      ? `Approved through ${requestedReturn}. Pay from this status card before the deadline to activate the replacement vehicle.`
+      : `Approved through ${requestedReturn}. Pay from this status card before the deadline to activate the new return time.`;
   }
 
   if (request.status === 'activated') {
@@ -6580,11 +6546,17 @@ function extensionStatusText(request) {
   }
 
   if (request.status === 'rejected') {
-    return request.admin_note || 'Rent Me CT could not approve this request. Choose another option or message us.';
+    return request.admin_note
+      ? `Rent Me CT could not approve this request: ${request.admin_note}`
+      : 'Rent Me CT could not approve this request. Try a different return or vehicle, or message us for help.';
   }
 
   if (request.status === 'cancelled') {
-    return 'This request was cancelled. You can submit a new request when the extension window is open.';
+    return 'This request was cancelled or its payment hold was released. Your original return remains in effect. Submit a new request if the extension window is still open.';
+  }
+
+  if (request.status === 'expired') {
+    return 'The payment deadline passed and the calendar hold was released. Your original return remains in effect. Check availability again to create a new request.';
   }
 
   return prettyStatus(request.status);
@@ -6763,7 +6735,7 @@ function agreementHtml(snapshot, title = 'Rent Me CT Signed Agreement') {
 </head>
 <body>
   <pre>${escapeHtml(printableText)}</pre>
-  ${signatureImage ? `<div class="signature"><strong>Drawn Signature</strong><img src="${signatureImage}" alt="Drawn renter signature"></div>` : ''}
+  ${signatureImage ? `<div class="signature"><strong>Drawn Signature</strong><img src="${signatureImage}" alt="Drawn renter signature" width="900" height="300"></div>` : ''}
 </body>
 </html>`;
 }
