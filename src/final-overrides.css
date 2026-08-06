@@ -2282,3 +2282,162 @@ summary:focus-visible {
   .trip-change-options button { justify-content: flex-start; text-align: left; }
   .extension-alternative-quote { grid-template-columns: 1fr; }
 }
+
+/* Required confirmation immediately before the customer leaves for Stripe Identity. */
+.identity-name-confirmation-backdrop {
+  z-index: 1400 !important;
+  padding: 18px !important;
+}
+
+.identity-name-confirmation-modal {
+  width: min(640px, calc(100vw - 36px));
+  max-height: calc(100dvh - 36px);
+  overflow-y: auto;
+  border: 1px solid rgba(18, 24, 38, .14);
+  border-radius: 18px;
+  background: #fff;
+  color: #202636;
+  box-shadow: 0 30px 90px rgba(20, 24, 35, .28);
+}
+
+.identity-name-confirmation-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  align-items: start;
+  gap: 16px;
+  padding: 22px 22px 17px;
+  border-bottom: 1px solid rgba(18, 24, 38, .11);
+}
+
+.identity-name-confirmation-header .eyebrow {
+  margin: 0 0 5px;
+  color: #0f6b43;
+}
+
+.identity-name-confirmation-header h2 {
+  margin: 0;
+  color: #171c26;
+  font-size: clamp(22px, 4vw, 30px);
+  line-height: 1.12;
+}
+
+.identity-name-confirmation-header .wizard-close {
+  margin: 0;
+}
+
+.identity-name-confirmation-body {
+  display: grid;
+  gap: 15px;
+  padding: 20px 22px;
+}
+
+.identity-name-critical-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid #e9b548;
+  border-radius: 12px;
+  background: #fff7df;
+  color: #4d3908;
+}
+
+.identity-name-critical-note > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: #a76b00;
+}
+
+.identity-name-critical-note > div,
+.identity-name-saved-value {
+  display: grid;
+  gap: 5px;
+}
+
+.identity-name-critical-note span,
+.identity-name-saved-value small {
+  line-height: 1.5;
+}
+
+.identity-name-saved-value {
+  padding: 15px;
+  border: 1px solid rgba(18, 24, 38, .13);
+  border-radius: 12px;
+  background: #f8fafb;
+}
+
+.identity-name-saved-value > span {
+  color: #64707e;
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.identity-name-saved-value > strong {
+  color: #171c26;
+  font-size: 21px;
+}
+
+.identity-name-confirm-checkbox {
+  display: grid !important;
+  grid-template-columns: 20px minmax(0, 1fr) !important;
+  align-items: start !important;
+  gap: 11px !important;
+  margin: 0 !important;
+  padding: 14px !important;
+  border: 1px solid #9fcbb1 !important;
+  border-radius: 12px !important;
+  background: #eef8f2 !important;
+  color: #244333 !important;
+  cursor: pointer !important;
+}
+
+.identity-name-confirm-checkbox input {
+  width: 19px !important;
+  min-width: 19px !important;
+  height: 19px !important;
+  margin: 1px 0 0 !important;
+  padding: 0 !important;
+  accent-color: #0f6b43;
+}
+
+.identity-name-confirm-checkbox span {
+  line-height: 1.45;
+}
+
+.identity-name-confirmation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 17px 22px 22px;
+  border-top: 1px solid rgba(18, 24, 38, .11);
+}
+
+.identity-name-confirmation-actions button {
+  min-height: 46px;
+}
+
+@media (max-width: 560px) {
+  .identity-name-confirmation-backdrop {
+    align-items: stretch !important;
+    padding: 8px !important;
+  }
+
+  .identity-name-confirmation-modal {
+    width: 100%;
+    max-height: calc(100dvh - 16px);
+    border-radius: 14px;
+  }
+
+  .identity-name-confirmation-header,
+  .identity-name-confirmation-body {
+    padding-inline: 16px;
+  }
+
+  .identity-name-confirmation-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    padding: 15px 16px 18px;
+  }
+}

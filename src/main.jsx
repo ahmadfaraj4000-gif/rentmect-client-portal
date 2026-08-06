@@ -143,6 +143,7 @@ function App() {
       .slice(0, 24)
   );
   const [identitySaving, setIdentitySaving] = useState(false);
+  const [identityNameConfirmationOpen, setIdentityNameConfirmationOpen] = useState(false);
   const [returnSaving, setReturnSaving] = useState(false);
   const [extensionSaving, setExtensionSaving] = useState(false);
   const [extensionPreview, setExtensionPreview] = useState(null);
@@ -2593,7 +2594,24 @@ async function verifyPhoneCode(options = {}) {
   }
 
   function startIdentityVerification() {
+    setIdentityNameConfirmationOpen(true);
+    return Promise.resolve(null);
+  }
+
+  function confirmIdentityVerification() {
+    setIdentityNameConfirmationOpen(false);
     return callStripeIdentity('create_identity_verification', true);
+  }
+
+  function correctLegalNameBeforeIdentity() {
+    setIdentityNameConfirmationOpen(false);
+    setIdentityCorrectionTarget('full_name');
+    if (bookingPreviewCheckoutMode) {
+      setPreviewCheckoutSection('contact');
+      return;
+    }
+    setWizardStep(0);
+    setWizardOpen(true);
   }
 
   function refreshIdentityVerification(showNotice = false) {
@@ -3102,6 +3120,12 @@ async function verifyPhoneCode(options = {}) {
           }}
           adminBookingHandoff={adminBookingHandoff}
         />
+        {identityNameConfirmationOpen && <IdentityNameConfirmationModal
+          fullName={profileForm.full_name}
+          onCancel={() => setIdentityNameConfirmationOpen(false)}
+          onCorrect={correctLegalNameBeforeIdentity}
+          onConfirm={confirmIdentityVerification}
+        />}
         {agreementModalOpen && (
           <FlowStepErrorBoundary label="rental agreement" onClose={() => setAgreementModalOpen(false)}>
             <AgreementModal
@@ -3752,6 +3776,13 @@ async function verifyPhoneCode(options = {}) {
           </section>
         )}
       </main>
+
+      {identityNameConfirmationOpen && <IdentityNameConfirmationModal
+        fullName={profileForm.full_name}
+        onCancel={() => setIdentityNameConfirmationOpen(false)}
+        onCorrect={correctLegalNameBeforeIdentity}
+        onConfirm={confirmIdentityVerification}
+      />}
 
       {agreementModalOpen && (
         <FlowStepErrorBoundary label="rental agreement" onClose={() => setAgreementModalOpen(false)}>
@@ -6082,6 +6113,39 @@ function identityCorrectionGuidance(errorCode) {
   };
   if (stripeFailures[code]) return { ...stripeFailures[code], action: '', preservesContact: false };
   return null;
+}
+
+function IdentityNameConfirmationModal({ fullName, onCancel, onCorrect, onConfirm }) {
+  const dialogRef = useDialogFocus(onCancel);
+  const [confirmed, setConfirmed] = useState(false);
+  const [continuing, setContinuing] = useState(false);
+
+  async function continueToStripe() {
+    if (!confirmed || continuing) return;
+    setContinuing(true);
+    await onConfirm?.();
+  }
+
+  return <div className="modal-backdrop identity-name-confirmation-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onCancel()}>
+    <section ref={dialogRef} className="identity-name-confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="identity-name-confirmation-title">
+      <header className="identity-name-confirmation-header">
+        <div><p className="eyebrow">Before Stripe Identity</p><h2 id="identity-name-confirmation-title">Make sure your legal name matches your ID</h2></div>
+        <button type="button" className="wizard-close" onClick={onCancel} aria-label="Close"><X size={20}/></button>
+      </header>
+      <div className="identity-name-confirmation-body">
+        <div className="identity-name-critical-note"><AlertTriangle size={24}/><div><strong>Middle name or initial matters.</strong><span>If your government ID shows a middle name or middle initial, enter it immediately after your legal first name. Missing or mismatched name details can prevent Stripe from verifying you.</span></div></div>
+        <div className="identity-name-saved-value"><span>Legal name currently saved</span><strong>{fullName?.trim() || 'No legal name saved'}</strong><small>This must match the government ID you will show Stripe, including spelling and name order.</small></div>
+        <label className="identity-name-confirm-checkbox">
+          <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)}/>
+          <span><strong>I checked my government ID.</strong> My saved legal name includes the middle name or initial shown on my ID.</span>
+        </label>
+      </div>
+      <footer className="identity-name-confirmation-actions">
+        <button type="button" className="secondary-btn" onClick={onCorrect} disabled={continuing}>Correct legal name</button>
+        <button type="button" className="primary-btn" onClick={continueToStripe} disabled={!confirmed || continuing}>{continuing ? 'Opening Stripe…' : 'My name matches — Continue to Stripe'}</button>
+      </footer>
+    </section>
+  </div>;
 }
 
 function IdentityVerificationPanel({ status, verified, errorCode, saving, onStart, onRefresh, onEditProfile }) {
