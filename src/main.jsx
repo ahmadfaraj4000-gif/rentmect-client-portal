@@ -153,6 +153,7 @@ function App() {
   const [returnConfirmationOpen, setReturnConfirmationOpen] = useState(false);
   const [portalDataReady, setPortalDataReady] = useState(false);
   const [portalHealth, setPortalHealth] = useState({ refreshing: false, errors: [], lastUpdated: null });
+  const [inventoryStatus, setInventoryStatus] = useState('idle');
   const [documentUploadBusy, setDocumentUploadBusy] = useState({});
   const [supportSending, setSupportSending] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -1356,6 +1357,7 @@ function loadSavedBookingFromWebsite() {
     if (!userId) return;
     if (!force && loadedPortalSectionsRef.current.has(section)) return;
     if (portalSectionLoadsRef.current.has(section)) return portalSectionLoadsRef.current.get(section);
+    if (section === 'inventory') setInventoryStatus('loading');
     setPortalHealth((current) => ({ ...current, refreshing: true }));
 
     const request = (async () => {
@@ -1369,7 +1371,10 @@ function loadSavedBookingFromWebsite() {
           withRequestDeadline(vehiclesQuery.order('created_at', { ascending: false }), 'Fleet'),
           withRequestDeadline(supabase.rpc('get_vehicle_booking_blocks'), 'Availability'),
         ]);
-        if (vehiclesResult.data) setVehicles(vehiclesResult.data);
+        if (vehiclesResult.data) {
+          setVehicles(vehiclesResult.data);
+          preloadVehicleImages(vehiclesResult.data);
+        }
         if (fleetRentalsResult.data) setFleetRentals(fleetRentalsResult.data);
         results = [['Fleet', vehiclesResult], ['Availability', fleetRentalsResult]];
       } else if (section === 'billing') {
@@ -1408,8 +1413,19 @@ function loadSavedBookingFromWebsite() {
         results = [['Rental exceptions', result]];
       }
       const errors = recordPortalResults(results);
+      if (section === 'inventory') setInventoryStatus(errors.length ? 'error' : 'ready');
       if (!errors.length) loadedPortalSectionsRef.current.add(section);
-    })().finally(() => portalSectionLoadsRef.current.delete(section));
+    })().catch((error) => {
+      if (section === 'inventory') setInventoryStatus('error');
+      setPortalHealth((current) => ({
+        ...current,
+        refreshing: false,
+        errors: [
+          ...(current.errors || []).filter((item) => item.label !== (section === 'inventory' ? 'Fleet' : section)),
+          { label: section === 'inventory' ? 'Fleet' : section, message: userFacingPortalError(error, 'This section could not load.') },
+        ],
+      }));
+    }).finally(() => portalSectionLoadsRef.current.delete(section));
 
     portalSectionLoadsRef.current.set(section, request);
     return request;
@@ -1438,7 +1454,11 @@ function loadSavedBookingFromWebsite() {
     setPortalDataReady(true);
     if (!silent) setLoading(false);
 
-    const secondarySections = checkoutIntent ? ['billing', 'inventory', 'exceptions'] : ['billing', 'exceptions'];
+    const hasOpenReservation = (rentalsResult.data || []).some((rental) =>
+      BLOCKING_RENTAL_STATUSES.includes(String(rental.status || '').toLowerCase())
+    );
+    if (checkoutIntent || !hasOpenReservation) void loadPortalSection('inventory', userId);
+    const secondarySections = ['billing', 'exceptions'];
     const loadSecondary = () => secondarySections.forEach((section) => {
       void loadPortalSection(section, userId);
     });
@@ -1756,14 +1776,22 @@ async function verifyPhoneCode(options = {}) {
     if (currentRental) return currentRental;
 
     if (!isValidBirthDate(profileForm.date_of_birth)) {
-      notify('Add and save your date of birth before creating a reservation.');
-      setActiveTab('profile');
+      setWizardReminder({
+        title: 'Confirm your date of birth',
+        text: 'Return to the renter-details step and enter a valid date of birth.',
+      });
+      setWizardStep(0);
+      setWizardOpen(true);
       return null;
     }
 
     if (!selectedVehicle) {
-      notify('Choose a vehicle first.');
+      setWizardReminder({
+        title: 'Select a vehicle to continue',
+        text: 'Choose one of the available vehicles shown below, then create the reservation.',
+      });
       setWizardStep(1);
+      setWizardOpen(true);
       return null;
     }
 
@@ -2496,9 +2524,13 @@ async function verifyPhoneCode(options = {}) {
 
   async function beginWizard() {
     if (allGuidedStepsComplete) {
-      notify('All guided steps are complete.');
+      notify('Your reservation is complete.');
       return;
     }
+    if (session?.user?.id && (!currentRental || getNextGuidedStep() === 1)) {
+      void loadPortalSection('inventory', session.user.id, { force: inventoryStatus === 'error' });
+    }
+    setNotice(null);
     setWizardStep(getNextGuidedStep());
     setWizardOpen(true);
   }
@@ -2817,7 +2849,10 @@ async function verifyPhoneCode(options = {}) {
     }
 
     if (wizardStep === 1 && !selectedVehicle && !currentRental) {
-      notify('Choose an available vehicle before continuing.');
+      setWizardReminder({
+        title: 'Select a vehicle to continue',
+        text: 'Choose one of the available vehicles shown below, then create the reservation.',
+      });
       return;
     }
 
@@ -2929,7 +2964,7 @@ async function verifyPhoneCode(options = {}) {
       ]
     : [
         { key: 'overview', label: 'Overview', icon: CalendarDays },
-        { key: 'guided', label: 'Guided Steps', icon: CheckCircle2 },
+        { key: 'guided', label: 'Reservation', icon: CheckCircle2 },
         { key: 'messages', label: 'Messages', icon: MessageCircle },
       ];
 
@@ -3198,7 +3233,7 @@ async function verifyPhoneCode(options = {}) {
               <MapPin size={18} /> Location
             </button>
             {!paymentPaid && <button className="primary-btn" onClick={beginWizard}>
-              <CheckCircle2 size={18} /> {returningFromStripeIdentity ? 'RESUME CHECKOUT' : 'Continue Guided Steps'}
+              <CheckCircle2 size={18} /> {currentRental ? 'Resume Reservation' : 'Create Reservation'}
             </button>}
           </div>
         </header>
@@ -3217,18 +3252,6 @@ async function verifyPhoneCode(options = {}) {
 
         {activeTab === 'overview' && (
           <>
-            {!allGuidedStepsComplete && (
-              <section className="panel guided-resume-card" aria-label="Resume required rental steps">
-                <div>
-                  <p className="eyebrow">Your next required step</p>
-                  <h3>{wizardSteps[getNextGuidedStep()]?.title || 'Continue your rental'}</h3>
-                  <p className="muted">Your progress is saved. Resume here—there is no need to open the menu.</p>
-                </div>
-                <button className="primary-btn big-action" type="button" onClick={beginWizard}>
-                  <CheckCircle2 size={20} /> {returningFromStripeIdentity ? 'RESUME CHECKOUT' : 'Resume Guided Steps'}
-                </button>
-              </section>
-            )}
             {currentEmergencyException && <section className={`customer-exception-notice ${new Date(currentEmergencyException.expires_at).getTime() <= Date.now() ? 'expired' : ''}`}>
               <AlertTriangle size={21}/>
               <div><strong>Rental released with temporary exceptions</strong><span>{(currentEmergencyException.exception_scopes || []).map(prettyStatus).join(', ')} remain incomplete. Complete them as soon as possible. Exception expires {new Date(currentEmergencyException.expires_at).toLocaleString()}.</span></div>
@@ -3245,7 +3268,7 @@ async function verifyPhoneCode(options = {}) {
                 <p>
                   {allGuidedStepsComplete
                     ? 'All required steps are complete. This is the active vehicle and trip currently recorded by Rent Me CT.'
-                    : 'Complete your phone verification, vehicle, documents, agreement, and payment through the guided flow.'}
+                    : 'Complete your phone verification, vehicle, documents, agreement, and payment to finish your reservation.'}
                 </p>
 
                 <div className="reservation-summary compact-summary">
@@ -3254,13 +3277,6 @@ async function verifyPhoneCode(options = {}) {
                   <SummaryItem label="Vehicle" value={currentRental?.vehicles?.name || selectedVehicle?.name || 'Not selected yet'} />
                   <SummaryItem label="Status" value={prettyStatus(currentRental?.status || 'pending setup')} />
                 </div>
-              </div>
-              <div className="hero-cta-stack">
-                {!currentRental && (
-                  <button className="primary-btn" onClick={hasCompletedRental ? startNewReservation : createReservationIfNeeded} disabled={reservationSaving}>
-                    {reservationSaving ? 'Creating Reservation...' : hasCompletedRental ? 'Create New Reservation' : 'Create Reservation'}
-                  </button>
-                )}
               </div>
             </section>
 
@@ -3519,11 +3535,11 @@ async function verifyPhoneCode(options = {}) {
 
         {activeTab === 'guided' && (
           <section className="panel centered-panel">
-            <p className="eyebrow">Guided Rental Flow</p>
-            <h3>One Step at a Time</h3>
-            <p className="muted">{allGuidedStepsComplete ? 'Every required rental step is complete.' : `Your progress is saved. Your next step is ${wizardSteps[getNextGuidedStep()]?.title || 'the rental checklist'}.`}</p>
+            <p className="eyebrow">Reservation</p>
+            <h3>{currentRental ? 'Continue Your Reservation' : 'Create Your Reservation'}</h3>
+            <p className="muted">{allGuidedStepsComplete ? 'Your reservation is complete.' : `Your progress is saved. Your next step is ${wizardSteps[getNextGuidedStep()]?.title || 'the reservation checklist'}.`}</p>
             <button className="primary-btn big-action" onClick={beginWizard}>
-              <CheckCircle2 size={20} /> {allGuidedStepsComplete ? 'Guided Steps Complete' : returningFromStripeIdentity ? 'RESUME CHECKOUT' : 'Resume Guided Steps'}
+              <CheckCircle2 size={20} /> {allGuidedStepsComplete ? 'Reservation Complete' : currentRental ? 'Resume Reservation' : 'Create Reservation'}
             </button>
           </section>
         )}
@@ -3722,7 +3738,7 @@ async function verifyPhoneCode(options = {}) {
       )}
 
       {wizardOpen && (
-        <FlowStepErrorBoundary label="guided rental steps" onClose={() => setWizardOpen(false)}>
+        <FlowStepErrorBoundary label="reservation" onClose={() => setWizardOpen(false)}>
           <WizardModal
             wizardSteps={wizardSteps}
             wizardStep={wizardStep}
@@ -3750,12 +3766,13 @@ async function verifyPhoneCode(options = {}) {
           phoneVerified={phoneVerified}
           bookingFlowTestMode={bookingFlowTestMode}
           checkoutVehicleChoices={checkoutVehicleChoices}
+          inventoryStatus={inventoryStatus}
+          retryInventory={() => loadPortalSection('inventory', session.user.id, { force: true })}
           reservationForm={reservationForm}
           setReservationForm={setReservationForm}
           bookingPolicy={bookingPolicy}
           selectedVehicle={selectedVehicle}
           estimate={estimate}
-          createReservationIfNeeded={createReservationIfNeeded}
           reservationSaving={reservationSaving}
           startStripeCheckout={startStripeCheckout}
           paymentSaving={paymentSaving}
@@ -3965,12 +3982,13 @@ function WizardModal({
   phoneVerified,
   bookingFlowTestMode,
   checkoutVehicleChoices,
+  inventoryStatus,
+  retryInventory,
   reservationForm,
   setReservationForm,
   bookingPolicy,
   selectedVehicle,
   estimate,
-  createReservationIfNeeded,
   reservationSaving,
   startStripeCheckout,
   paymentSaving,
@@ -4015,6 +4033,9 @@ function WizardModal({
   const showCorrectionName = ['full_name', 'identity_details'].includes(identityCorrectionTarget);
   const showCorrectionBirthday = ['date_of_birth', 'identity_details'].includes(identityCorrectionTarget);
   const bookingWindowState = getCustomerBookingWindow(reservationForm, bookingPolicy);
+  const waitingForVehicleSelection = wizardStep === 1 && !currentRental && !selectedVehicle;
+  const vehicleInventoryUnavailable = wizardStep === 1 && !currentRental && inventoryStatus !== 'ready';
+  const wizardPrimaryDisabled = reservationSaving || waitingForVehicleSelection || vehicleInventoryUnavailable;
 
   useEffect(() => {
     wizardBodyRef.current?.scrollTo({ top: 0, behavior: 'auto' });
@@ -4039,7 +4060,7 @@ function WizardModal({
             <h2 id="guided-rental-step-title"><Icon size={24} /> {step.title}</h2>
             <span>{step.status}</span>
           </div>
-          <button className="wizard-close" type="button" aria-label="Close guided steps" onClick={() => setWizardOpen(false)}>
+          <button className="wizard-close" type="button" aria-label="Close reservation" onClick={() => setWizardOpen(false)}>
             <X size={20} />
           </button>
         </div>
@@ -4208,7 +4229,29 @@ function WizardModal({
                   : bookingWindowState.error}</span>
               </div>
 
-              <div className="vehicle-picker-grid">
+              {inventoryStatus === 'loading' && checkoutVehicleChoices.length === 0 && (
+                <div className="vehicle-picker-status" role="status">
+                  <span className="loading-spinner" aria-hidden="true" />
+                  <strong>Loading available vehicles…</strong>
+                </div>
+              )}
+
+              {inventoryStatus === 'error' && checkoutVehicleChoices.length === 0 && (
+                <div className="vehicle-picker-status error" role="alert">
+                  <strong>Vehicles could not load.</strong>
+                  <span>Try again without closing your reservation.</span>
+                  <button className="secondary-btn" type="button" onClick={retryInventory}>Retry Vehicles</button>
+                </div>
+              )}
+
+              {inventoryStatus === 'ready' && checkoutVehicleChoices.length === 0 && (
+                <div className="vehicle-picker-status" role="status">
+                  <strong>No vehicles are currently listed.</strong>
+                  <span>Please contact Rent Me CT for assistance.</span>
+                </div>
+              )}
+
+              {checkoutVehicleChoices.length > 0 && <div className="vehicle-picker-grid">
                 {checkoutVehicleChoices.map((vehicle) => {
                   const selected = reservationForm.vehicleId === vehicle.id;
                   const bookable = bookingWindowState.valid && isVehicleAvailableForDates(vehicle, reservationForm, fleetRentals, currentRental?.id);
@@ -4258,7 +4301,18 @@ function WizardModal({
                       <span className="vehicle-picker-image">
                         {isBookingFlowTestVehicle(vehicle)
                           ? <span className="test-vehicle-placeholder"><Car size={28} /><small>No photo — test only</small></span>
-                          : <img src={getVehicleImage(vehicle)} alt={`${vehicle.name} rental vehicle`} width="640" height="400" loading="lazy" />}
+                          : <img
+                              src={getVehicleImage(vehicle)}
+                              alt={`${vehicle.name} rental vehicle`}
+                              width="640"
+                              height="400"
+                              loading="eager"
+                              decoding="async"
+                              onError={(event) => {
+                                const fallback = getVehicleImageFallback(vehicle, 0);
+                                if (event.currentTarget.src !== fallback) event.currentTarget.src = fallback;
+                              }}
+                            />}
                       </span>
                       <span className="vehicle-picker-info">
                         <strong>{vehicle.name}</strong>
@@ -4269,7 +4323,7 @@ function WizardModal({
                     </button>
                   );
                 })}
-              </div>
+              </div>}
 
               {estimate && (
                 <div className="invoice-row">
@@ -4279,9 +4333,6 @@ function WizardModal({
                 </div>
               )}
 
-              <button className="primary-btn" onClick={createReservationIfNeeded} disabled={reservationSaving || Boolean(currentRental)}>
-                {currentRental ? 'Reservation Created' : reservationSaving ? 'Creating Reservation...' : 'Create Reservation'}
-              </button>
             </div>
           )}
 
@@ -4493,8 +4544,17 @@ function WizardModal({
               className="primary-btn"
               type="button"
               onClick={wizardStep === 5 && !agreementSigned ? jumpToWizardSignature : nextWizardStep}
+              disabled={wizardPrimaryDisabled}
             >
-              {wizardStep === wizardSteps.length - 1
+              {wizardStep === 1 && !currentRental
+                ? reservationSaving
+                  ? 'Creating Reservation…'
+                  : inventoryStatus === 'loading' || inventoryStatus === 'idle'
+                    ? 'Loading Vehicles…'
+                    : !selectedVehicle
+                      ? 'Select a Vehicle'
+                      : 'Create Reservation'
+                : wizardStep === wizardSteps.length - 1
                 ? 'Finish'
                 : wizardStep === 5
                   ? agreementSigned ? 'Continue to secure payment' : 'Jump to signature'
@@ -4981,7 +5041,7 @@ class FlowStepErrorBoundary extends React.Component {
             <h2>This step needs to reconnect</h2>
             <p>Your rental progress was not erased. Close this step and resume it from the dashboard.</p>
             <div className="button-row">
-              <button type="button" className="primary-btn" onClick={this.props.onClose}>Return to guided steps</button>
+              <button type="button" className="primary-btn" onClick={this.props.onClose}>Return to reservation</button>
               <button type="button" className="secondary-btn" onClick={() => window.location.reload()}>Refresh portal</button>
             </div>
           </div>
@@ -6516,6 +6576,15 @@ function getVehicleImage(vehicle) {
   );
 
   return fallbackKey ? VEHICLE_IMAGES_BY_KEY[fallbackKey] : Object.values(VEHICLE_IMAGES_BY_KEY)[0];
+}
+
+function preloadVehicleImages(vehicles) {
+  if (typeof window === 'undefined' || typeof window.Image !== 'function') return;
+  (vehicles || []).slice(0, 16).forEach((vehicle) => {
+    const image = new window.Image();
+    image.decoding = 'async';
+    image.src = getVehicleImage(vehicle);
+  });
 }
 
 function getVehicleImages(vehicle) {
