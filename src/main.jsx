@@ -1663,32 +1663,66 @@ function loadSavedBookingFromWebsite() {
     return savedProfile;
   }
 
-  async function sendPhoneCode() {
-  if (!profileForm.phone.trim()) {
-    notify('Enter the phone number that should receive the verification code.');
-    return;
+  function updateProfilePhone(nextPhone) {
+    const savedPhone = normalizeUSPhone(profile?.phone);
+    const nextNormalizedPhone = normalizeUSPhone(nextPhone);
+    setWizardReminder(null);
+    setPhoneCode('');
+    setPhoneVerified(Boolean(
+      profile?.phone_verified &&
+      savedPhone &&
+      nextNormalizedPhone === savedPhone
+    ));
+    setProfileForm((current) => ({
+      ...current,
+      phone: nextPhone,
+      sms_transactional_opt_in: false,
+    }));
   }
 
-  setSendingCode(true);
-  try {
-    const { data, error } = await supabase.functions.invoke('send-phone-code', {
-      body: { phone: normalizeUSPhone(profileForm.phone) },
-    });
-    if (error) {
-      notify(await functionInvokeErrorMessage(error, 'Failed to send verification code.'));
+  async function sendPhoneCode() {
+    if (!normalizeUSPhone(profileForm.phone)) {
+      notify('Enter a valid 10-digit US phone number to receive the verification code.');
       return;
     }
-    if (data?.sent === false || data?.error) {
-      notify(data.error || 'Failed to send verification code.');
-      return;
+
+    setSendingCode(true);
+    try {
+      // Twilio Verify only sends to the phone stored on the authenticated profile.
+      // Save the form first so a new or corrected number cannot dead-end behind the
+      // removed Save Profile button.
+      const savedProfile = await saveProfileDetails(false);
+      if (!savedProfile) return;
+
+      const savedPhone = normalizeUSPhone(savedProfile.phone);
+      if (!savedPhone) {
+        notify('Your phone number could not be saved. Check it and try again.');
+        return;
+      }
+      if (savedProfile.phone_verified) {
+        setPhoneVerified(true);
+        notify('This phone number is already verified.', 'success');
+        return;
+      }
+
+      const { data, error } = await supabase.functions.invoke('send-phone-code', {
+        body: { phone: savedPhone },
+      });
+      if (error) {
+        notify(await functionInvokeErrorMessage(error, 'Failed to send verification code.'));
+        return;
+      }
+      if (data?.sent === false || data?.error) {
+        notify(data.error || 'Failed to send verification code.');
+        return;
+      }
+      notify('Verification code sent. Enter the code from the text message below.', 'success');
+    } catch (error) {
+      notify(error?.message || 'Failed to send verification code.');
+    } finally {
+      setSendingCode(false);
     }
-    notify('Verification code sent.');
-  } catch (error) {
-    notify(error?.message || 'Failed to send verification code.');
-  } finally {
-    setSendingCode(false);
   }
-}
 
 async function verifyPhoneCode(options = {}) {
   const successMessage = typeof options?.successMessage === 'string'
@@ -3084,6 +3118,7 @@ async function verifyPhoneCode(options = {}) {
           emailVerified={emailVerified}
           phoneCode={phoneCode}
           setPhoneCode={setPhoneCode}
+          updateProfilePhone={updateProfilePhone}
           sendPhoneCode={sendPhoneCode}
           verifyPhoneCode={async () => {
             const verified = await verifyPhoneCode({ successMessage: 'Phone verified. Continuing…' });
@@ -3756,6 +3791,7 @@ async function verifyPhoneCode(options = {}) {
           setIdentityCorrectionTarget={setIdentityCorrectionTarget}
           phoneCode={phoneCode}
           setPhoneCode={setPhoneCode}
+          updateProfilePhone={updateProfilePhone}
           sendPhoneCode={sendPhoneCode}
           verifyPhoneCode={async () => {
             const verified = await verifyPhoneCode({ successMessage: 'Phone verified. Continuing…' });
@@ -3975,6 +4011,7 @@ function WizardModal({
   setIdentityCorrectionTarget,
   phoneCode,
   setPhoneCode,
+  updateProfilePhone,
   sendPhoneCode,
   verifyPhoneCode,
   sendingCode,
@@ -4138,8 +4175,7 @@ function WizardModal({
                   placeholder="Example: 8605551234"
                   value={profileForm.phone}
                   onChange={(e) => {
-                    setWizardReminder(null);
-                    setProfileForm({ ...profileForm, phone: e.target.value, sms_transactional_opt_in: false });
+                    updateProfilePhone(e.target.value);
                   }}
                 /></label>
 
@@ -4148,8 +4184,9 @@ function WizardModal({
                 <SmsVerificationDisclosure />
 
                 <button className="primary-btn" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>
-                  {phoneVerified ? 'Phone Verified' : sendingCode ? 'Sending...' : 'Send Verification Code'}
+                  {phoneVerified ? 'Phone Verified' : sendingCode ? 'Saving & sending...' : 'Save Details & Send Verification Code'}
                 </button>
+                {!phoneVerified && <small>Your renter details and phone number are saved automatically before the code is sent.</small>}
 
                 {!phoneVerified && (
                   <>
@@ -5404,6 +5441,7 @@ function PreviewCheckout({
   emailVerified,
   phoneCode,
   setPhoneCode,
+  updateProfilePhone,
   sendPhoneCode,
   verifyPhoneCode,
   sendingCode,
@@ -5572,14 +5610,15 @@ function PreviewCheckout({
               {!correctingIdentity && <>
                 <label className="preview-full-field"><span>Email</span><input value={userEmail} disabled /></label>
                 <label className="preview-full-field"><span>What will you use the vehicle for?</span><textarea maxLength="500" value={profileForm.intended_vehicle_use} onChange={(event) => setProfileForm({ ...profileForm, intended_vehicle_use: event.target.value })} placeholder="Personal transportation, work, family trip…" /></label>
-                <label className="preview-full-field"><span>Mobile number</span><input value={profileForm.phone} onChange={(event) => setProfileForm({ ...profileForm, phone: event.target.value, sms_transactional_opt_in: false })} placeholder="(860) 555-0123" /></label>
+                <label className="preview-full-field"><span>Mobile number</span><input value={profileForm.phone} onChange={(event) => updateProfilePhone(event.target.value)} placeholder="(860) 555-0123" /></label>
                 <div className="preview-full-field"><EmailMarketingPreference profileForm={profileForm} setProfileForm={setProfileForm} /></div>
                 <div className="preview-full-field"><SmsTransactionalPreference profileForm={profileForm} setProfileForm={setProfileForm} /></div>
                 <div className="preview-full-field"><SmsVerificationDisclosure /></div>
               </>}
             </div>
             {!correctingIdentity && <div className="preview-inline-actions">
-              <button className="preview-secondary-button" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>{phoneVerified ? 'Phone verified' : sendingCode ? 'Sending…' : 'Send verification code'}</button>
+              <button className="preview-secondary-button" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>{phoneVerified ? 'Phone verified' : sendingCode ? 'Saving & sending…' : 'Save details & send verification code'}</button>
+              {!phoneVerified && <small>Your renter details and phone number are saved automatically before the code is sent.</small>}
               {!phoneVerified && <><input className="preview-code-input" inputMode="numeric" autoComplete="one-time-code" value={phoneCode} onChange={(event) => setPhoneCode(event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="Verification code" /><button className="preview-primary-button" type="button" onClick={verifyPhoneCode} disabled={verifyingCode}>{verifyingCode ? 'Verifying…' : 'Verify & continue'}</button></>}
             </div>}
             {(correctingIdentity || phoneVerified) && <button className="preview-primary-button" type="button" onClick={continueContact} disabled={reservationSaving || checkoutExpired}>{reservationSaving ? 'Continuing…' : correctingIdentity ? 'Save correction & return to Identity' : 'Continue'} <ChevronRight size={18} /></button>}
