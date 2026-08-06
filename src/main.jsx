@@ -236,19 +236,11 @@ function App() {
   const [confirmedBirthDate, setConfirmedBirthDate] = useState('');
   const [identityCorrectionTarget, setIdentityCorrectionTarget] = useState('');
   const birthDateConfirmed = Boolean(profileForm.date_of_birth && confirmedBirthDate === profileForm.date_of_birth);
-  const profileComplete = Boolean(
-    hasFirstAndLastName(profileForm.full_name) &&
-    profileForm.phone.trim() &&
-    profileForm.intended_vehicle_use.trim() &&
-    isValidBirthDate(profileForm.date_of_birth) &&
-    birthDateConfirmed
-  );
-
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardStep, setWizardStep] = useState(0);
   const [wizardReminder, setWizardReminder] = useState(null);
   const [phoneVerified, setPhoneVerified] = useState(false);
-  const contactStepCompleted = Boolean(profileComplete && phoneVerified);
+  const contactStepCompleted = Boolean(profile?.id && phoneVerified);
   const [phoneCode, setPhoneCode] = useState('');
   const [sendingCode, setSendingCode] = useState(false);
   const [verifyingCode, setVerifyingCode] = useState(false);
@@ -593,7 +585,7 @@ function App() {
       });
 
       if (error) {
-        notify(userFacingPortalError(error, 'We could not connect this booking to your account yet. Please tap Save & continue again.'));
+        notify(userFacingPortalError(error, 'We could not connect this booking to your account yet. Please tap Continue again.'));
       }
     }
 
@@ -1651,27 +1643,11 @@ function loadSavedBookingFromWebsite() {
     return savedProfile;
   }
 
-  async function saveProfile(event) {
-    if (event) event.preventDefault();
-    return saveProfileDetails(true);
-  }
-
   async function sendPhoneCode() {
-  const missingContactFields = [
-    !hasFirstAndLastName(profileForm.full_name) && 'full legal first and last name exactly as shown on your government ID',
-    !isValidBirthDate(profileForm.date_of_birth) && 'valid date of birth',
-    isValidBirthDate(profileForm.date_of_birth) && !birthDateConfirmed && 'birthday confirmation',
-    !profileForm.intended_vehicle_use.trim() && 'intended vehicle use',
-    !profileForm.phone.trim() && 'phone number',
-  ].filter(Boolean);
-
-  if (missingContactFields.length) {
-    notify(`Complete these contact fields before requesting a code: ${missingContactFields.join(', ')}.`);
+  if (!profileForm.phone.trim()) {
+    notify('Enter the phone number that should receive the verification code.');
     return;
   }
-
-  const savedProfile = await saveProfileDetails(false);
-  if (!savedProfile) return;
 
   setSendingCode(true);
   try {
@@ -1752,13 +1728,13 @@ async function verifyPhoneCode(options = {}) {
 }
 
   async function continuePreviewContact() {
-    const savedProfile = await saveProfileDetails(false);
-    if (!savedProfile) return;
-    if (!savedProfile.phone_verified) {
+    if (!phoneVerified) {
       notify('Verify your phone number to continue.');
       return;
     }
     if (identityCorrectionTarget) {
+      const savedProfile = await saveProfileDetails(false);
+      if (!savedProfile) return;
       setIdentityCorrectionTarget('');
       setPreviewCheckoutSection('identity');
       notify('Your corrected identity details are saved. Your email and phone remain verified.', 'success');
@@ -2802,20 +2778,20 @@ async function verifyPhoneCode(options = {}) {
 
   async function nextWizardStep(options = {}) {
     const phoneJustVerified = options?.phoneJustVerified === true;
-    const contactReady = Boolean(profileComplete && (phoneVerified || phoneJustVerified));
+    const contactReady = Boolean(profile?.id && (phoneVerified || phoneJustVerified));
 
     if (wizardStep === 0 && !contactReady) {
-      notify('Save your renter details and verify your phone number before continuing.');
+      notify('Verify your phone number before continuing.');
       return;
     }
 
     if (wizardStep === 0) {
-      const savedProfile = await saveProfileDetails(false);
-      if (!savedProfile?.phone_verified) {
-        notify('Verify the saved phone number before continuing.');
-        return;
-      }
       if (identityCorrectionTarget) {
+        const savedProfile = await saveProfileDetails(false);
+        if (!savedProfile?.phone_verified) {
+          notify('Verify the saved phone number before continuing.');
+          return;
+        }
         setIdentityCorrectionTarget('');
         setWizardStep(2);
         notify('Your corrected identity details are saved. Your email and phone remain verified.', 'success');
@@ -3530,71 +3506,13 @@ async function verifyPhoneCode(options = {}) {
             {paymentPaid && <section className="panel" id="profile">
               <p className="eyebrow">Profile</p>
               <h3>Customer Information</h3>
-              <form className="portal-form" onSubmit={saveProfile}>
-                <LegalNameFields
-                  profileForm={profileForm}
-                  setProfileForm={setProfileForm}
-                  identityVerified={identityVerified}
-                />
-                {identityVerified && <small className="identity-name-lock-note">Identity verified. Your legal name and birthday are locked so returning rentals can reuse the approved Stripe Identity check.</small>}
-                <BirthdayInput
-                  idPrefix="profile-birthday"
-                  value={profileForm.date_of_birth}
-                  onChange={(dateOfBirth) => setProfileForm((current) => ({ ...current, date_of_birth: dateOfBirth }))}
-                  confirmed={birthDateConfirmed}
-                  onConfirmedChange={(isConfirmed) => setConfirmedBirthDate(isConfirmed ? profileForm.date_of_birth : '')}
-                  disabled={identityVerified}
-                />
-                {profileForm.date_of_birth && isValidBirthDate(profileForm.date_of_birth) && <small>{isCustomerUnder25(profileForm.date_of_birth) ? 'Under 25: the configured deposit adjustment and rental markup apply.' : 'Age 25 or older: the selected vehicle deposit applies.'}</small>}
-                <label><span>Phone number</span><input
-                  type="tel"
-                  autoComplete="tel"
-                  placeholder="Example: 8605551234"
-                  value={profileForm.phone}
-                  onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value, sms_transactional_opt_in: false })}
-                  disabled={phoneLockedForRental}
-                /></label>
-                {phoneLockedForRental && <small className="identity-name-lock-note">Your verified phone number is locked while this approved rental is active so extension and payment notices continue to reach the same number. Contact Rent Me CT if it must be changed.</small>}
-                <label>
-                  <span>What will you use the vehicle for?</span>
-                  <textarea
-                    placeholder="Example: commuting to work, a family trip, or local personal errands"
-                    maxLength="500"
-                    value={profileForm.intended_vehicle_use}
-                    onChange={(e) => setProfileForm({ ...profileForm, intended_vehicle_use: e.target.value })}
-                    required
-                  />
-                  <small>{profileForm.intended_vehicle_use.length}/500 characters</small>
-                </label>
-                <EmailMarketingPreference profileForm={profileForm} setProfileForm={setProfileForm} />
-                <SmsTransactionalPreference profileForm={profileForm} setProfileForm={setProfileForm} />
-                <SmsVerificationDisclosure />
-               <div className="phone-verify-box">
-                <div className="button-row">
-                  <button className="primary-btn" type="submit">Save Profile</button>
-
-                  <button className="secondary-btn" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified || phoneLockedForRental}>
-                    {phoneVerified ? 'Phone Verified' : sendingCode ? 'Sending...' : 'Send Code'}
-                  </button>
-                </div>
-
-                {!phoneVerified && !phoneLockedForRental && (
-                  <div className="phone-code-row">
-                    <input
-                      placeholder="Enter verification code"
-                      inputMode="numeric"
-                      autoComplete="one-time-code"
-                      value={phoneCode}
-                      onChange={(e) => setPhoneCode(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                    />
-
-                    <button className="primary-btn" type="button" onClick={verifyPhoneCode} disabled={verifyingCode}>
-                      {verifyingCode ? 'Verifying...' : 'Verify Phone'}
-                    </button>
-                  </div>
-                     )}
-                  </div>
-              </form>
+              <div className="reservation-summary compact-summary">
+                <SummaryItem label="Name" value={profile?.full_name || profileForm.full_name || 'On file'} />
+                <SummaryItem label="Email" value={profile?.email || userEmail || 'On file'} />
+                <SummaryItem label="Phone" value={profile?.phone || profileForm.phone || 'On file'} />
+                <SummaryItem label="Date of birth" value={profile?.date_of_birth ? new Date(`${profile.date_of_birth}T00:00:00`).toLocaleDateString('en-US') : profileForm.date_of_birth || 'On file'} />
+              </div>
+              <p className="muted">These details were created during booking. Contact Rent Me CT if a legal identity or phone correction is required.</p>
             </section>}
           </>
         )}
@@ -5601,10 +5519,10 @@ function PreviewCheckout({
               </>}
             </div>
             {!correctingIdentity && <div className="preview-inline-actions">
-              <button className="preview-secondary-button" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>{phoneVerified ? 'Phone verified' : sendingCode ? 'Saving & sending…' : 'Save details & send code'}</button>
+              <button className="preview-secondary-button" type="button" onClick={sendPhoneCode} disabled={sendingCode || phoneVerified}>{phoneVerified ? 'Phone verified' : sendingCode ? 'Sending…' : 'Send verification code'}</button>
               {!phoneVerified && <><input className="preview-code-input" inputMode="numeric" autoComplete="one-time-code" value={phoneCode} onChange={(event) => setPhoneCode(event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="Verification code" /><button className="preview-primary-button" type="button" onClick={verifyPhoneCode} disabled={verifyingCode}>{verifyingCode ? 'Verifying…' : 'Verify & continue'}</button></>}
             </div>}
-            {(correctingIdentity || phoneVerified) && <button className="preview-primary-button" type="button" onClick={continueContact} disabled={reservationSaving || checkoutExpired}>{reservationSaving ? 'Saving…' : correctingIdentity ? 'Save correction & return to Identity' : currentRental ? 'Continue' : 'Save & continue'} <ChevronRight size={18} /></button>}
+            {(correctingIdentity || phoneVerified) && <button className="preview-primary-button" type="button" onClick={continueContact} disabled={reservationSaving || checkoutExpired}>{reservationSaving ? 'Continuing…' : correctingIdentity ? 'Save correction & return to Identity' : 'Continue'} <ChevronRight size={18} /></button>}
           </PreviewCheckoutSection>
 
           <PreviewCheckoutSection sectionKey="identity" number="2" title="Identity verification" summary={identityVerified ? 'Verified once and saved for returning rentals' : identityStatus === 'processing' ? 'Verification processing' : 'Government ID and selfie'} completed={identityVerified} open={activeSection === 'identity'} onOpen={() => setActiveSection('identity')}>
