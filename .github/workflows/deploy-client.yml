@@ -40,6 +40,9 @@ jobs:
       - name: Audit authenticated render scopes
         run: npm run audit
 
+      - name: Run client workflow tests
+        run: npm test
+
       - name: Build
         run: npm run build
 
