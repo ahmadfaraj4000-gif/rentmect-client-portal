@@ -1625,6 +1625,17 @@ function loadSavedBookingFromWebsite() {
     });
 
     if (error) {
+      if (isVerifiedActiveRentalPhoneLock(error) && profile?.phone) {
+        setProfileForm((current) => ({
+          ...current,
+          phone: profile.phone,
+          sms_transactional_opt_in: Boolean(profile.sms_transactional_opt_in),
+        }));
+        setPhoneCode('');
+        setPhoneVerified(Boolean(profile.phone_verified));
+        notify('This verified phone number is locked while your rental is active. We restored the verified number already on your account. Contact Rent Me CT if it must be changed.');
+        return null;
+      }
       notify(userFacingPortalError(error, 'Your renter details could not be saved. Please try again.'));
       return null;
     }
@@ -4963,8 +4974,22 @@ function userFacingPortalError(error, fallback = 'Something went wrong. Please t
   if (/already uses this email|profiles_normalized_email_unique_idx/i.test(message)) {
     return 'This email is already linked to a Rent Me CT account. Sign in to that account or use Forgot Password. Your renter details were not changed.';
   }
+  if (isVerifiedActiveRentalPhoneLock(error)) {
+    return 'This verified phone number is locked while your rental is active. Contact Rent Me CT to change it safely, or continue using the verified number already on the account.';
+  }
   if (/duplicate key|already exists/i.test(message)) return 'That update was already recorded. Refresh to see the latest status.';
   return fallback;
+}
+
+function isVerifiedActiveRentalPhoneLock(error) {
+  const message = [
+    error?.message,
+    error?.details,
+    error?.hint,
+    error?.code,
+    typeof error === 'string' ? error : '',
+  ].filter(Boolean).join(' ').trim();
+  return /verified phone number is locked while an approved rental is active/i.test(message);
 }
 
 function customerSafeMessage(message, fallback = 'Something went wrong. Please try again.') {

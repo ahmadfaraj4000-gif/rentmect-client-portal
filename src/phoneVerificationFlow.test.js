@@ -39,3 +39,15 @@ test('both booking contact surfaces explain that phone saving is automatic', () 
   );
   assert.doesNotMatch(source, />\s*Save Profile\s*</);
 });
+
+test('a verified active-rental phone lock has actionable customer guidance', () => {
+  assert.match(source, /verified phone number is locked while an approved rental is active/i);
+  assert.match(source, /We restored the verified number already on your account/);
+  const saveProfileSource = source.slice(
+    source.indexOf('async function saveProfileDetails'),
+    source.indexOf('function updateProfilePhone'),
+  );
+  assert.match(saveProfileSource, /phone: profile\.phone/);
+  assert.match(saveProfileSource, /setPhoneCode\(''\)/);
+  assert.match(saveProfileSource, /setPhoneVerified\(Boolean\(profile\.phone_verified\)\)/);
+});
