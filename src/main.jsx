@@ -851,12 +851,15 @@ function App() {
     return documents.filter((document) => document.rental_id === currentRental.id);
   }, [documents, currentRental?.id]);
   const reusableLicenseDocument = useMemo(() => latestDocument(documents, 'license'), [documents]);
-  const currentInsuranceDocument = useMemo(() => latestDocument(currentRentalDocuments, 'insurance'), [currentRentalDocuments]);
+  const currentInsurancePacket = useMemo(() => latestInsurancePacket(currentRentalDocuments), [currentRentalDocuments]);
+  const currentInsuranceDocument = currentInsurancePacket?.representative
+    ? { ...currentInsurancePacket.representative, status: currentInsurancePacket.status }
+    : null;
   const currentRentalLicenseDocument = useMemo(() => latestDocument(currentRentalDocuments, 'license'), [currentRentalDocuments]);
   const documentsForActiveRental = useMemo(() => {
     const license = reusableLicenseDocument || currentRentalLicenseDocument;
-    return [license, currentInsuranceDocument].filter(Boolean);
-  }, [currentInsuranceDocument, currentRentalLicenseDocument, reusableLicenseDocument]);
+    return [license, ...(currentInsurancePacket?.documents || [])].filter(Boolean);
+  }, [currentInsurancePacket, currentRentalLicenseDocument, reusableLicenseDocument]);
   const currentRentalExtensions = useMemo(() => {
     if (!currentRental?.id) return [];
     return extensionRequests.filter((request) => request.rental_id === currentRental.id);
@@ -882,15 +885,11 @@ function App() {
   const pendingSameVehicleExtension = pendingExtension?.request_kind !== 'switch_car_continuation' ? pendingExtension : null;
   const approvedUnpaidExtension = currentRentalExtensions.find((request) => request.status === 'approved_pending_payment');
   const openExtensionRequest = pendingExtension || approvedUnpaidExtension;
-  const extensionInsuranceDocument = openExtensionRequest
-    ? [...currentRentalDocuments]
-        .filter((document) =>
-          document.document_type === 'insurance' &&
-          document.extension_request_id === openExtensionRequest.id
-        )
-        .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))[0]
+  const extensionInsurancePacket = openExtensionRequest ? latestInsurancePacket(currentRentalDocuments, openExtensionRequest.id) : null;
+  const extensionInsuranceDocument = extensionInsurancePacket?.representative
+    ? { ...extensionInsurancePacket.representative, status: extensionInsurancePacket.status }
     : null;
-  const extensionInsuranceUploaded = isUsableDocument(extensionInsuranceDocument);
+  const extensionInsuranceUploaded = isUsableInsurancePacket(extensionInsurancePacket);
   const extensionInsuranceRequired = Boolean(openExtensionRequest && !extensionInsuranceUploaded);
   const latestExtensionStatus = [...currentRentalExtensions]
     .sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0))[0];
@@ -902,9 +901,9 @@ function App() {
   const switchContinuationRental = rentals.find((rental) => rental.id === paidSwitchContinuation?.replacement_rental_id);
 
   const licenseRejected = reusableLicenseDocument?.status === 'rejected';
-  const insuranceRejected = currentInsuranceDocument?.status === 'rejected';
+  const insuranceRejected = currentInsurancePacket?.status === 'rejected';
   const licenseUploaded = isUsableDocument(reusableLicenseDocument);
-  const insuranceUploaded = isUsableDocument(currentInsuranceDocument);
+  const insuranceUploaded = isUsableInsurancePacket(currentInsurancePacket);
   const documentsRejected = licenseRejected || insuranceRejected;
   const missingRequiredDocuments = !licenseUploaded || !insuranceUploaded;
   const hasCompletedRental = previousRentals.some((rental) => rental.status === 'completed');
@@ -2085,6 +2084,62 @@ async function verifyPhoneCode(options = {}) {
     }
   }
 
+  async function uploadInsurancePacket(items, { extensionRequestId = null } = {}) {
+    if (!session?.user?.id || !Array.isArray(items) || !items.length) return false;
+    if (!insurancePacketItemsComplete(items)) {
+      notify('Choose one combined policy file or include both liability and collision files.', 'error');
+      return false;
+    }
+    for (const item of items) {
+      const validationError = validateDocumentFile(item.file);
+      if (validationError) {
+        notify(validationError, 'error');
+        return false;
+      }
+    }
+    const busyKey = extensionRequestId ? 'extensionInsurance' : 'insurance';
+    const uploadedPaths = [];
+    setDocumentUploadBusy((current) => ({ ...current, [busyKey]: true }));
+    try {
+      const rental = currentRental || (await createReservationIfNeeded());
+      if (!rental?.id) return false;
+      const packetId = crypto.randomUUID();
+      const rows = [];
+      for (const [index, item] of items.entries()) {
+        const safeName = item.file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
+        const path = `${session.user.id}/insurance/${packetId}/${Date.now()}-${index}-${safeName}`;
+        const { error: uploadError } = await supabase.storage.from('rental-documents').upload(path, item.file, { upsert: false });
+        if (uploadError) throw uploadError;
+        uploadedPaths.push(path);
+        rows.push({
+          user_id: session.user.id,
+          rental_id: rental.id,
+          document_type: 'insurance',
+          file_path: path,
+          status: 'pending_review',
+          extension_request_id: extensionRequestId,
+          insurance_packet_id: packetId,
+          insurance_coverage_type: item.coverageType,
+        });
+      }
+      const { data, error } = await supabase.from('rental_documents').insert(rows).select();
+      if (error) throw error;
+      const nextDocuments = [...(data || []), ...documents];
+      setDocuments(nextDocuments);
+      await syncRentalDocumentReviewStatus(rental, nextDocuments);
+      await maybeMarkReadyForPickup(rental, nextDocuments);
+      notify(`${extensionRequestId ? 'Extension insurance' : 'Insurance'} packet uploaded with ${rows.length} ${rows.length === 1 ? 'file' : 'files'}.`, 'success');
+      if (!extensionRequestId && wizardOpen && wizardStep === 4) setWizardStep(5);
+      return true;
+    } catch (error) {
+      if (uploadedPaths.length) await supabase.storage.from('rental-documents').remove(uploadedPaths);
+      notify(error?.message || 'The insurance packet could not be uploaded.', 'error');
+      return false;
+    } finally {
+      setDocumentUploadBusy((current) => ({ ...current, [busyKey]: false }));
+    }
+  }
+
   async function openDocument(document) {
     const directUrl = document.file_url || document.document_url || document.public_url || document.url;
     const path = document.file_path || document.storage_path || document.path;
@@ -2168,7 +2223,7 @@ async function verifyPhoneCode(options = {}) {
 
     const rentalDocuments = nextDocuments.filter((document) => document.rental_id === rental.id);
     const hasLicense = isUsableDocument(latestDocument(nextDocuments, 'license'));
-    const hasInsurance = isUsableDocument(latestDocument(rentalDocuments, 'insurance'));
+    const hasInsurance = isUsableInsurancePacket(latestInsurancePacket(rentalDocuments));
 
     if (!hasLicense || !hasInsurance) return;
 
@@ -2206,7 +2261,7 @@ async function verifyPhoneCode(options = {}) {
     const ready =
       identityVerified &&
       isApprovedDocument(latestDocument(nextDocuments, 'license')) &&
-      isApprovedDocument(latestDocument(rentalDocuments, 'insurance')) &&
+      isApprovedInsurancePacket(latestInsurancePacket(rentalDocuments)) &&
       Boolean(rentalOverride.agreement_signed) &&
       rentalOverride.payment_status === 'paid';
 
@@ -3151,6 +3206,7 @@ async function verifyPhoneCode(options = {}) {
           startIdentityVerification={startIdentityVerification}
           refreshIdentityVerification={refreshIdentityVerification}
           uploadDocument={uploadDocument}
+          uploadInsurancePacket={uploadInsurancePacket}
           documentUploadBusy={documentUploadBusy}
           licenseUploaded={licenseUploaded}
           insuranceUploaded={insuranceUploaded}
@@ -3409,24 +3465,17 @@ async function verifyPhoneCode(options = {}) {
                       </p>}
                       {extensionWorkflowStage === 'insurance' && <div className={`extension-insurance-step ${extensionInsuranceDocument?.status || 'missing'}`}>
                         <div>
-                          <strong>Upload a new insurance declaration page</strong>
+                          <strong>Upload a new insurance packet for this extension</strong>
                           <span>{extensionInsuranceDocument?.status === 'rejected'
-                            ? 'The previous file was rejected. Upload a declaration page showing active coverage through the requested return.'
-                            : 'It must show the policyholder, active dates, and coverage through the requested return.'}</span>
+                            ? 'The previous packet was rejected. Upload new files showing active coverage through the requested return.'
+                            : 'Use one combined policy file or separate liability and collision files.'}</span>
                         </div>
-                        <label className="primary-btn">
-                          <Upload size={16}/> {documentUploadBusy.extensionInsurance ? 'Uploading…' : 'Upload Declaration Page'}
-                          <input
-                            type="file"
-                            accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
-                            disabled={Boolean(documentUploadBusy.extensionInsurance)}
-                            onChange={(event) => uploadDocument(event, 'insurance', {
-                              createNew: true,
-                              extensionRequestId: openExtensionRequest.id,
-                            })}
-                            hidden
-                          />
-                        </label>
+                        <InsurancePacketUploader
+                          compact
+                          busy={Boolean(documentUploadBusy.extensionInsurance)}
+                          submitLabel="Upload New Extension Packet"
+                          onUpload={(items) => uploadInsurancePacket(items, { extensionRequestId: openExtensionRequest.id })}
+                        />
                       </div>}
                       {extensionWorkflowStage === 'insurance_review' && <p className="extension-waiting-note"><Clock size={17}/> Insurance uploaded. Rent Me CT must approve it before deciding the request.</p>}
                       {extensionWorkflowStage === 'admin_review' && <p className="extension-waiting-note"><Clock size={17}/> Insurance approved. The extension decision is now with Rent Me CT.</p>}
@@ -3605,13 +3654,10 @@ async function verifyPhoneCode(options = {}) {
                 )}
                 {!insuranceUploaded && (
                   <div className="insurance-upload-card">
-                    <InsuranceOptionsPanel insuranceCoverage={insuranceCoverage} setInsuranceCoverage={setInsuranceCoverage} />
-                    <UploadCard
-                      title={insuranceRejected ? 'Replace Insurance Declaration Page' : 'Upload Insurance Declaration Page'}
-                      text={insuranceRejected ? 'This rental insurance upload was rejected. Upload the policy declaration page as the replacement.' : 'Upload the declaration page showing the policyholder, active dates, and coverage. Other insurance documents will be rejected.'}
-                      icon={FileText}
-                      onUpload={(e) => uploadDocument(e, 'insurance')}
+                    <InsurancePacketUploader
+                      title={insuranceRejected ? 'Replace Insurance Packet' : 'Upload Insurance Packet'}
                       busy={Boolean(documentUploadBusy.insurance)}
+                      onUpload={uploadInsurancePacket}
                     />
                   </div>
                 )}
@@ -3831,6 +3877,7 @@ async function verifyPhoneCode(options = {}) {
           startIdentityVerification={startIdentityVerification}
           refreshIdentityVerification={refreshIdentityVerification}
           uploadDocument={uploadDocument}
+          uploadInsurancePacket={uploadInsurancePacket}
           documentUploadBusy={documentUploadBusy}
           licenseUploaded={licenseUploaded}
           insuranceUploaded={insuranceUploaded}
@@ -4048,6 +4095,7 @@ function WizardModal({
   startIdentityVerification,
   refreshIdentityVerification,
   uploadDocument,
+  uploadInsurancePacket,
   documentUploadBusy,
   licenseUploaded,
   insuranceUploaded,
@@ -4550,7 +4598,6 @@ function WizardModal({
                   ? 'Insurance is uploaded for this rental. Rent Me CT will review it before vehicle release.'
                   : 'Upload your insurance declaration page showing the policyholder, active dates, and coverage. Other insurance documents will be rejected.'}
               </p>
-              <InsuranceOptionsPanel insuranceCoverage={insuranceCoverage} setInsuranceCoverage={setInsuranceCoverage} />
               {insuranceUploaded ? (
                 <div className="wizard-upload-complete">
                   <CheckCircle2 size={20} />
@@ -4559,21 +4606,13 @@ function WizardModal({
                     <span>This guided step is complete.</span>
                   </div>
                 </div>
-              ) : (
-                <label className={`secondary-btn ${documentUploadBusy?.insurance ? 'is-busy' : ''}`}>
-                  {documentUploadBusy?.insurance ? 'Uploading insurance…' : 'Upload Declaration Page'}
-                  <input
-                    type="file"
-                    accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
-                    onChange={(e) => {
-                      setWizardReminder(null);
-                      uploadDocument(e, 'insurance');
-                    }}
-                    disabled={Boolean(documentUploadBusy?.insurance)}
-                    style={{ display: 'none' }}
-                  />
-                </label>
-              )}
+              ) : <InsurancePacketUploader
+                busy={Boolean(documentUploadBusy?.insurance)}
+                onUpload={async (items) => {
+                  setWizardReminder(null);
+                  return uploadInsurancePacket(items);
+                }}
+              />}
             </div>
           )}
         </div>
@@ -4868,6 +4907,44 @@ function InsuranceOptionsPanel({ insuranceCoverage, setInsuranceCoverage }) {
       <label><input type="checkbox" checked={insuranceCoverage.liability} onChange={(event) => setInsuranceCoverage({ ...insuranceCoverage, liability: event.target.checked })} /> Liability coverage</label>
     </div>
     <a className="secondary-btn" href="#payment">Review payment and insurance requirements</a>
+  </div>;
+}
+
+function InsurancePacketUploader({ title = 'Insurance packet', busy = false, compact = false, submitLabel = 'Upload Insurance Packet', onUpload }) {
+  const [items, setItems] = useState([]);
+  function chooseFiles(event) {
+    const files = Array.from(event.target.files || []);
+    setItems(files.map((file, index) => ({
+      file,
+      coverageType: files.length === 1 ? 'combined' : index === 0 ? 'liability' : index === 1 ? 'collision' : 'other',
+    })));
+    event.target.value = '';
+  }
+  function updateCoverage(index, coverageType) {
+    setItems((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, coverageType } : item));
+  }
+  async function submit() {
+    if (busy || !insurancePacketItemsComplete(items)) return;
+    const uploaded = await onUpload?.(items);
+    if (uploaded) setItems([]);
+  }
+  const complete = insurancePacketItemsComplete(items);
+  return <div className={`insurance-packet-uploader ${compact ? 'compact' : ''}`}>
+    {!compact && <div className="insurance-packet-heading"><ShieldCheck size={19}/><div><strong>{title}</strong><span>Upload one combined policy file, or separate liability and collision files.</span></div></div>}
+    <label className="secondary-btn insurance-packet-file-picker"><Upload size={16}/> {items.length ? 'Choose Different Files' : 'Choose Insurance Files'}<input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp" disabled={busy} onChange={chooseFiles} hidden/></label>
+    {items.length > 0 && <div className="insurance-packet-files">
+      {items.map((item, index) => <label key={`${item.file.name}-${item.file.lastModified}-${index}`}>
+        <span title={item.file.name}>{item.file.name}</span>
+        <select value={item.coverageType} onChange={(event) => updateCoverage(index, event.target.value)} disabled={busy}>
+          <option value="combined">Combined liability + collision</option>
+          <option value="liability">Liability</option>
+          <option value="collision">Collision</option>
+          <option value="other">Supporting document</option>
+        </select>
+      </label>)}
+    </div>}
+    {items.length > 0 && <small className={complete ? 'insurance-packet-ready' : 'form-error'}>{complete ? 'Packet includes the required liability and collision coverage files.' : 'Label one file as combined coverage, or label separate liability and collision files.'}</small>}
+    {items.length > 0 && <button type="button" className="primary-btn" disabled={busy || !complete} onClick={submit}>{busy ? 'Uploading packet…' : submitLabel}</button>}
   </div>;
 }
 
@@ -5485,6 +5562,7 @@ function PreviewCheckout({
   startIdentityVerification,
   refreshIdentityVerification,
   uploadDocument,
+  uploadInsurancePacket,
   documentUploadBusy,
   licenseUploaded,
   insuranceUploaded,
@@ -5668,8 +5746,9 @@ function PreviewCheckout({
             <div className="preview-upload-grid">
               <PreviewUploadCard title="Driver license" text="PDF, JPEG, PNG, or WebP up to 10 MB. Reused for future rentals." complete={licenseUploaded} busy={Boolean(documentUploadBusy?.license)} onUpload={(event) => uploadDocument(event, 'license')} />
               <div>
-                <InsuranceOptionsPanel insuranceCoverage={insuranceCoverage} setInsuranceCoverage={setInsuranceCoverage} />
-                <PreviewUploadCard title="Insurance declaration page" text="Upload the declaration page showing the policyholder, active dates, and coverage. Other insurance documents will be rejected. PDF, JPEG, PNG, or WebP up to 10 MB." complete={insuranceUploaded} busy={Boolean(documentUploadBusy?.insurance)} onUpload={(event) => uploadDocument(event, 'insurance')} />
+                {insuranceUploaded
+                  ? <PreviewUploadCard title="Insurance packet" text="Liability and collision coverage files uploaded for this reservation." complete busy={false} onUpload={() => {}} />
+                  : <InsurancePacketUploader busy={Boolean(documentUploadBusy?.insurance)} onUpload={uploadInsurancePacket} />}
               </div>
             </div>
           </PreviewCheckoutSection>
@@ -6353,7 +6432,7 @@ function UploadedDocuments({
         {sortedDocuments.map((document) => (
           <div className="uploaded-document-row" key={document.id}>
             <div>
-              <strong>{documentTypeLabel(document.document_type)}</strong>
+              <strong>{documentTypeLabel(document.document_type)}{document.document_type === 'insurance' ? ` — ${insuranceCoverageLabel(document.insurance_coverage_type)}` : ''}</strong>
               <span>{prettyStatus(document.status || 'pending_review')} • {document.created_at ? new Date(document.created_at).toLocaleString() : 'Recently uploaded'}</span>
             </div>
             <div className="document-actions">
@@ -6741,6 +6820,43 @@ function latestDocument(documents, type) {
     .sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0))[0];
 }
 
+function insurancePacketItemsComplete(items = []) {
+  const coverage = new Set(items.map((item) => item.coverageType));
+  return coverage.has('combined') || (coverage.has('liability') && coverage.has('collision'));
+}
+
+function latestInsurancePacket(documents = [], extensionRequestId = null) {
+  const packetGroups = new Map();
+  documents.filter((document) => document.document_type === 'insurance')
+    .filter((document) => extensionRequestId ? document.extension_request_id === extensionRequestId : !document.extension_request_id)
+    .forEach((document) => {
+      const packetId = document.insurance_packet_id || document.id;
+      if (!packetGroups.has(packetId)) packetGroups.set(packetId, []);
+      packetGroups.get(packetId).push(document);
+    });
+  const latest = [...packetGroups.entries()].sort(([, left], [, right]) => (
+    Math.max(...right.map((document) => new Date(document.created_at || 0).getTime()))
+    - Math.max(...left.map((document) => new Date(document.created_at || 0).getTime()))
+  ))[0];
+  if (!latest) return null;
+  const [id, packetDocuments] = latest;
+  const coverage = new Set(packetDocuments.map((document) => document.insurance_coverage_type || 'combined'));
+  const coverageComplete = coverage.has('combined') || (coverage.has('liability') && coverage.has('collision'));
+  const rejected = packetDocuments.some((document) => document.status === 'rejected');
+  const approved = coverageComplete && packetDocuments.every((document) => document.status === 'approved');
+  const status = rejected ? 'rejected' : approved ? 'approved' : 'pending_review';
+  const representative = [...packetDocuments].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))[0];
+  return { id, documents: packetDocuments, representative, coverageComplete, status };
+}
+
+function isUsableInsurancePacket(packet) {
+  return Boolean(packet?.coverageComplete && packet.status !== 'rejected');
+}
+
+function isApprovedInsurancePacket(packet) {
+  return packet?.status === 'approved';
+}
+
 function isUsableDocument(document) {
   return Boolean(document && document.status !== 'rejected');
 }
@@ -6756,6 +6872,10 @@ function documentTypeLabel(type) {
   };
 
   return map[type] || type;
+}
+
+function insuranceCoverageLabel(type) {
+  return { combined: 'Combined coverage', liability: 'Liability', collision: 'Collision', other: 'Supporting file' }[type || 'combined'] || 'Insurance file';
 }
 
 function extensionStatusTitle(request) {
