@@ -2795,6 +2795,17 @@ label.secondary-btn {
   display: grid;
   gap: 12px;
 }
+.insurance-packet-uploader{display:grid;gap:12px;padding:16px;border:1px solid rgba(15,23,42,.14);border-radius:16px;background:rgba(255,255,255,.78)}
+.insurance-packet-uploader.compact{padding:0;border:0;background:transparent}
+.insurance-packet-heading{display:flex;gap:10px;align-items:flex-start}
+.insurance-packet-heading div,.insurance-packet-files{display:grid;gap:8px}
+.insurance-packet-heading span{display:block;margin-top:3px;color:var(--muted);font-size:.88rem}
+.insurance-packet-file-picker{justify-self:start}
+.insurance-packet-files label{display:grid;grid-template-columns:minmax(0,1fr) minmax(190px,.75fr);gap:10px;align-items:center}
+.insurance-packet-files label>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.88rem}
+.insurance-packet-files select{width:100%}
+.insurance-packet-ready{color:#157347;font-weight:800}
+@media(max-width:640px){.insurance-packet-files label{grid-template-columns:1fr}}
 .fee-summary-row {
   grid-column: 1 / -1;
 }
