@@ -97,7 +97,7 @@ const BOOKING_FLOW_TEST_VEHICLE_ID = '00000000-0000-4000-8000-000000000015';
 const BOOKING_FLOW_TEST_ENABLED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_BOOKING_FLOW_TEST === 'true';
 const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 const ACCEPTED_DOCUMENT_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
-const MILEAGE_POLICY = '200 miles/day included; excess mileage $0.35/mile';
+const MILEAGE_POLICY = '250 miles/day included; excess mileage $0.35/mile';
 const CANCELLATION_TERMS = 'Contact Rent Me CT before pickup for cancellation or schedule changes.';
 const SMS_CONSENT_VERSION = '2026-07-26';
 const SMS_CONSENT_SOURCE = 'client_portal';
@@ -5482,7 +5482,7 @@ function PreviewGuestExperience({
             </section>
 
             <section className="preview-detail-section preview-policy-grid">
-              <div><strong>200 miles/day</strong><span>Included with your rental</span></div>
+              <div><strong>250 miles/day</strong><span>Included with your rental</span></div>
               <div><strong>Secure verification</strong><span>Identity and documents protected</span></div>
               <div><strong>Farmington pickup</strong><span>{RENTMECT_ADDRESS}</span></div>
             </section>
