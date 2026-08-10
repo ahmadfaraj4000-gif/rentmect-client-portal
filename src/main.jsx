@@ -3692,6 +3692,7 @@ async function verifyPhoneCode(options = {}) {
               <div className="invoice-row"><span>Base Rental</span><strong>{currentRental ? money(currentRental.base_rental_total ?? currentRental.rental_total) : estimate ? money(estimate.baseRentalTotal) : 'Pending'}</strong></div>
               {Number(currentRental?.under_25_markup_amount || estimate?.markupAmount || 0) > 0 && <div className="invoice-row"><span>Under-25 Rental Markup ({Number(currentRental?.under_25_markup_percentage ?? estimate?.markupPercentage ?? 0)}%)</span><strong>{money(currentRental?.under_25_markup_amount ?? estimate?.markupAmount)}</strong></div>}
               {Number(currentRental?.discount_amount || 0) > 0 && <div className="invoice-row discount-row"><span>Discount ({currentRental.discount_code})</span><strong>−{money(currentRental.discount_amount)}</strong></div>}
+              {Number(currentRental?.manual_discount_amount || 0) > 0 && <div className="invoice-row discount-row"><span>Manual reservation discount ({manualDiscountDescriptor(currentRental)})</span><strong>−{money(currentRental.manual_discount_amount)}</strong></div>}
               <div className="invoice-row"><span>Rental Total</span><strong>{currentRental ? money(currentRental.rental_total) : estimate ? money(estimate.rentalTotal) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>CT Sales Tax</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Refundable Security Deposit{currentRental?.under_25_deposit_adjustment_type || estimate?.under25 ? ' (Age 21–24)' : ''}</span><strong>{currentRental?.discount_waives_security_deposit ? 'Waived' : currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
@@ -4514,6 +4515,7 @@ function WizardModal({
               <div className="invoice-row"><span>Base Rental</span><strong>{currentRental ? money(currentRental.base_rental_total ?? currentRental.rental_total) : estimate ? money(estimate.baseRentalTotal) : 'Pending'}</strong></div>
               {Number(currentRental?.under_25_markup_amount || estimate?.markupAmount || 0) > 0 && <div className="invoice-row"><span>Under-25 Rental Markup ({Number(currentRental?.under_25_markup_percentage ?? estimate?.markupPercentage ?? 0)}%)</span><strong>{money(currentRental?.under_25_markup_amount ?? estimate?.markupAmount)}</strong></div>}
               {Number(currentRental?.discount_amount || 0) > 0 && <div className="invoice-row discount-row"><span>Discount ({currentRental.discount_code})</span><strong>−{money(currentRental.discount_amount)}</strong></div>}
+              {Number(currentRental?.manual_discount_amount || 0) > 0 && <div className="invoice-row discount-row"><span>Manual reservation discount ({manualDiscountDescriptor(currentRental)})</span><strong>−{money(currentRental.manual_discount_amount)}</strong></div>}
               <div className="invoice-row"><span>Rental Total</span><strong>{currentRental ? money(currentRental.rental_total) : estimate ? money(estimate.rentalTotal) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Taxes</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Refundable Security Deposit{currentRental?.under_25_deposit_adjustment_type || estimate?.under25 ? ' (Age 21–24)' : ''}</span><strong>{currentRental?.discount_waives_security_deposit ? 'Waived' : currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
@@ -5791,7 +5793,12 @@ function PreviewCheckout({
                 {!currentRental?.id && <small>Finish the contact section first, then apply your code before payment.</small>}
               </div>
             )}
+            {Number(currentRental?.manual_discount_amount || 0) > 0 && <div className="preview-discount-applied manual-adjustment" role="status">
+              <span><strong>Manual reservation discount ({manualDiscountDescriptor(currentRental)})</strong></span>
+              <strong>−{money(currentRental.manual_discount_amount)}</strong>
+            </div>}
             <div className="preview-payment-breakdown">
+              {Number(currentRental?.manual_discount_amount || 0) > 0 && <><div><span>Rental before manual discount</span><strong>{money(currentRental.pre_manual_discount_rental_total)}</strong></div><div className="discount-row"><span>Manual reservation discount ({manualDiscountDescriptor(currentRental)})</span><strong>−{money(currentRental.manual_discount_amount)}</strong></div></>}
               <div><span>Rental</span><strong>{money(rentalTotal)}</strong></div>
               <div><span>CT sales tax</span><strong>{money(taxAmount)}</strong></div>
               <div><span>Refundable security deposit{currentRental?.under_25_deposit_adjustment_type || estimate?.under25 ? ' (Age 21–24)' : ''}</span><strong>{depositWaived ? 'Waived' : money(securityDeposit)}</strong></div>
@@ -6665,6 +6672,11 @@ function money(value) {
   });
 }
 
+function manualDiscountDescriptor(rental) {
+  if (rental?.manual_discount_type === 'percentage') return `${Number(rental.manual_discount_value || 0)}% off total`;
+  return `${money(rental?.manual_discount_value || rental?.manual_discount_amount || 0)} off total`;
+}
+
 function calculateUnder25Deposit(baseDeposit, settings = DEFAULT_UNDER_25_PRICING) {
   const base = Math.max(0, Number(baseDeposit || 0));
   if (settings.deposit_adjustment_enabled === false) return base;
@@ -7064,6 +7076,8 @@ Return Location: ${RENTMECT_ADDRESS}
 Daily Rate: ${vehicle?.daily_rate ? money(vehicle.daily_rate) : 'Pending'}
 Base Rental Total: ${rental?.base_rental_total ? money(rental.base_rental_total) : rental?.rental_total ? money(rental.rental_total) : 'Pending'}
 Under-25 Rental Markup: ${Number(rental?.under_25_markup_amount || 0) > 0 ? `${money(rental.under_25_markup_amount)} (${Number(rental.under_25_markup_percentage || 0)}%)` : 'Not applied'}
+Promotion Discount: ${Number(rental?.discount_amount || 0) > 0 ? `${money(rental.discount_amount)} (${rental.discount_code || 'promotion'})` : 'Not applied'}
+Manual Reservation Discount: ${Number(rental?.manual_discount_amount || 0) > 0 ? `${manualDiscountDescriptor(rental)}; ${money(rental.manual_discount_amount)} rental-subtotal adjustment before recalculated tax` : 'Not applied'}
 Rental Total: ${rental?.rental_total ? money(rental.rental_total) : 'Pending'}
 Tax Amount: ${rental?.tax_amount ? money(rental.tax_amount) : 'Pending'}
 Security Deposit: ${rental?.discount_waives_security_deposit ? 'Waived by discount code' : rental ? money(rental.security_deposit) : vehicle?.security_deposit ? money(vehicle.security_deposit) : 'Pending'}
