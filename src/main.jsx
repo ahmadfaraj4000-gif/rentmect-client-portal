@@ -910,18 +910,36 @@ function App() {
   const emailVerified = Boolean(session?.user?.email_confirmed_at);
   const agreementSigned = Boolean(currentRental?.agreement_signed);
   const paymentPaid = currentRental?.payment_status === 'paid';
+  const paymentPartiallyPaid = ['partially_paid', 'partial'].includes(String(currentRental?.payment_status || '').toLowerCase());
+  const currentRentalInvoiceTotal = Number(currentRental?.rental_total || 0)
+    + Number(currentRental?.service_fee_total || 0)
+    + Number(currentRental?.tax_amount || 0)
+    + Number(currentRental?.security_deposit || 0);
+  const currentRentalBalanceCharge = rentalCharges.find((charge) =>
+    charge.rental_id === currentRental?.id
+      && charge.charge_type === 'rental_amendment'
+      && ['pending', 'checkout_open', 'failed'].includes(String(charge.status || '').toLowerCase())
+  );
+  const fallbackRemainingBalance = Math.max(
+    0,
+    currentRentalInvoiceTotal - Number(currentRental?.payment_amount_cents || 0) / 100,
+  );
+  const remainingRentalBalance = paymentPartiallyPaid
+    ? Number(currentRentalBalanceCharge?.total_amount ?? fallbackRemainingBalance)
+    : paymentPaid ? 0 : currentRentalInvoiceTotal;
+  const netRentalPaid = Math.max(0, currentRentalInvoiceTotal - remainingRentalBalance);
   const currentRentalAdditionalCharges = rentalCharges.filter((charge) =>
-    !charge.included_in_initial_payment && (
-      charge.rental_id === currentRental?.id || !['paid', 'waived'].includes(charge.status)
-    )
+    charge.rental_id === currentRental?.id
+      && charge.charge_type !== 'rental_amendment'
+      && !charge.included_in_initial_payment
   );
   const checkoutDeadline = checkoutExpiresAt ? new Date(checkoutExpiresAt).getTime() : 0;
   const checkoutSecondsRemaining = checkoutDeadline
     ? Math.max(0, Math.ceil((checkoutDeadline - checkoutNow) / 1000))
     : null;
-  const checkoutExpired = checkoutSecondsRemaining === 0 && !paymentPaid;
+  const checkoutExpired = checkoutSecondsRemaining === 0 && !paymentPaid && !paymentPartiallyPaid;
   const checkoutHoldActive = Boolean(
-    checkoutIntent && checkoutDeadline && !paymentPaid
+    checkoutIntent && checkoutDeadline && !paymentPaid && !paymentPartiallyPaid
   );
   const identityStatus = profile?.identity_verification_status || 'unverified';
   const identityErrorCode = profile?.identity_verification_error_code || '';
@@ -1487,7 +1505,14 @@ function loadSavedBookingFromWebsite() {
         'Additional charges',
       );
       if (chargeResult.data) setRentalCharges((current) => [chargeResult.data, ...current.filter((item) => item.id !== chargeResult.data.id)]);
-      recordPortalResults([['Additional charges', chargeResult]]);
+      const rentalResult = chargeResult.data?.rental_id
+        ? await withRequestDeadline(
+            supabase.from('rentals').select('*, vehicles(*)').eq('id', chargeResult.data.rental_id).eq('user_id', userId).single(),
+            'Rentals',
+          )
+        : { data: null, error: null };
+      if (rentalResult.data) setRentals((current) => [rentalResult.data, ...current.filter((item) => item.id !== rentalResult.data.id)]);
+      recordPortalResults([['Additional charges', chargeResult], ['Rentals', rentalResult]]);
       return;
     }
     const rentalResult = await withRequestDeadline(
@@ -3215,6 +3240,9 @@ async function verifyPhoneCode(options = {}) {
           agreementSigned={agreementSigned}
           openAgreement={() => setAgreementModalOpen(true)}
           paymentPaid={paymentPaid}
+          paymentPartiallyPaid={paymentPartiallyPaid}
+          remainingRentalBalance={remainingRentalBalance}
+          netRentalPaid={netRentalPaid}
           paymentSaving={paymentSaving}
           startStripeCheckout={startStripeCheckout}
           serviceFees={serviceFees}
@@ -3697,7 +3725,8 @@ async function verifyPhoneCode(options = {}) {
               <div className="invoice-row"><span>CT Sales Tax</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Refundable Security Deposit{currentRental?.under_25_deposit_adjustment_type || estimate?.under25 ? ' (Age 21–24)' : ''}</span><strong>{currentRental?.discount_waives_security_deposit ? 'Waived' : currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
               <ServiceFeesSummary serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
-              <div className="invoice-row total-row"><span>Total Due Today</span><strong>{currentRental ? money(Number(currentRental.rental_total || 0) + Number(currentRental.service_fee_total || 0) + Number(currentRental.tax_amount || 0) + Number(currentRental.security_deposit || 0)) : estimate && !estimate.invalid ? money(estimate.checkoutTotal + estimate.securityDeposit) : 'Pending'}</strong></div>
+              {paymentPartiallyPaid && <div className="invoice-row discount-row"><span>Payments already received</span><strong>−{money(netRentalPaid)}</strong></div>}
+              <div className="invoice-row total-row"><span>{paymentPartiallyPaid ? 'Remaining Rental Balance' : 'Total Due Today'}</span><strong>{currentRental ? money(remainingRentalBalance) : estimate && !estimate.invalid ? money(estimate.checkoutTotal + estimate.securityDeposit) : 'Pending'}</strong></div>
             </div>
             {currentRental && !paymentPaid && <div className="discount-code-card">
               <div><Tag size={19}/><span><strong>{currentRental.discount_code ? `${currentRental.discount_code} applied` : 'Have a promotion code?'}</strong><small>{currentRental.discount_code ? `Your customer total includes ${money(currentRental.discount_amount)} in savings.` : 'Paste the code from the website banner or popup. Your exact total and Stripe payment update immediately.'}</small></span></div>
@@ -3747,7 +3776,7 @@ async function verifyPhoneCode(options = {}) {
               </div>
             )}
             {!approvedUnpaidExtension && <button className="primary-btn big-action" onClick={startStripeCheckout} disabled={paymentSaving || checkoutExpired || paymentPaid}>
-              <CreditCard size={18} /> {paymentPaid ? 'Payment Complete' : paymentSaving ? 'Opening Stripe...' : 'Pay With Stripe'}
+              <CreditCard size={18} /> {paymentPaid ? 'Payment Complete' : paymentSaving ? 'Opening Stripe...' : paymentPartiallyPaid ? `Pay Remaining ${money(remainingRentalBalance)}` : 'Pay With Stripe'}
             </button>}
           </section>
         )}
@@ -3871,6 +3900,9 @@ async function verifyPhoneCode(options = {}) {
           startStripeCheckout={startStripeCheckout}
           paymentSaving={paymentSaving}
           paymentPaid={paymentPaid}
+          paymentPartiallyPaid={paymentPartiallyPaid}
+          remainingRentalBalance={remainingRentalBalance}
+          netRentalPaid={netRentalPaid}
           identityStatus={identityStatus}
           identityErrorCode={identityErrorCode}
           identityVerified={identityVerified}
@@ -4089,6 +4121,9 @@ function WizardModal({
   startStripeCheckout,
   paymentSaving,
   paymentPaid,
+  paymentPartiallyPaid,
+  remainingRentalBalance,
+  netRentalPaid,
   identityStatus,
   identityErrorCode,
   identityVerified,
@@ -4520,6 +4555,7 @@ function WizardModal({
               <div className="invoice-row"><span>Taxes</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Refundable Security Deposit{currentRental?.under_25_deposit_adjustment_type || estimate?.under25 ? ' (Age 21–24)' : ''}</span><strong>{currentRental?.discount_waives_security_deposit ? 'Waived' : currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
               <ServiceFeesSummary serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
+              {paymentPartiallyPaid && <><div className="invoice-row discount-row"><span>Payments already received</span><strong>−{money(netRentalPaid)}</strong></div><div className="invoice-row total-row"><span>Remaining rental balance</span><strong>{money(remainingRentalBalance)}</strong></div></>}
               <div className="invoice-row"><span>Mileage</span><strong>{MILEAGE_POLICY}</strong></div>
               <div className="invoice-row"><span>Pickup</span><strong>{RENTMECT_ADDRESS}</strong></div>
               <div className="invoice-row"><span>Booking checklist</span><strong>Phone, Identity, license, insurance, and agreement are complete before payment unlocks.</strong></div>
@@ -4539,7 +4575,7 @@ function WizardModal({
                 </div>
               )}
               <button className="primary-btn" onClick={startStripeCheckout} disabled={paymentSaving || paymentPaid}>
-                {paymentPaid ? 'Payment Complete' : paymentSaving ? 'Opening Stripe...' : 'Pay With Stripe'}
+                {paymentPaid ? 'Payment Complete' : paymentSaving ? 'Opening Stripe...' : paymentPartiallyPaid ? `Pay Remaining ${money(remainingRentalBalance)}` : 'Pay With Stripe'}
               </button>
             </div>
           )}
@@ -5573,6 +5609,9 @@ function PreviewCheckout({
   agreementSigned,
   openAgreement,
   paymentPaid,
+  paymentPartiallyPaid,
+  remainingRentalBalance,
+  netRentalPaid,
   paymentSaving,
   startStripeCheckout,
   serviceFees,
@@ -5594,6 +5633,7 @@ function PreviewCheckout({
   const taxAmount = Number(currentRental?.tax_amount ?? estimate?.taxAmount ?? 0);
   const securityDeposit = Number(currentRental?.security_deposit ?? estimate?.securityDeposit ?? 0);
   const total = rentalTotal + serviceFeeTotal + taxAmount + securityDeposit;
+  const amountDue = paymentPartiallyPaid ? Number(remainingRentalBalance || 0) : total;
   const depositWaived = Boolean(currentRental?.discount_waives_security_deposit);
   const correctingIdentity = Boolean(identityCorrectionTarget);
   const showCorrectionName = ['full_name', 'identity_details'].includes(identityCorrectionTarget);
@@ -5763,7 +5803,7 @@ function PreviewCheckout({
             <button className="preview-primary-button" type="button" onClick={openAgreement} disabled={!documentsComplete}>{agreementSigned ? 'View signed agreement' : 'Review, scroll & sign agreement'} <ChevronRight size={18} /></button>
           </PreviewCheckoutSection>
 
-          <PreviewCheckoutSection sectionKey="payment" number="5" title="Payment" summary={paymentPaid ? 'Payment complete' : `Due today ${money(total)}`} completed={paymentPaid} open={activeSection === 'payment'} onOpen={() => setActiveSection('payment')}>
+          <PreviewCheckoutSection sectionKey="payment" number="5" title="Payment" summary={paymentPaid ? 'Payment complete' : paymentPartiallyPaid ? `Remaining balance ${money(amountDue)}` : `Due today ${money(total)}`} completed={paymentPaid} open={activeSection === 'payment'} onOpen={() => setActiveSection('payment')}>
             <Under25PricingNotice rental={currentRental} estimate={estimate} total={total} />
             {currentRental?.discount_code ? (
               <div className="preview-discount-applied" role="status">
@@ -5803,10 +5843,11 @@ function PreviewCheckout({
               <div><span>CT sales tax</span><strong>{money(taxAmount)}</strong></div>
               <div><span>Refundable security deposit{currentRental?.under_25_deposit_adjustment_type || estimate?.under25 ? ' (Age 21–24)' : ''}</span><strong>{depositWaived ? 'Waived' : money(securityDeposit)}</strong></div>
               <ServiceFeesSummary serviceFees={serviceFees} total={serviceFeeTotal} />
-              <div className="preview-payment-total"><span>Total due today</span><strong>{money(total)}</strong></div>
+              {paymentPartiallyPaid && <div className="discount-row"><span>Payments already received</span><strong>−{money(netRentalPaid)}</strong></div>}
+              <div className="preview-payment-total"><span>{paymentPartiallyPaid ? 'Remaining rental balance' : 'Total due today'}</span><strong>{money(amountDue)}</strong></div>
             </div>
-            <p className="preview-security-note"><ShieldCheck size={16} /> {isBookingFlowTestVehicle(vehicle) ? 'Internal test checkout records no charge and can never be used for a real vehicle.' : 'Payment opens Stripe’s secure hosted checkout after every verification step is complete.'}</p>
-            <button className="preview-primary-button preview-pay-button" type="button" onClick={startStripeCheckout} disabled={paymentSaving || !agreementSigned || checkoutExpired}>{paymentSaving ? 'Completing…' : isBookingFlowTestVehicle(vehicle) ? 'Complete no-charge test booking' : `Pay ${money(total)} & book trip`} <ChevronRight size={18} /></button>
+            <p className="preview-security-note"><ShieldCheck size={16} /> {isBookingFlowTestVehicle(vehicle) ? 'Internal test checkout records no charge and can never be used for a real vehicle.' : paymentPartiallyPaid ? 'Your previous payment and deposit remain credited. Stripe will collect only this revised-rental balance.' : 'Payment opens Stripe’s secure hosted checkout after every verification step is complete.'}</p>
+            <button className="preview-primary-button preview-pay-button" type="button" onClick={startStripeCheckout} disabled={paymentSaving || !agreementSigned || checkoutExpired}>{paymentSaving ? 'Completing…' : isBookingFlowTestVehicle(vehicle) ? 'Complete no-charge test booking' : paymentPartiallyPaid ? `Pay remaining ${money(amountDue)}` : `Pay ${money(total)} & book trip`} <ChevronRight size={18} /></button>
           </PreviewCheckoutSection>
         </section>
 
@@ -6673,8 +6714,8 @@ function money(value) {
 }
 
 function manualDiscountDescriptor(rental) {
-  if (rental?.manual_discount_type === 'percentage') return `${Number(rental.manual_discount_value || 0)}% off total`;
-  return `${money(rental?.manual_discount_value || rental?.manual_discount_amount || 0)} off total`;
+  if (rental?.manual_discount_type === 'percentage') return `${Number(rental.manual_discount_value || 0)}% off rental`;
+  return `${money(rental?.manual_discount_value || rental?.manual_discount_amount || 0)} off rental`;
 }
 
 function calculateUnder25Deposit(baseDeposit, settings = DEFAULT_UNDER_25_PRICING) {
