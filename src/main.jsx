@@ -3900,6 +3900,9 @@ async function verifyPhoneCode(options = {}) {
           startStripeCheckout={startStripeCheckout}
           paymentSaving={paymentSaving}
           paymentPaid={paymentPaid}
+          paymentPartiallyPaid={paymentPartiallyPaid}
+          remainingRentalBalance={remainingRentalBalance}
+          netRentalPaid={netRentalPaid}
           identityStatus={identityStatus}
           identityErrorCode={identityErrorCode}
           identityVerified={identityVerified}
@@ -4118,6 +4121,9 @@ function WizardModal({
   startStripeCheckout,
   paymentSaving,
   paymentPaid,
+  paymentPartiallyPaid,
+  remainingRentalBalance,
+  netRentalPaid,
   identityStatus,
   identityErrorCode,
   identityVerified,
