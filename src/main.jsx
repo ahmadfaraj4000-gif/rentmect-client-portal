@@ -220,6 +220,7 @@ function App() {
   const paymentReturnPendingRef = useRef(null);
   const paymentReturnHandledRef = useRef(false);
   const stripeReturnHandledRef = useRef(false);
+  const agreementLinkHandledRef = useRef(false);
   const extensionDateSourceRef = useRef('');
   const portalSectionLoadsRef = useRef(new Map());
   const loadedPortalSectionsRef = useRef(new Set());
@@ -685,6 +686,18 @@ function App() {
 
     return prioritizedRental;
   }, [rentals, adminBookingRentalId, checkoutIntent, reservationForm.vehicleId, reservationForm.pickupDate, reservationForm.returnDate, reservationForm.pickupTime, reservationForm.returnTime]);
+
+  useEffect(() => {
+    if (!session?.user?.id || !portalDataReady || !currentRental?.id || agreementLinkHandledRef.current) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('agreement') !== '1') return;
+    const requestedRentalId = params.get('rental');
+    if (requestedRentalId && requestedRentalId !== currentRental.id) return;
+    agreementLinkHandledRef.current = true;
+    setActiveTab('guided');
+    setPreviewCheckoutSection('agreement');
+    setAgreementModalOpen(true);
+  }, [currentRental?.id, portalDataReady, session?.user?.id]);
 
   const activeRentalConflict = useMemo(() => {
     if (!cars2BookingHandoff || !checkoutIntent) return null;
