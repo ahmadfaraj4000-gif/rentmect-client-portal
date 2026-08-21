@@ -8,6 +8,7 @@ import './booking-preview-fleet.css';
 
 const TEST_VEHICLE_ID = '00000000-0000-4000-8000-000000000015';
 const TEST_VEHICLE_ENABLED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_BOOKING_FLOW_TEST === 'true';
+const BOOKING_DEVICE_STORAGE_KEY = 'rentmect_booking_device';
 const PUBLIC_ASSET_BASE = (import.meta.env.VITE_PUBLIC_FLEET_ASSET_BASE_URL || 'https://rentmect.com/assets').replace(/\/$/, '');
 const FALLBACK_IMAGE = `${PUBLIC_ASSET_BASE}/Benz-CLS-AMG-550-224.webp`;
 const TIME_OPTIONS = Array.from({ length: 30 }, (_, index) => {
@@ -56,6 +57,27 @@ function vehicleImages(vehicle) {
 
 function money(value) {
   return Number(value || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+}
+
+function bookingDeviceId() {
+  try {
+    const saved = localStorage.getItem(BOOKING_DEVICE_STORAGE_KEY) || '';
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(saved)) return saved;
+  } catch {
+    // Storage can be unavailable in strict private-browsing modes.
+  }
+
+  const created = typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (character) => (
+      Number(character) ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (Number(character) / 4)))
+    ).toString(16));
+  try {
+    localStorage.setItem(BOOKING_DEVICE_STORAGE_KEY, created);
+  } catch {
+    // The generated id remains valid for this request.
+  }
+  return created;
 }
 
 function tripDateTime(dateValue, timeValue) {
@@ -244,14 +266,17 @@ export default function BookingPreviewFleet() {
       setStarting(false);
       return;
     }
-    const { data: bookingId, error: bookingError } = await withRequestDeadline(supabase.rpc('create_website_pending_booking', {
-      p_pickup_date: trip.pickupDate,
-      p_return_date: trip.returnDate,
-      p_pickup_time: trip.pickupTime,
-      p_return_time: trip.returnTime,
-      p_vehicle_id: selectedVehicle.id,
-      p_selected_vehicle_name: selectedVehicle.name,
+    const { data: protectedHold, error: bookingError } = await withRequestDeadline(supabase.functions.invoke('website-booking-hold', {
+      headers: { 'X-RentMe-Device': bookingDeviceId() },
+      body: {
+        pickup_date: trip.pickupDate,
+        return_date: trip.returnDate,
+        pickup_time: trip.pickupTime,
+        return_time: trip.returnTime,
+        vehicle_id: selectedVehicle.id,
+      },
     }), 'Checkout');
+    const bookingId = protectedHold?.booking_id || '';
     if (bookingError || !bookingId) {
       setError(previewError(bookingError, 'The checkout session could not be created. Please retry.'));
       setStarting(false);
@@ -261,7 +286,7 @@ export default function BookingPreviewFleet() {
       ...trip,
       selectedVehicle: selectedVehicle.name,
       selectedVehicleId: selectedVehicle.id,
-      expiresAt: new Date(Date.now() + 25 * 60000).toISOString(),
+      expiresAt: protectedHold?.expires_at || new Date(Date.now() + 25 * 60000).toISOString(),
       status: 'pending',
       source: 'supabase_booking_preview',
     };
