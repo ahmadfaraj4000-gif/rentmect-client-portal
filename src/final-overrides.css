@@ -339,6 +339,21 @@
   }
 }
 
+.payment-panel-clean .payment-credit-row strong {
+  color: #17633d;
+}
+
+.payment-panel-clean .balance-due-row {
+  margin-top: 4px;
+  border: 1px solid rgba(190, 32, 38, .22);
+  background: #fff5f4;
+}
+
+.payment-panel-clean .balance-due-row strong {
+  color: #a51f25;
+  font-size: 1.08rem;
+}
+
 /* Explicit end-of-rental decision keeps return, extension, and exchange from
    competing for attention in the same panel. */
 .trip-change-chooser {

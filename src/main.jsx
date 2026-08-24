@@ -924,27 +924,38 @@ function App() {
   const agreementSigned = Boolean(currentRental?.agreement_signed);
   const paymentPaid = currentRental?.payment_status === 'paid';
   const paymentPartiallyPaid = ['partially_paid', 'partial'].includes(String(currentRental?.payment_status || '').toLowerCase());
-  const currentRentalInvoiceTotal = Number(currentRental?.rental_total || 0)
-    + Number(currentRental?.service_fee_total || 0)
-    + Number(currentRental?.tax_amount || 0)
-    + Number(currentRental?.security_deposit || 0);
-  const currentRentalBalanceCharge = rentalCharges.find((charge) =>
-    charge.rental_id === currentRental?.id
-      && charge.charge_type === 'rental_amendment'
-      && ['pending', 'checkout_open', 'failed'].includes(String(charge.status || '').toLowerCase())
+  const currentRentalInvoiceTotal = currentRental
+    ? Number(currentRental.rental_total || 0)
+      + Number(currentRental.service_fee_total || 0)
+      + Number(currentRental.tax_amount || 0)
+      + Number(currentRental.security_deposit || 0)
+    : 0;
+  const currentRentalBalanceCharges = rentalCharges.filter((charge) =>
+    charge.rental_id === currentRental?.id && charge.charge_type === 'rental_amendment'
   );
-  const fallbackRemainingBalance = Math.max(
-    0,
-    currentRentalInvoiceTotal - Number(currentRental?.payment_amount_cents || 0) / 100,
+  const currentOpenRentalBalance = [...currentRentalBalanceCharges]
+    .filter((charge) => ['pending', 'checkout_open', 'failed'].includes(String(charge.status || '').toLowerCase()))
+    .sort((left, right) => new Date(right.updated_at || right.created_at || 0) - new Date(left.updated_at || left.created_at || 0))[0];
+  const initialRentalPayment = currentRental?.paid_at
+    ? Number(currentRental.payment_amount_cents || 0) / 100
+    : 0;
+  const paidRentalBalancePayments = currentRentalBalanceCharges
+    .filter((charge) => String(charge.status || '').toLowerCase() === 'paid')
+    .reduce((sum, charge) => sum + Number(charge.payment_amount_cents || Math.round(Number(charge.total_amount || 0) * 100)) / 100, 0);
+  const calculatedRentalPaidToDate = Math.min(
+    currentRentalInvoiceTotal,
+    Math.max(0, initialRentalPayment + paidRentalBalancePayments),
   );
-  const remainingRentalBalance = paymentPartiallyPaid
-    ? Number(currentRentalBalanceCharge?.total_amount ?? fallbackRemainingBalance)
-    : paymentPaid ? 0 : currentRentalInvoiceTotal;
-  const netRentalPaid = Math.max(0, currentRentalInvoiceTotal - remainingRentalBalance);
+  const currentRentalBalanceDue = paymentPaid
+    ? 0
+    : Number(currentOpenRentalBalance?.total_amount || Math.max(0, currentRentalInvoiceTotal - calculatedRentalPaidToDate));
+  const currentRentalPaidToDate = Math.max(0, currentRentalInvoiceTotal - currentRentalBalanceDue);
+  const remainingRentalBalance = currentRentalBalanceDue;
+  const netRentalPaid = currentRentalPaidToDate;
   const currentRentalAdditionalCharges = rentalCharges.filter((charge) =>
     charge.rental_id === currentRental?.id
-      && charge.charge_type !== 'rental_amendment'
       && !charge.included_in_initial_payment
+      && !['rental_amendment', 'rental_installment'].includes(charge.charge_type)
   );
   const checkoutDeadline = checkoutExpiresAt ? new Date(checkoutExpiresAt).getTime() : 0;
   const checkoutSecondsRemaining = checkoutDeadline
@@ -3738,8 +3749,11 @@ async function verifyPhoneCode(options = {}) {
               <div className="invoice-row"><span>CT Sales Tax</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Refundable Security Deposit{currentRental?.under_25_deposit_adjustment_type || estimate?.under25 ? ' (Age 21–24)' : ''}</span><strong>{currentRental?.discount_waives_security_deposit ? 'Waived' : currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
               <ServiceFeesSummary serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
-              {paymentPartiallyPaid && <div className="invoice-row discount-row"><span>Payments already received</span><strong>−{money(netRentalPaid)}</strong></div>}
-              <div className="invoice-row total-row"><span>{paymentPartiallyPaid ? 'Remaining Rental Balance' : 'Total Due Today'}</span><strong>{currentRental ? money(remainingRentalBalance) : estimate && !estimate.invalid ? money(estimate.checkoutTotal + estimate.securityDeposit) : 'Pending'}</strong></div>
+              <div className="invoice-row total-row"><span>{currentRental ? 'Current Invoice Total' : 'Total Due Today'}</span><strong>{currentRental ? money(currentRentalInvoiceTotal) : estimate && !estimate.invalid ? money(estimate.checkoutTotal + estimate.securityDeposit) : 'Pending'}</strong></div>
+              {currentRental && <>
+                <div className="invoice-row payment-credit-row"><span>Payments Credited</span><strong>−{money(currentRentalPaidToDate)}</strong></div>
+                <div className="invoice-row balance-due-row"><span>Remaining Rental Balance</span><strong>{money(currentRentalBalanceDue)}</strong></div>
+              </>}
             </div>
             {currentRental && !paymentPaid && <div className="discount-code-card">
               <div><Tag size={19}/><span><strong>{currentRental.discount_code ? `${currentRental.discount_code} applied` : 'Have a promotion code?'}</strong><small>{currentRental.discount_code ? `Your customer total includes ${money(currentRental.discount_amount)} in savings.` : 'Paste the code from the website banner or popup. Your exact total and Stripe payment update immediately.'}</small></span></div>
@@ -3789,7 +3803,7 @@ async function verifyPhoneCode(options = {}) {
               </div>
             )}
             {!approvedUnpaidExtension && <button className="primary-btn big-action" onClick={startStripeCheckout} disabled={paymentSaving || checkoutExpired || paymentPaid}>
-              <CreditCard size={18} /> {paymentPaid ? 'Payment Complete' : paymentSaving ? 'Opening Stripe...' : paymentPartiallyPaid ? `Pay Remaining ${money(remainingRentalBalance)}` : 'Pay With Stripe'}
+              <CreditCard size={18} /> {paymentPaid ? 'Payment Complete' : paymentSaving ? 'Opening Stripe...' : `Pay ${money(currentRental ? currentRentalBalanceDue : currentRentalInvoiceTotal)} With Stripe`}
             </button>}
           </section>
         )}
