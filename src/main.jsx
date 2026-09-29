@@ -2667,6 +2667,7 @@ async function verifyPhoneCode(options = {}) {
   }
 
   function openMaps() {
+    if (!paymentPaid) return;
     const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(RENTMECT_ADDRESS)}`;
     window.open(url, '_blank', 'noopener,noreferrer');
   }
@@ -3383,9 +3384,9 @@ async function verifyPhoneCode(options = {}) {
             <span>{userEmail} • {emailVerified ? 'Email verified' : 'Email verification pending'}</span>
           </div>
           <div className="header-actions">
-            <button className="return-btn" onClick={openMaps}>
-              <MapPin size={18} /> Location
-            </button>
+            {paymentPaid && <button className="return-btn" onClick={openMaps}>
+              <MapPin size={18} /> Pickup Location
+            </button>}
             {!paymentPaid && <button className="primary-btn" onClick={beginWizard}>
               <CheckCircle2 size={18} /> {currentRental ? 'Resume Reservation' : 'Create Reservation'}
             </button>}
@@ -3427,6 +3428,7 @@ async function verifyPhoneCode(options = {}) {
 
                 <div className="reservation-summary compact-summary">
                   <SummaryItem label="Pickup" value={formatRentalDate(overviewPickupDate, overviewPickupTime)} />
+                  {paymentPaid && <SummaryItem label="Pickup Address" value={RENTMECT_ADDRESS} />}
                   <SummaryItem label="Return" value={formatRentalDate(overviewReturnDate, overviewReturnTime)} />
                   <SummaryItem label="Vehicle" value={currentRental?.vehicles?.name || selectedVehicle?.name || 'Not selected yet'} />
                   <SummaryItem label="Status" value={prettyStatus(currentRental?.status || 'pending setup')} />
@@ -3441,7 +3443,7 @@ async function verifyPhoneCode(options = {}) {
                 <div className="reservation-summary compact-summary">
                   <SummaryItem label="Due" value={formatRentalDate(currentRental.return_date, currentRental.return_time)} />
                   <SummaryItem label="Time Left" value={returnCountdown.value} />
-                  <SummaryItem label="Return Location" value={RENTMECT_ADDRESS} />
+                  <SummaryItem label="Pickup / Return Location" value={paymentPaid ? RENTMECT_ADDRESS : 'Address provided after checkout'} />
                 </div>
                 {canManageTrip && <button className="secondary-btn manage-trip-btn" type="button" onClick={() => setTripManagerOpen((open) => !open)}>
                   <Car size={18}/> {showTripManager ? 'Hide Trip Options' : 'Manage This Trip'}
@@ -3763,7 +3765,7 @@ async function verifyPhoneCode(options = {}) {
               <summary>Rental terms and pickup requirements</summary>
               <div className="payment-summary-grid">
                 <div className="invoice-row"><span>Mileage Included</span><strong>{MILEAGE_POLICY}</strong></div>
-                <div className="invoice-row"><span>Pickup Address</span><strong>{RENTMECT_ADDRESS}</strong></div>
+                <div className="invoice-row"><span>Pickup Address</span><strong>{paymentPaid ? RENTMECT_ADDRESS : 'Address provided after checkout and in your confirmation email'}</strong></div>
                 <div className="invoice-row"><span>Required Before Pickup</span><strong>Phone, agreement, payment, saved driver license, and insurance for this rental</strong></div>
                 <div className="invoice-row"><span>Cancellation</span><strong>{CANCELLATION_TERMS}</strong></div>
               </div>
@@ -4584,7 +4586,7 @@ function WizardModal({
               <ServiceFeesSummary serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
               {paymentPartiallyPaid && <><div className="invoice-row discount-row"><span>Payments already received</span><strong>−{money(netRentalPaid)}</strong></div><div className="invoice-row total-row"><span>Remaining rental balance</span><strong>{money(remainingRentalBalance)}</strong></div></>}
               <div className="invoice-row"><span>Mileage</span><strong>{MILEAGE_POLICY}</strong></div>
-              <div className="invoice-row"><span>Pickup</span><strong>{RENTMECT_ADDRESS}</strong></div>
+              <div className="invoice-row"><span>Pickup</span><strong>{paymentPaid ? RENTMECT_ADDRESS : 'Farmington, CT — address provided after checkout'}</strong></div>
               <div className="invoice-row"><span>Booking checklist</span><strong>Phone, Identity, license, insurance, and agreement are complete before payment unlocks.</strong></div>
               {currentRental && !paymentPaid && <div className="discount-code-card">
                 <div><Tag size={19}/><span><strong>{currentRental.discount_code ? `${currentRental.discount_code} applied` : 'Promotion code'}</strong><small>{currentRental.discount_code ? `You saved ${money(currentRental.discount_amount)}.` : 'Apply the code before opening Stripe.'}</small></span></div>
@@ -5549,7 +5551,7 @@ function PreviewGuestExperience({
             <section className="preview-detail-section preview-policy-grid">
               <div><strong>250 miles/day</strong><span>Included with your rental</span></div>
               <div><strong>Secure verification</strong><span>Identity and documents protected</span></div>
-              <div><strong>Farmington pickup</strong><span>{RENTMECT_ADDRESS}</span></div>
+              <div><strong>Farmington pickup</strong><span>Address provided after checkout and in your confirmation email.</span></div>
             </section>
           </div>
 
@@ -5712,11 +5714,16 @@ function PreviewCheckout({
           <CheckCircle2 size={54} />
           <p className="eyebrow">Booking received</p>
           <h1>Your booking is complete.</h1>
-          <p>Payment is recorded. Rent Me CT can now review the submitted documents and prepare pickup details.</p>
+          <p>Payment is recorded. Your pickup address is below and in your booking confirmation email.</p>
           <div className="preview-confirmation-trip">
             <strong>{vehicle?.name || 'Your Rent Me CT vehicle'}</strong>
             <span>{formatRentalDate(reservationForm.pickupDate, reservationForm.pickupTime)}</span>
             <span>to {formatRentalDate(reservationForm.returnDate, reservationForm.returnTime)}</span>
+          </div>
+          <div className="preview-confirmation-trip">
+            <strong>Pickup / Return Address</strong>
+            <span>{RENTMECT_ADDRESS}</span>
+            <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(RENTMECT_ADDRESS)}`} target="_blank" rel="noopener noreferrer">Get pickup directions</a>
           </div>
           <button className="preview-primary-button" type="button" onClick={openPortal}>Manage trip in client portal <ChevronRight size={18} /></button>
         </main>
@@ -5949,7 +5956,7 @@ function PreviewTripSummary({ reservationForm, rentalTotal, serviceFeeTotal = 0,
       <div className="preview-trip-summary-dates">
         <div><CalendarDays size={18} /><span><small>Pickup</small><strong>{formatRentalDate(reservationForm.pickupDate, reservationForm.pickupTime)}</strong></span></div>
         <div><Clock size={18} /><span><small>Return</small><strong>{formatRentalDate(reservationForm.returnDate, reservationForm.returnTime)}</strong></span></div>
-        <div><MapPin size={18} /><span><small>Location</small><strong>{RENTMECT_ADDRESS}</strong></span></div>
+        <div><MapPin size={18} /><span><small>Pickup location</small><strong>Farmington, CT — address provided after checkout</strong></span></div>
       </div>
       {secondsRemaining !== null && <CheckoutHoldTimer secondsRemaining={secondsRemaining} expired={expired} />}
       <div className="preview-trip-prices">
@@ -7139,7 +7146,7 @@ License Plate: ${vehicle?.plate_number || vehicle?.license_plate || 'Pending'}
 
 Pickup Date/Time: ${formatRentalDate(reservation?.pickupDate, reservation?.pickupTime)}
 Return Date/Time: ${formatRentalDate(reservation?.returnDate, reservation?.returnTime)}
-Return Location: ${RENTMECT_ADDRESS}
+Return Location: Farmington, CT. The exact pickup and return address is provided after checkout and in your booking confirmation email.
 
 Daily Rate: ${vehicle?.daily_rate ? money(vehicle.daily_rate) : 'Pending'}
 Base Rental Total: ${rental?.base_rental_total ? money(rental.base_rental_total) : rental?.rental_total ? money(rental.rental_total) : 'Pending'}
