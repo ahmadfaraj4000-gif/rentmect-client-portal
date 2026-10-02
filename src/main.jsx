@@ -924,7 +924,17 @@ function App() {
   const agreementSigned = Boolean(currentRental?.agreement_signed);
   const paymentPaid = currentRental?.payment_status === 'paid';
   const paymentPartiallyPaid = ['partially_paid', 'partial'].includes(String(currentRental?.payment_status || '').toLowerCase());
-  const currentRentalInvoiceTotal = currentRental
+  const [accountSnapshot, setAccountSnapshot] = useState(null);
+  useEffect(() => {
+    let active = true;
+    setAccountSnapshot(null);
+    if (currentRental?.id) supabase.rpc('get_rental_account', { p_rental_id: currentRental.id }).then(({ data, error }) => {
+      if (active && !error) setAccountSnapshot({ ...data, rental_id: currentRental.id });
+    });
+    return () => { active = false; };
+  }, [currentRental?.id, currentRental?.updated_at, currentRental?.payment_status, rentalCharges, extensionRequests]);
+  const currentAccount = accountSnapshot?.rental_id === currentRental?.id ? accountSnapshot : null;
+  const currentRentalInvoiceTotal = currentAccount ? Number(currentAccount.invoice_total) : currentRental
     ? Number(currentRental.rental_total || 0)
       + Number(currentRental.service_fee_total || 0)
       + Number(currentRental.tax_amount || 0)
@@ -944,12 +954,11 @@ function App() {
     .reduce((sum, charge) => sum + Number(charge.payment_amount_cents || Math.round(Number(charge.total_amount || 0) * 100)) / 100, 0);
   const calculatedRentalPaidToDate = Math.min(
     currentRentalInvoiceTotal,
-    Math.max(0, initialRentalPayment + paidRentalBalancePayments),
+    Math.max(0, initialRentalPayment + paidRentalBalancePayments + currentRentalExtensions.filter((e) => e.request_kind === 'same_vehicle_extension' && e.status === 'activated' && e.payment_status === 'paid').reduce((sum, e) => sum + Number(e.payment_amount_cents != null ? e.payment_amount_cents / 100 : e.extension_total_amount || 0), 0)),
   );
-  const currentRentalBalanceDue = paymentPaid
-    ? 0
-    : Number(currentOpenRentalBalance?.total_amount || Math.max(0, currentRentalInvoiceTotal - calculatedRentalPaidToDate));
-  const currentRentalPaidToDate = Math.max(0, currentRentalInvoiceTotal - currentRentalBalanceDue);
+  const currentRentalBalanceDue = currentAccount ? Number(currentAccount.balance_due)
+    : Number(currentOpenRentalBalance?.total_amount ?? Math.max(0, currentRentalInvoiceTotal - calculatedRentalPaidToDate));
+  const currentRentalPaidToDate = currentAccount ? Number(currentAccount.net_paid) : Math.max(0, currentRentalInvoiceTotal - currentRentalBalanceDue);
   const remainingRentalBalance = currentRentalBalanceDue;
   const netRentalPaid = currentRentalPaidToDate;
   const currentRentalAdditionalCharges = rentalCharges.filter((charge) =>
@@ -2572,6 +2581,7 @@ async function verifyPhoneCode(options = {}) {
         p_requested_return_date: extensionForm.returnDate,
         p_requested_return_time: extensionForm.returnTime,
         p_customer_note: extensionForm.note,
+        p_expected_daily_rate: extensionPreview.quote?.daily_rate,
       });
       setExtensionSaving(false);
 
@@ -3515,7 +3525,7 @@ async function verifyPhoneCode(options = {}) {
                       </p>}
                       {pendingExtension && <p className="extension-status-detail"><strong>Your original return is still binding</strong> until this request is approved and paid.</p>}
                       {approvedUnpaidExtension && <p className="extension-status-detail">
-                        Pay <strong>{money(approvedUnpaidExtension.extension_total_amount)}</strong>{approvedUnpaidExtension.payment_due_at ? ` by ${new Date(approvedUnpaidExtension.payment_due_at).toLocaleString()}` : ''}. The original return remains binding until payment activates this request.
+                        Previous unpaid balance: <strong>{money(currentAccount?.total_balance_due ?? currentRentalBalanceDue)}</strong>. Extension: <strong>{money(approvedUnpaidExtension.extension_total_amount)}</strong>. Total due: <strong>{money(Number(currentAccount?.total_balance_due ?? currentRentalBalanceDue) + Number(approvedUnpaidExtension.extension_total_amount || 0))}</strong>. Pay the extension amount of <strong>{money(approvedUnpaidExtension.extension_total_amount)}</strong>{approvedUnpaidExtension.payment_due_at ? ` by ${new Date(approvedUnpaidExtension.payment_due_at).toLocaleString()}` : ''}. The original return remains binding until payment activates this request.
                       </p>}
                       {extensionWorkflowStage === 'insurance' && <div className={`extension-insurance-step ${extensionInsuranceDocument?.status || 'missing'}`}>
                         <div>
@@ -3590,7 +3600,10 @@ async function verifyPhoneCode(options = {}) {
                         <small><span>Added rental</span><b>{money(extensionPreview.quote?.extension_rental_amount || 0)}</b></small>
                         <small><span>Tax and fees</span><b>{money(extensionPreview.quote?.extension_tax_amount || 0)}</b></small>
                         <small><span>Existing deposit</span><b>{money(extensionPreview.quote?.deposit_carried_amount || 0)} carried</b></small>
-                        <small><span>Due after approval</span><b>{money(extensionPreview.quote?.extension_total_amount || 0)}</b></small>
+                        <small><span>Agreed daily rate for added dates</span><b>{money(extensionPreview.quote?.daily_rate || 0)}</b></small>
+                        <small><span>Previous unpaid balance</span><b>{money(extensionPreview.quote?.previous_unpaid_balance || 0)}</b></small>
+                        <small><span>Charges for added dates</span><b>{money(extensionPreview.quote?.extension_total_amount || 0)}</b></small>
+                        <small><span>Total due</span><b>{money(extensionPreview.quote?.total_due || 0)}</b></small>
                       </div>
                       <small>No second security deposit is charged for keeping the same car. After submission, a new insurance declaration page is required. Approval creates a payment deadline; the longer return activates only after payment.</small>
                     </div>
@@ -3616,7 +3629,9 @@ async function verifyPhoneCode(options = {}) {
                                   <small><span>Added rental</span><b>{money(vehicle.quote?.extension_rental_amount || 0)}</b></small>
                                   <small><span>Tax and fees</span><b>{money(vehicle.quote?.extension_tax_amount || 0)}</b></small>
                                   <small><span>Deposit carried</span><b>{money(vehicle.quote?.deposit_carried_amount || 0)}</b></small>
-                                  <small><span>Due after approval</span><b>{money(vehicle.quote?.extension_total_amount || 0)}</b></small>
+                                  <small><span>Previous unpaid balance</span><b>{money(vehicle.quote?.previous_unpaid_balance || 0)}</b></small>
+                                  <small><span>Added dates and deposit increase</span><b>{money(vehicle.quote?.extension_total_amount || 0)}</b></small>
+                                  <small><span>Total due</span><b>{money(vehicle.quote?.total_due || 0)}</b></small>
                                 </span>
                                 <small>{Number(vehicle.quote?.deposit_increase_amount || 0) > 0 ? `${money(vehicle.quote.deposit_increase_amount)} additional deposit is included above. ` : ''}{Number(vehicle.quote?.deposit_decrease_amount || 0) > 0 ? `${money(vehicle.quote.deposit_decrease_amount)} remains protected until inspection. ` : ''}New insurance is required. Approval creates a payment deadline; nothing changes until payment.</small>
                               </span>
@@ -3753,6 +3768,7 @@ async function verifyPhoneCode(options = {}) {
               <ServiceFeesSummary serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
               <div className="invoice-row total-row"><span>{currentRental ? 'Current Invoice Total' : 'Total Due Today'}</span><strong>{currentRental ? money(currentRentalInvoiceTotal) : estimate && !estimate.invalid ? money(estimate.checkoutTotal + estimate.securityDeposit) : 'Pending'}</strong></div>
               {currentRental && <>
+                {currentAccount?.pricing_periods?.map((period) => <div className="invoice-row" key={period.id}><span>{new Date(period.starts_at).toLocaleDateString('en-US', { timeZone: 'America/New_York' })} – {new Date(period.ends_at).toLocaleDateString('en-US', { timeZone: 'America/New_York' })} · {money(period.daily_rate)}/day (included above)</span><strong>{money(period.rental_amount)}</strong></div>)}
                 <div className="invoice-row payment-credit-row"><span>Payments Credited</span><strong>−{money(currentRentalPaidToDate)}</strong></div>
                 <div className="invoice-row balance-due-row"><span>Remaining Rental Balance</span><strong>{money(currentRentalBalanceDue)}</strong></div>
               </>}
