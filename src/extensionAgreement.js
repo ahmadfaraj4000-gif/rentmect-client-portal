@@ -1,3 +1,11 @@
+export function rentalPricingDetails(periods, money) {
+  if (!periods?.length) return 'Rental pricing: See the saved rental totals below.';
+  const dates = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', dateStyle: 'medium', timeStyle: 'short' });
+  return 'Agreed pricing periods (Eastern):\n' + periods.map((period) =>
+    `${dates.format(new Date(period.starts_at))} through ${dates.format(new Date(period.ends_at))}: ${money(period.daily_rate)}/day; ${money(Number(period.rental_amount) + Number(period.tax_amount))} rental and tax after adjustments.`
+  ).join('\n');
+}
+
 export function extensionAgreementDetails(extension, vehicle, formatDate, money) {
   if (extension?.status !== 'approved_pending_payment') return '';
   const linked = extension.request_kind === 'switch_car_continuation';

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { extensionAgreementDetails } from './extensionAgreement.js';
+import { extensionAgreementDetails, rentalPricingDetails } from './extensionAgreement.js';
 import {
   AlertTriangle,
   ArrowDown,
@@ -2391,6 +2391,7 @@ async function verifyPhoneCode(options = {}) {
         },
         rental,
         approvedExtension: approvedUnpaidExtension,
+        pricingPeriods: currentAccount?.pricing_periods,
         extensionVehicle: vehicles.find((item) => item.id === approvedUnpaidExtension?.replacement_vehicle_id),
         signatureName: signatureName.trim(),
         signatureImageData,
@@ -3120,6 +3121,7 @@ async function verifyPhoneCode(options = {}) {
     reservation: reservationForm,
     rental: currentRental,
     approvedExtension: approvedUnpaidExtension,
+    pricingPeriods: currentAccount?.pricing_periods,
     extensionVehicle: vehicles.find((item) => item.id === approvedUnpaidExtension?.replacement_vehicle_id),
     signatureName,
     signatureImageData,
@@ -7152,7 +7154,7 @@ function rentalPeriodsOverlap(reservation, rental) {
   return requestedStart < blockedUntil && requestedBlockedUntil > bookedStart;
 }
 
-function buildAgreementWithDetails({ agreementText, profile, email, vehicle, reservation, rental, signatureName, signatureImageData, approvedExtension, extensionVehicle }) {
+function buildAgreementWithDetails({ agreementText, profile, email, vehicle, reservation, rental, signatureName, signatureImageData, approvedExtension, extensionVehicle, pricingPeriods }) {
   const details = `
 AUTO-FILLED RENTAL DETAILS
 
@@ -7175,7 +7177,7 @@ Pickup Date/Time: ${formatRentalDate(reservation?.pickupDate, reservation?.picku
 Return Date/Time: ${formatRentalDate(reservation?.returnDate, reservation?.returnTime)}
 Return Location: Farmington, CT. The exact pickup and return address is provided after checkout and in your booking confirmation email.
 
-Daily Rate: ${vehicle?.daily_rate ? money(vehicle.daily_rate) : 'Pending'}
+${rentalPricingDetails(pricingPeriods, money)}
 Base Rental Total: ${rental?.base_rental_total ? money(rental.base_rental_total) : rental?.rental_total ? money(rental.rental_total) : 'Pending'}
 Under-25 Rental Markup: ${Number(rental?.under_25_markup_amount || 0) > 0 ? `${money(rental.under_25_markup_amount)} (${Number(rental.under_25_markup_percentage || 0)}%)` : 'Not applied'}
 Promotion Discount: ${Number(rental?.discount_amount || 0) > 0 ? `${money(rental.discount_amount)} (${rental.discount_code || 'promotion'})` : 'Not applied'}

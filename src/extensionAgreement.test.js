@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { extensionAgreementDetails } from './extensionAgreement.js';
+import { extensionAgreementDetails, rentalPricingDetails } from './extensionAgreement.js';
 
 const request = { status: 'approved_pending_payment', request_kind: 'same_vehicle_extension',
   original_return_date: '2026-10-03', original_return_time: '8:00 PM',
@@ -9,6 +9,19 @@ const request = { status: 'approved_pending_payment', request_kind: 'same_vehicl
   extension_tax_amount: 30.67, extension_total_amount: 513.67 };
 const date = (day, time) => `${day} ${time}`;
 const money = (value) => `$${Number(value).toFixed(2)}`;
+test('agreement uses saved periods and adjusted amounts after a mechanical replacement', () => {
+  const text = rentalPricingDetails([
+    { starts_at: '2026-09-17T22:00:00Z', ends_at: '2026-10-04T22:00:00Z', daily_rate: 49, rental_amount: 648.66, tax_amount: 41.19 },
+    { starts_at: '2026-10-04T22:00:00Z', ends_at: '2026-10-09T22:00:00Z', daily_rate: 49, rental_amount: 245, tax_amount: 15.56 },
+  ], money);
+  assert.equal(text.match(/\$49.00\/day/g).length, 2);
+  assert.match(text, /\$689.85 rental and tax after adjustments/);
+  assert.match(text, /\$260.56 rental and tax after adjustments/);
+  assert.match(text, /6:00 PM/);
+});
+test('agreement avoids claiming a fleet rate when dated pricing has not loaded', () => {
+  assert.equal(rentalPricingDetails(undefined, money), 'Rental pricing: See the saved rental totals below.');
+});
 test('agreement includes approved dates and fixed quote before extension payment', () => {
   const text = extensionAgreementDetails(request, null, date, money);
   assert.match(text, /2026-10-03 8:00 PM through 2026-10-10 8:00 PM/);
