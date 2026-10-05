@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { extensionAgreementDetails } from './extensionAgreement.js';
 import {
   AlertTriangle,
   ArrowDown,
@@ -2389,6 +2390,8 @@ async function verifyPhoneCode(options = {}) {
           returnTime: reservationForm.returnTime || rental.return_time,
         },
         rental,
+        approvedExtension: approvedUnpaidExtension,
+        extensionVehicle: vehicles.find((item) => item.id === approvedUnpaidExtension?.replacement_vehicle_id),
         signatureName: signatureName.trim(),
         signatureImageData,
       });
@@ -2800,6 +2803,12 @@ async function verifyPhoneCode(options = {}) {
     const targetExtension = approvedUnpaidExtension;
     let rental = currentRental;
 
+    if (targetExtension && !agreementSigned) {
+      setPaymentSaving(false);
+      setAgreementModalOpen(true);
+      return;
+    }
+
     if (targetExtension && extensionInsuranceRequired) {
       setPaymentSaving(false);
       notify('Upload new proof of insurance for this extension before opening Stripe.', 'error');
@@ -3110,6 +3119,8 @@ async function verifyPhoneCode(options = {}) {
     vehicle: selectedVehicle || currentRental?.vehicles,
     reservation: reservationForm,
     rental: currentRental,
+    approvedExtension: approvedUnpaidExtension,
+    extensionVehicle: vehicles.find((item) => item.id === approvedUnpaidExtension?.replacement_vehicle_id),
     signatureName,
     signatureImageData,
   });
@@ -3544,7 +3555,7 @@ async function verifyPhoneCode(options = {}) {
                       {extensionWorkflowStage === 'insurance_review' && <p className="extension-waiting-note"><Clock size={17}/> Insurance uploaded. Rent Me CT must approve it before deciding the request.</p>}
                       {extensionWorkflowStage === 'admin_review' && <p className="extension-waiting-note"><Clock size={17}/> Insurance approved. The extension decision is now with Rent Me CT.</p>}
                       {extensionWorkflowStage === 'payment' && <button className="primary-btn" type="button" onClick={startStripeCheckout} disabled={paymentSaving || extensionInsuranceRequired}>
-                        <CreditCard size={18}/> {paymentSaving ? 'Opening Stripe…' : `Pay ${money(approvedUnpaidExtension.extension_total_amount)}`}
+                        <CreditCard size={18}/> {paymentSaving ? 'Opening Stripe…' : !agreementSigned ? 'Review & sign extension agreement' : `Pay ${money(approvedUnpaidExtension.extension_total_amount)}`}
                       </button>}
                       {pendingExtension && <button className="text-action" type="button" onClick={cancelExtensionRequest} disabled={extensionSaving}>Cancel this request</button>}
                       {['rejected', 'cancelled', 'expired'].includes(latestExtensionStatus.status) && <p className="extension-recovery-note">Choose “Keep this car longer” or “Switch to another car” above to check a different return or vehicle. You can also message Rent Me CT for help.</p>}
@@ -7141,7 +7152,7 @@ function rentalPeriodsOverlap(reservation, rental) {
   return requestedStart < blockedUntil && requestedBlockedUntil > bookedStart;
 }
 
-function buildAgreementWithDetails({ agreementText, profile, email, vehicle, reservation, rental, signatureName, signatureImageData }) {
+function buildAgreementWithDetails({ agreementText, profile, email, vehicle, reservation, rental, signatureName, signatureImageData, approvedExtension, extensionVehicle }) {
   const details = `
 AUTO-FILLED RENTAL DETAILS
 
@@ -7180,7 +7191,7 @@ Drawn Signature Image: ${signatureImageData || extractSignatureImage(rental?.agr
 ------------------------------------------------------------
 `;
 
-  return `${details}\n${agreementText}`;
+  return `${details}\n${extensionAgreementDetails(approvedExtension, extensionVehicle, formatRentalDate, money)}\n${agreementText}`;
 }
 
 function extractSignatureImage(snapshot = '') {
