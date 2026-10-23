@@ -248,6 +248,7 @@ function App() {
   const [sendingCode, setSendingCode] = useState(false);
   const [verifyingCode, setVerifyingCode] = useState(false);
   const [agreementChecked, setAgreementChecked] = useState(false);
+  const [agreementError, setAgreementError] = useState('');
   const [signatureName, setSignatureName] = useState('');
   const [signatureImageData, setSignatureImageData] = useState('');
   const [insuranceCoverage, setInsuranceCoverage] = useState({ collision: false, liability: false });
@@ -305,11 +306,13 @@ function App() {
       setSession(initialSession);
       const metaBooking = initialSession?.user?.user_metadata?.pending_booking;
 
-      if (metaBooking && isPendingBookingStillUsable(metaBooking)) {
-        localStorage.setItem('rentmect_pending_booking', JSON.stringify(metaBooking));
-      } else if (metaBooking) {
-        clearSavedBookingStorage();
-      }
+      // Local checkout edits are newer than signup metadata. Storage may be blocked.
+      try {
+        const savedBooking = JSON.parse(localStorage.getItem('rentmect_pending_booking') || 'null');
+        if (!isPendingBookingStillUsable(savedBooking) && isPendingBookingStillUsable(metaBooking)) {
+          localStorage.setItem('rentmect_pending_booking', JSON.stringify(metaBooking));
+        }
+      } catch { /* Continue loading the authoritative server booking. */ }
 
       if (adminBookingToken) {
         await loadAdminBookingHandoff(adminBookingToken);
@@ -748,6 +751,10 @@ function App() {
     currentRental?.return_date,
     currentRental?.pickup_time,
     currentRental?.return_time,
+    reservationForm.pickupDate,
+    reservationForm.returnDate,
+    reservationForm.pickupTime,
+    reservationForm.returnTime,
     currentRental?.checkout_expires_at,
   ]);
 
@@ -923,6 +930,12 @@ function App() {
   const hasCompletedRental = previousRentals.some((rental) => rental.status === 'completed');
   const emailVerified = Boolean(session?.user?.email_confirmed_at);
   const agreementSigned = Boolean(currentRental?.agreement_signed);
+  useEffect(() => {
+    setAgreementChecked(false);
+    setSignatureImageData('');
+    setAgreementError('');
+  }, [currentRental?.id, currentRental?.agreement_signed, currentRental?.agreement_version, currentRental?.return_date, currentRental?.return_time]);
+
   const paymentPaid = currentRental?.payment_status === 'paid';
   const paymentPartiallyPaid = ['partially_paid', 'partial'].includes(String(currentRental?.payment_status || '').toLowerCase());
   const [accountSnapshot, setAccountSnapshot] = useState(null);
@@ -1208,12 +1221,10 @@ function getBookingIdFromUrl() {
   }
 
   function applyBookingDataToPortal(bookingData) {
-    const today = getTodayDateInputValue();
-    const rawPickupDate = bookingData.pickupDate || bookingData.pickup_date || '';
-    const pickupDate = !rawPickupDate || rawPickupDate < today ? today : rawPickupDate;
-    const rawReturnDate = bookingData.returnDate || bookingData.return_date || '';
-    const minReturnDate = getNextDateInputValue(pickupDate);
-    const returnDate = !rawReturnDate || rawReturnDate < minReturnDate ? minReturnDate : rawReturnDate;
+    // Restoring an existing booking must never silently change the agreed dates.
+    const pickupDate = bookingData.pickupDate || bookingData.pickup_date || '';
+    const returnDate = bookingData.returnDate || bookingData.return_date || '';
+    if (!pickupDate || !returnDate) return;
 
     const normalizedBooking = {
       pickupDate,
@@ -1266,7 +1277,9 @@ function getBookingIdFromUrl() {
       }));
     }
 
-    localStorage.setItem('rentmect_pending_booking', JSON.stringify(normalizedBooking));
+    try {
+      localStorage.setItem('rentmect_pending_booking', JSON.stringify(normalizedBooking));
+    } catch { /* Booking data remains available in memory and on the server. */ }
   }
 
   async function loadPendingBookingFromDatabase(bookingId, currentSession) {
@@ -2352,12 +2365,10 @@ async function verifyPhoneCode(options = {}) {
   }
 
   async function signAgreement() {
-    if (!session?.user?.id) return;
-
-    const rental = currentRental || (await createReservationIfNeeded());
-
-    if (!rental?.id) {
-      notify('Create a reservation first.');
+    if (agreementSaving) return;
+    setAgreementError('');
+    if (!session?.user?.id) {
+      setAgreementError('Your session expired. Sign in again to finish signing.');
       return;
     }
 
@@ -2372,22 +2383,24 @@ async function verifyPhoneCode(options = {}) {
     }
 
     if (!signatureImageData) {
-      notify('Draw your signature in the signature box.');
+      notify('Use your typed signature or draw in the signature box.');
       return;
     }
 
     setAgreementSaving(true);
     try {
+      const rental = currentRental || (await createReservationIfNeeded());
+      if (!rental?.id) throw new Error('Could not load your reservation. Please retry or contact Rent Me CT.');
       const snapshot = buildAgreementWithDetails({
         agreementText: AGREEMENT_TEXT,
         profile: profileForm,
         email: userEmail,
         vehicle: selectedVehicle || rental?.vehicles,
         reservation: {
-          pickupDate: reservationForm.pickupDate || rental.pickup_date,
-          returnDate: reservationForm.returnDate || rental.return_date,
-          pickupTime: reservationForm.pickupTime || rental.pickup_time,
-          returnTime: reservationForm.returnTime || rental.return_time,
+          pickupDate: rental.pickup_date || reservationForm.pickupDate,
+          returnDate: rental.return_date || reservationForm.returnDate,
+          pickupTime: rental.pickup_time || reservationForm.pickupTime,
+          returnTime: rental.return_time || reservationForm.returnTime,
         },
         rental,
         approvedExtension: approvedUnpaidExtension,
@@ -2418,19 +2431,23 @@ async function verifyPhoneCode(options = {}) {
         .eq('id', signedRentalId)
         .single();
 
-      if (reloadError) throw reloadError;
-
-      setRentals((prev) => prev.map((r) => (r.id === updatedRental.id ? updatedRental : r)));
+      // The signature RPC committed successfully; a read failure must not invite a duplicate signature.
+      const savedRental = updatedRental || (typeof signedRental === 'object' ? { ...rental, ...signedRental } : { ...rental, agreement_signed: true, agreement_snapshot: snapshot, agreement_version: AGREEMENT_VERSION, agreement_signature_name: signatureName.trim() });
+      if (reloadError) console.warn('Signed agreement reload delayed', reloadError.message);
+      setRentals((prev) => prev.some((r) => r.id === savedRental.id)
+        ? prev.map((r) => (r.id === savedRental.id ? savedRental : r)) : [...prev, savedRental]);
       setAgreementModalOpen(false);
       setWizardReminder(null);
       setPreviewCheckoutSection('payment');
       if (wizardOpen) setWizardStep(6);
       setActiveTab('overview');
       notify('Agreement signed successfully. Payment is the final step.', 'success');
-      await maybeMarkReadyForPickup(updatedRental);
+      await maybeMarkReadyForPickup(savedRental);
     } catch (error) {
       console.error('Agreement signing failed', error);
-      notify(error?.message || 'The agreement could not be signed. Your portal is still available; please try again.', 'error');
+      const message = customerSafeMessage(error?.message || 'The agreement could not be signed. Please try again.');
+      setAgreementError(message);
+      notify(message, 'error');
     } finally {
       setAgreementSaving(false);
     }
@@ -3044,9 +3061,9 @@ async function verifyPhoneCode(options = {}) {
     if (wizardStep === 5 && !agreementSigned) {
       setWizardReminder({
         title: 'Sign the agreement before continuing',
-        text: 'Scroll through the agreement, check the acknowledgment, type your legal name, draw your signature, and press “Sign agreement & continue to payment.”',
+        text: '1. Review and accept the agreement. 2. Type your legal name and choose a typed or drawn signature. 3. Press “Agree, sign & continue.”',
       });
-      notify('Scroll down and sign the rental agreement before pressing Next.');
+      notify('Open Review & Sign to complete the three signing steps before pressing Next.');
       return;
     }
 
@@ -3328,6 +3345,7 @@ async function verifyPhoneCode(options = {}) {
               setSignatureImageData={setSignatureImageData}
               signAgreement={signAgreement}
               agreementSaving={agreementSaving}
+              agreementError={agreementError}
               currentRental={currentRental}
               onClose={() => setAgreementModalOpen(false)}
             />
@@ -3766,7 +3784,7 @@ async function verifyPhoneCode(options = {}) {
             <p className="eyebrow">Billing</p>
             <h3>Deposit & Rental Payment</h3>
             <p className="muted">
-              Review the exact amount due today before payment. Your security deposit is refundable after return if there are no unpaid tolls, tickets, excess mileage, cleaning, smoking, late, or damage charges.
+              Review the exact amount due today before payment. Your remaining security deposit is refunded within 30 calendar days after return, or sooner if required by law. Deductions are itemized. Tickets and related fines may be charged or invoiced for up to one year after the scheduled return date, including approved extensions, with prior itemized notice and supporting documentation.
             </p>
             <Under25PricingNotice rental={currentRental} estimate={estimate} />
             <div className="payment-summary-grid">
@@ -3911,6 +3929,7 @@ async function verifyPhoneCode(options = {}) {
             setSignatureImageData={setSignatureImageData}
             signAgreement={signAgreement}
             agreementSaving={agreementSaving}
+            agreementError={agreementError}
             currentRental={currentRental}
             onClose={() => setAgreementModalOpen(false)}
           />
@@ -3972,15 +3991,8 @@ async function verifyPhoneCode(options = {}) {
           documentUploadBusy={documentUploadBusy}
           licenseUploaded={licenseUploaded}
           insuranceUploaded={insuranceUploaded}
-          agreementChecked={agreementChecked}
-          setAgreementChecked={setAgreementChecked}
-          signatureName={signatureName}
-          setSignatureName={setSignatureName}
-          signatureImageData={signatureImageData}
-          setSignatureImageData={setSignatureImageData}
-          signAgreement={signAgreement}
-          agreementSaving={agreementSaving}
-          agreementText={agreementTextWithDetails}
+          agreementSigned={agreementSigned}
+          openAgreement={() => { setWizardOpen(false); setAgreementError(''); setAgreementModalOpen(true); }}
           serviceFees={serviceFees}
           discountInput={discountInput}
           setDiscountInput={setDiscountInput}
@@ -4193,16 +4205,8 @@ function WizardModal({
   documentUploadBusy,
   licenseUploaded,
   insuranceUploaded,
-  agreementChecked,
   agreementSigned,
-  setAgreementChecked,
-  signatureName,
-  setSignatureName,
-  signatureImageData,
-  setSignatureImageData,
-  signAgreement,
-  agreementSaving,
-  agreementText,
+  openAgreement,
   serviceFees,
   discountInput,
   setDiscountInput,
@@ -4218,7 +4222,6 @@ function WizardModal({
   const [vehicleReminder, setVehicleReminder] = useState(null);
   const dialogRef = useDialogFocus(() => setWizardOpen(false));
   const wizardBodyRef = useRef(null);
-  const agreementSignatureRef = useRef(null);
   const correctingIdentity = Boolean(identityCorrectionTarget);
   const showCorrectionName = ['full_name', 'identity_details'].includes(identityCorrectionTarget);
   const showCorrectionBirthday = ['date_of_birth', 'identity_details'].includes(identityCorrectionTarget);
@@ -4231,15 +4234,6 @@ function WizardModal({
     wizardBodyRef.current?.scrollTo({ top: 0, behavior: 'auto' });
   }, [wizardStep]);
 
-  function jumpToWizardSignature() {
-    const signatureSection = agreementSignatureRef.current;
-    if (!signatureSection) return;
-    signatureSection.scrollIntoView({
-      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
-      block: 'start',
-    });
-    window.setTimeout(() => signatureSection.focus({ preventScroll: true }), 350);
-  }
 
   return (
     <div className="wizard-backdrop" role="presentation">
@@ -4526,75 +4520,13 @@ function WizardModal({
             </div>
           )}
 
-          {wizardStep === 5 && (
-            <div className="wizard-agreement-step">
-              {agreementSigned ? (
-                <div className="guided-step-success" role="status">
-                  <CheckCircle2 size={22} />
-                  <div>
-                    <strong>Agreement signed successfully</strong>
-                    <span>Press “Continue to secure payment” below.</span>
-                  </div>
-                </div>
-              ) : (
-                <div className="agreement-guidance" role="note">
-                  <ArrowDown size={22} />
-                  <div>
-                    <strong>Review the agreement, then sign once</strong>
-                    <span>You can read from the top or jump directly to the acknowledgment and signature section.</span>
-                  </div>
-                  <button className="secondary-btn agreement-jump-button" type="button" onClick={jumpToWizardSignature}>
-                    Jump to signature <ArrowDown size={17} />
-                  </button>
-                </div>
-              )}
-
-              <div className="agreement-preview wizard-agreement">
-                <pre>{agreementText}</pre>
-              </div>
-
-              {!agreementSigned && (
-                <div ref={agreementSignatureRef} className="agreement-signature-section" tabIndex="-1">
-                  <div className="agreement-end-marker"><ArrowDown size={18} /> End of agreement — complete the signature below</div>
-
-                  <label className="checkbox-row">
-                    <input
-                      type="checkbox"
-                      checked={agreementChecked}
-                      onChange={(e) => {
-                        setWizardReminder(null);
-                        setAgreementChecked(e.target.checked);
-                      }}
-                    />
-                    I have read and agree to the rental agreement.
-                  </label>
-
-                  <label className="signature-field">
-                    <span>Full legal name</span>
-                    <input
-                      className="signature-input"
-                      placeholder="Type full legal name as signature"
-                      value={signatureName}
-                      onChange={(e) => {
-                        setWizardReminder(null);
-                        setSignatureName(e.target.value);
-                      }}
-                    />
-                  </label>
-
-                  <SignaturePad value={signatureImageData} onChange={setSignatureImageData} />
-
-                  <button className="primary-btn agreement-sign-continue" onClick={() => {
-                    setWizardReminder(null);
-                    signAgreement();
-                  }} disabled={agreementSaving}>
-                    <FileSignature size={18} />
-                    {agreementSaving ? 'Saving signed agreement…' : 'Agree, sign & continue'}
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
+          {wizardStep === 5 && <div className="wizard-agreement-step">
+            <div className="guided-step-success" role="status"><FileSignature size={22}/><div>
+              <strong>{agreementSigned ? 'Agreement signed successfully' : 'Sign your agreement in 3 steps'}</strong>
+              <span>{agreementSigned ? 'Continue to secure payment below.' : 'Review and accept, add a typed or drawn signature, then save. Each step shows what is complete.'}</span>
+            </div></div>
+            <button className="primary-btn" type="button" onClick={openAgreement}>{agreementSigned ? 'View signed agreement' : 'Review & sign agreement'}</button>
+          </div>}
 
           {wizardStep === 6 && (
             <div>
@@ -4726,7 +4658,7 @@ function WizardModal({
             <button
               className="primary-btn"
               type="button"
-              onClick={wizardStep === 5 && !agreementSigned ? jumpToWizardSignature : nextWizardStep}
+              onClick={wizardStep === 5 && !agreementSigned ? openAgreement : nextWizardStep}
               disabled={wizardPrimaryDisabled}
             >
               {wizardStep === 1 && !currentRental
@@ -4753,179 +4685,134 @@ function WizardModal({
 }
 
 function AgreementModal({
-  agreementText,
-  agreementChecked,
-  agreementSigned,
-  setAgreementChecked,
-  signatureName,
-  setSignatureName,
-  signatureImageData,
-  setSignatureImageData,
-  signAgreement,
-  agreementSaving,
-  currentRental,
-  onClose,
+  agreementText, agreementChecked, agreementSigned, setAgreementChecked,
+  signatureName, setSignatureName, signatureImageData, setSignatureImageData,
+  signAgreement, agreementSaving, agreementError, currentRental, onClose,
 }) {
-  const dialogRef = useDialogFocus(onClose);
+  const dialogRef = useDialogFocus(() => { if (!agreementSaving) onClose(); });
   const scrollRef = useRef(null);
   const signBoxRef = useRef(null);
   const acknowledgmentRef = useRef(null);
-  const alreadySigned = Boolean(currentRental?.agreement_snapshot);
-  const [agreementReviewed, setAgreementReviewed] = useState(alreadySigned);
-  const displayedAgreement = currentRental?.agreement_snapshot || agreementText;
+  const nameRef = useRef(null);
+  const [validationError, setValidationError] = useState('');
+  // An old snapshot may remain after an amendment requires a new signature.
+  const alreadySigned = Boolean(agreementSigned && currentRental?.agreement_snapshot);
+  const displayedAgreement = alreadySigned ? currentRental.agreement_snapshot : agreementText;
   const displayedSignatureImage = extractSignatureImage(displayedAgreement);
   const printableAgreement = String(displayedAgreement || '').replace(
     /Drawn Signature Image:\s*data:image\/png;base64,[^\s]+/,
-    'Drawn Signature Image: embedded below',
+    'Electronic Signature Image: embedded below',
   );
-
-  function trackAgreementReview() {
-    const reviewBox = scrollRef.current;
-    if (!reviewBox || agreementReviewed) return;
-    const reachedEnd = reviewBox.scrollTop + reviewBox.clientHeight >= reviewBox.scrollHeight - 24;
-    if (reachedEnd) setAgreementReviewed(true);
-  }
-
-  useEffect(() => {
-    const reviewBox = scrollRef.current;
-    if (!reviewBox || alreadySigned) return;
-    if (reviewBox.scrollHeight <= reviewBox.clientHeight + 24) setAgreementReviewed(true);
-  }, [alreadySigned, displayedAgreement]);
+  const ready = agreementChecked && signatureName.trim() && signatureImageData;
 
   function jumpToSignature() {
-    const reviewBox = scrollRef.current;
-    if (!reviewBox) return;
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    reviewBox.scrollTo({
-      top: reviewBox.scrollHeight,
-      behavior: reduceMotion ? 'auto' : 'smooth',
-    });
-    window.setTimeout(() => {
-      setAgreementReviewed(true);
-      signBoxRef.current?.scrollTo({ top: 0, behavior: reduceMotion ? 'auto' : 'smooth' });
-      acknowledgmentRef.current?.focus({ preventScroll: true });
-    }, reduceMotion ? 0 : 400);
+    signBoxRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    acknowledgmentRef.current?.focus({ preventScroll: true });
   }
 
-  function returnToAgreement() {
-    const reviewBox = scrollRef.current;
-    if (!reviewBox) return;
-    reviewBox.scrollTo({
-      top: 0,
-      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
-    });
-    reviewBox.focus({ preventScroll: true });
+  function useTypedSignature() {
+    if (!signatureName.trim()) {
+      setValidationError('Step 2: Enter your full legal name first.');
+      nameRef.current?.focus();
+      return;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = 900;
+    canvas.height = 220;
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#172033';
+    context.font = 'italic 52px Georgia, serif';
+    context.fillText(signatureName.trim(), 24, 130, 852);
+    setSignatureImageData(canvas.toDataURL('image/png'));
+    setValidationError('');
   }
 
-  return (
-    <div className="modal-backdrop" role="presentation">
-      <div ref={dialogRef} className="agreement-modal" role="dialog" aria-modal="true" aria-labelledby="agreement-modal-title" tabIndex="-1">
-        <div className="modal-header">
-          <div>
-            <p className="eyebrow">Rental Agreement</p>
-            <h2 id="agreement-modal-title">Review & Sign</h2>
-          </div>
-          <button className="wizard-close" type="button" aria-label="Close rental agreement" onClick={onClose}>
-            <X size={20} />
-          </button>
-        </div>
+  function submit() {
+    if (agreementSaving) return;
+    if (!agreementChecked) {
+      setValidationError('Step 1: Check the box to accept the agreement and consent to electronic signing.');
+      acknowledgmentRef.current?.focus();
+    } else if (!signatureName.trim()) {
+      setValidationError('Step 2: Enter your full legal name.');
+      nameRef.current?.focus();
+    } else if (!signatureImageData) {
+      setValidationError('Step 2: Press “Use my typed signature” or draw in the signature box.');
+      signBoxRef.current?.querySelector('.signature-type-button')?.focus();
+    } else {
+      setValidationError('');
+      void signAgreement();
+    }
+  }
 
-        <div className={`agreement-review-status ${agreementReviewed ? 'complete' : ''}`} role="status" aria-live="polite">
-          {alreadySigned
-            ? 'This is the exact signed agreement stored with your rental.'
-            : agreementReviewed
-              ? 'You reached the signature section. Confirm the acknowledgment and complete both signature fields.'
-              : 'Review the complete agreement, or jump to the signature section when you are ready.'}
-        </div>
-
-        {!alreadySigned && <div className="agreement-quick-actions">
-          <button className="secondary-btn agreement-jump-button" type="button" onClick={jumpToSignature}>
-            Jump to signature <ArrowDown size={17} />
-          </button>
-        </div>}
-
-        <div ref={scrollRef} className="agreement-scroll-box" onScroll={trackAgreementReview} tabIndex="0" aria-label="Complete rental agreement">
-          <pre>{printableAgreement}</pre>
-          {alreadySigned && displayedSignatureImage && <div className="agreement-stored-signature">
-            <strong>Stored electronic signature</strong>
-            <img src={displayedSignatureImage} alt={`Electronic signature for ${currentRental.agreement_signature_name || 'renter'}`} width="900" height="300" />
-          </div>}
-        </div>
-
-        <div ref={signBoxRef} className="agreement-sign-box">
-          {!alreadySigned && <><label className="checkbox-row">
-            <input
-              ref={acknowledgmentRef}
-              type="checkbox"
-              checked={agreementChecked}
-              onChange={(e) => setAgreementChecked(e.target.checked)}
-              disabled={!agreementReviewed}
-            />
-            I have read and agree to the rental agreement.
+  return <div className="modal-backdrop" role="presentation">
+    <div ref={dialogRef} className="agreement-modal" role="dialog" aria-modal="true" aria-labelledby="agreement-modal-title" tabIndex="-1" aria-busy={agreementSaving}>
+      <div className="modal-header">
+        <div><p className="eyebrow">Rental Agreement</p><h2 id="agreement-modal-title">{alreadySigned ? 'Signed agreement' : 'Sign in 3 steps'}</h2></div>
+        <button className="wizard-close" type="button" aria-label="Close rental agreement" disabled={agreementSaving} onClick={onClose}><X size={20} /></button>
+      </div>
+      {!alreadySigned && <>
+        <ol className="agreement-steps" aria-label="Signing progress">
+          <li className={agreementChecked ? 'complete' : ''}>1. Review & accept {agreementChecked && '✓'}</li>
+          <li className={signatureName.trim() && signatureImageData ? 'complete' : ''}>2. Add signature {signatureName.trim() && signatureImageData && '✓'}</li>
+          <li>3. Save & continue</li>
+        </ol>
+        <div className="agreement-quick-actions"><button className="secondary-btn agreement-jump-button" type="button" onClick={jumpToSignature}>Go to signing steps <ArrowDown size={17} /></button></div>
+      </>}
+      <div ref={scrollRef} className="agreement-scroll-box" tabIndex="0" aria-label="Complete rental agreement">
+        <pre>{printableAgreement}</pre>
+        {alreadySigned && displayedSignatureImage && <div className="agreement-stored-signature"><strong>Stored electronic signature</strong><img src={displayedSignatureImage} alt={`Electronic signature for ${currentRental.agreement_signature_name || 'renter'}`} width="900" height="220" /></div>}
+      </div>
+      {!alreadySigned && <div ref={signBoxRef} className="agreement-sign-box">
+        <fieldset disabled={agreementSaving} className="agreement-sign-fields">
+          <legend>Complete your electronic signature</legend>
+          <label className="checkbox-row"><input ref={acknowledgmentRef} type="checkbox" checked={agreementChecked} onChange={(event) => { setAgreementChecked(event.target.checked); setValidationError(''); }} />
+            <span><strong>1. Review & accept</strong><br />I have read and agree to the rental agreement and consent to sign electronically. My typed or drawn signature is my signature on this agreement.</span>
           </label>
-
-              <label className="signature-field">
-                <span>Full legal name</span>
-                <input
-                  className="signature-input"
-                  placeholder="Type full legal name as signature"
-                  value={signatureName}
-                  onChange={(e) => setSignatureName(e.target.value)}
-                />
-              </label>
-
-          <SignaturePad value={signatureImageData} onChange={setSignatureImageData} />
-
-          <button className="link-btn agreement-back-to-review" type="button" onClick={returnToAgreement}>
-            <ArrowLeft size={16} /> Back to agreement
-          </button>
-          </>}
-        </div>
-
-        <div className="button-row end-row agreement-sign-actions">
-          {!alreadySigned && <button
-            className="primary-btn"
-            type="button"
-            onClick={signAgreement}
-            disabled={agreementSaving || !agreementReviewed || !agreementChecked || !signatureName.trim() || !signatureImageData}
-          >
-            <FileSignature size={17} /> {agreementSaving ? 'Saving signed agreement…' : 'Agree, sign & continue'}
-          </button>}
-          {currentRental?.agreement_snapshot && (
-            <button className="secondary-btn" type="button" onClick={() => downloadAgreement(currentRental)}>
-              Download Agreement
-            </button>
-          )}
-          <button className="secondary-btn" type="button" onClick={onClose}>{alreadySigned ? 'Close' : 'Finish later'}</button>
-        </div>
+          <label className="signature-field"><span>2. Full legal name</span><input ref={nameRef} autoComplete="name" className="signature-input" placeholder="Enter your full legal name" value={signatureName} onChange={(event) => {
+            setSignatureName(event.target.value);
+            setSignatureImageData('');
+            setValidationError('');
+          }} /></label>
+          <button className="secondary-btn signature-type-button" type="button" onClick={useTypedSignature}>Use my typed signature</button>
+          <p className="signature-help">Or draw below with your finger, mouse, or pen.</p>
+          <SignaturePad value={signatureImageData} disabled={agreementSaving} onChange={(value) => { setSignatureImageData(value); setValidationError(''); }} />
+        </fieldset>
+        <p className={`agreement-signing-feedback ${ready ? 'complete' : ''}`} role="status" aria-live="polite">
+          {agreementSaving ? 'Saving your signed agreement. Please keep this window open…' : ready ? 'Signature ready. Step 3: Press “Agree, sign & continue” to save it.' : signatureImageData ? 'Signature added. Complete the acknowledgment and your legal name to continue.' : 'Your signature has not been saved yet. Add it above, then complete step 3.'}
+        </p>
+        {(validationError || agreementError) && <p className="agreement-signing-error" role="alert">{validationError || agreementError}</p>}
+      </div>}
+      {alreadySigned && <p className="agreement-review-status complete">This is the exact signed agreement stored with your rental.</p>}
+      <div className="button-row end-row agreement-sign-actions">
+        {!alreadySigned && <button className="primary-btn" type="button" onClick={submit} disabled={agreementSaving}><FileSignature size={17} />{agreementSaving ? 'Saving signed agreement…' : '3. Agree, sign & continue'}</button>}
+        {alreadySigned && <button className="secondary-btn" type="button" onClick={() => downloadAgreement(currentRental)}>Download Agreement</button>}
+        <button className="secondary-btn" type="button" disabled={agreementSaving} onClick={onClose}>{alreadySigned ? 'Close' : 'Finish later'}</button>
       </div>
     </div>
-  );
+  </div>;
 }
 
-function SignaturePad({ value, onChange }) {
+function SignaturePad({ value, onChange, disabled = false }) {
   const canvasRef = useRef(null);
   const drawingRef = useRef(false);
+  const movedRef = useRef(false);
 
   function getPoint(event) {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
-    const source = event.touches?.[0] || event;
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
-    return {
-      x: (source.clientX - rect.left) * scaleX,
-      y: (source.clientY - rect.top) * scaleY,
-      lineScale: (scaleX + scaleY) / 2,
-    };
+    return { x: (event.clientX - rect.left) * scaleX, y: (event.clientY - rect.top) * scaleY, lineScale: (scaleX + scaleY) / 2 };
   }
-
   function start(event) {
+    if (disabled || !event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
     event.preventDefault();
     const canvas = canvasRef.current;
+    canvas.setPointerCapture(event.pointerId);
     const context = canvas.getContext('2d');
     const point = getPoint(event);
     drawingRef.current = true;
+    movedRef.current = false;
     context.lineWidth = 2.4 * point.lineScale;
     context.lineCap = 'round';
     context.lineJoin = 'round';
@@ -4933,62 +4820,45 @@ function SignaturePad({ value, onChange }) {
     context.beginPath();
     context.moveTo(point.x, point.y);
   }
-
   function move(event) {
-    if (!drawingRef.current) return;
+    if (!drawingRef.current || disabled) return;
     event.preventDefault();
-    const canvas = canvasRef.current;
-    const context = canvas.getContext('2d');
+    const context = canvasRef.current.getContext('2d');
     const point = getPoint(event);
-    context.lineWidth = 2.4 * point.lineScale;
     context.lineTo(point.x, point.y);
     context.stroke();
+    movedRef.current = true;
   }
-
   function stop() {
     if (!drawingRef.current) return;
     drawingRef.current = false;
-    onChange(canvasRef.current.toDataURL('image/png'));
+    // A tap alone leaves an empty canvas and is not a signature.
+    if (movedRef.current) onChange(canvasRef.current.toDataURL('image/png'));
   }
-
   function clear() {
-    const canvas = canvasRef.current;
-    const context = canvas.getContext('2d');
-    context.clearRect(0, 0, canvas.width, canvas.height);
+    if (disabled) return;
+    drawingRef.current = false;
+    canvasRef.current.getContext('2d').clearRect(0, 0, 720, 220);
     onChange('');
   }
-
   useEffect(() => {
-    if (!value || !canvasRef.current) return;
     const canvas = canvasRef.current;
+    if (!canvas) return undefined;
     const context = canvas.getContext('2d');
+    let cancelled = false;
+    if (!value) { context.clearRect(0, 0, canvas.width, canvas.height); return undefined; }
     const image = new Image();
     image.onload = () => {
+      if (cancelled || drawingRef.current) return;
       context.clearRect(0, 0, canvas.width, canvas.height);
       context.drawImage(image, 0, 0, canvas.width, canvas.height);
     };
     image.src = value;
+    return () => { cancelled = true; };
   }, [value]);
-
   return <div className="signature-pad-wrap">
-    <div className="signature-pad-header">
-      <strong>Draw signature</strong>
-      <button className="link-btn" type="button" onClick={clear}>Clear</button>
-    </div>
-    <canvas
-      ref={canvasRef}
-      className="signature-pad"
-      width="720"
-      height="220"
-      onMouseDown={start}
-      onMouseMove={move}
-      onMouseUp={stop}
-      onMouseLeave={stop}
-      onTouchStart={start}
-      onTouchMove={move}
-      onTouchEnd={stop}
-      aria-label="Draw your signature"
-    />
+    <div className="signature-pad-header"><strong>Signature preview / draw here</strong><button className="link-btn" type="button" disabled={disabled} onClick={clear}>Clear signature</button></div>
+    <canvas ref={canvasRef} className="signature-pad" width="720" height="220" onPointerDown={start} onPointerMove={move} onPointerUp={stop} onPointerCancel={stop} onLostPointerCapture={stop} aria-label="Draw your signature, or use the typed signature button above" aria-disabled={disabled} />
   </div>;
 }
 
@@ -5861,9 +5731,9 @@ function PreviewCheckout({
           <PreviewCheckoutSection sectionKey="agreement" number="4" title="Rental agreement" summary={agreementSigned ? 'Agreement signed' : 'Review the terms and add your signature'} completed={agreementSigned} open={activeSection === 'agreement'} onOpen={() => setActiveSection('agreement')}>
             <div className="preview-agreement-summary">
               <FileSignature size={28} />
-              <div><strong>{agreementSigned ? 'Agreement signed successfully' : 'Open the agreement and scroll down to sign'}</strong><p>{agreementSigned ? 'This requirement is complete. Payment is your final step.' : 'The acknowledgment, typed name, signature pad, and green sign button are below the agreement text.'}</p></div>
+              <div><strong>{agreementSigned ? 'Agreement signed successfully' : 'Sign your agreement in 3 easy steps'}</strong><p>{agreementSigned ? 'This requirement is complete. Payment is your final step.' : '1. Review and accept. 2. Add a typed or drawn signature. 3. Save and continue.'}</p></div>
             </div>
-            <button className="preview-primary-button" type="button" onClick={openAgreement} disabled={!documentsComplete}>{agreementSigned ? 'View signed agreement' : 'Review, scroll & sign agreement'} <ChevronRight size={18} /></button>
+            <button className="preview-primary-button" type="button" onClick={openAgreement} disabled={!documentsComplete}>{agreementSigned ? 'View signed agreement' : 'Review & sign agreement'} <ChevronRight size={18} /></button>
           </PreviewCheckoutSection>
 
           <PreviewCheckoutSection sectionKey="payment" number="5" title="Payment" summary={paymentPaid ? 'Payment complete' : paymentPartiallyPaid ? `Remaining balance ${money(amountDue)}` : `Due today ${money(total)}`} completed={paymentPaid} open={activeSection === 'payment'} onOpen={() => setActiveSection('payment')}>
@@ -7173,8 +7043,8 @@ Year: ${vehicle?.year || 'Pending'}
 VIN: ${vehicle?.vin || 'Pending'}
 License Plate: ${vehicle?.plate_number || vehicle?.license_plate || 'Pending'}
 
-Pickup Date/Time: ${formatRentalDate(reservation?.pickupDate, reservation?.pickupTime)}
-Return Date/Time: ${formatRentalDate(reservation?.returnDate, reservation?.returnTime)}
+Pickup Date/Time: ${formatRentalDate(rental?.pickup_date || reservation?.pickupDate, rental?.pickup_time || reservation?.pickupTime)}
+Return Date/Time: ${formatRentalDate(rental?.return_date || reservation?.returnDate, rental?.return_time || reservation?.returnTime)}
 Return Location: Farmington, CT. The exact pickup and return address is provided after checkout and in your booking confirmation email.
 
 ${rentalPricingDetails(pricingPeriods, money)}

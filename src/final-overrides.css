@@ -2456,3 +2456,28 @@ summary:focus-visible {
     padding: 15px 16px 18px;
   }
 }
+
+/* One scrollable signing dialog keeps all steps reachable with a mobile keyboard. */
+.agreement-modal { overflow-y: auto; scroll-padding: 16px; }
+.agreement-modal > * { flex-shrink: 0; }
+.agreement-modal .agreement-scroll-box { flex: none; height: 240px; min-height: 160px; max-height: 30dvh; overflow: auto; }
+.agreement-modal .agreement-sign-box { flex: none; overflow: visible; }
+.agreement-sign-fields { border: 0; margin: 0; padding: 0; display: grid; gap: 14px; min-width: 0; }
+.agreement-sign-fields legend { margin-bottom: 14px; font-weight: 800; }
+.agreement-steps { display: flex; flex-wrap: wrap; gap: 10px; list-style: none; margin: 14px 22px 0; padding: 0; }
+.agreement-steps li { padding: 8px 10px; border-radius: 8px; background: #eef2f0; color: #34433a; font-size: 13px; font-weight: 700; }
+.agreement-steps .complete, .agreement-signing-feedback.complete { background: #edf8f1; color: #145f35; }
+.agreement-signing-feedback, .agreement-signing-error { padding: 12px; border-radius: 8px; line-height: 1.5; }
+.agreement-signing-feedback { background: #f1f4f7; color: #34433a; }
+.agreement-signing-error { background: #fff0ee; color: #96271c; border: 1px solid #e4b5ad; }
+.signature-help { margin: 0; font-size: 13px; }
+.agreement-modal .signature-pad { touch-action: none; }
+.agreement-modal .agreement-sign-actions { flex-shrink: 0; padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+
+.agreement-modal .agreement-scroll-box { background: #f8faf9; color: #26352d; border-color: #cbd6cf; }
+.agreement-modal .agreement-scroll-box pre { color: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agreement-modal .wizard-close { color: #26352d; }
+
+.agreement-sign-fields .checkbox-row { align-items: flex-start; cursor: pointer; padding: 8px 0; }
+.agreement-sign-fields .checkbox-row input { flex: 0 0 22px; width: 22px; height: 22px; margin-top: 2px; accent-color: #17633e; }
+.agreement-sign-fields .signature-input { font-size: 16px; }
