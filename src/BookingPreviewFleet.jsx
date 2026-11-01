@@ -1,3 +1,4 @@
+import { rentalCalendarMinutes } from './rentalBillingTime.js';
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, CalendarDays, Car, CheckCircle2, ChevronRight, Search, ShieldCheck } from 'lucide-react';
 import { supabase } from './supabaseClient';
@@ -103,7 +104,7 @@ function tripDateTime(dateValue, timeValue) {
 function rentalMinutes(trip) {
   const start = tripDateTime(trip.pickupDate, trip.pickupTime);
   const end = tripDateTime(trip.returnDate, trip.returnTime);
-  return start && end ? Math.max(0, Math.floor((end - start) / 60000)) : 0;
+  return start && end ? Math.max(0, rentalCalendarMinutes(start, end)) : 0;
 }
 
 function rentalDays(trip) {
@@ -322,7 +323,7 @@ export default function BookingPreviewFleet() {
           <aside className="supabase-preview-booking-card">
             <div className="supabase-preview-price"><strong>{money(selectedVehicle.daily_rate)}</strong><span>/ day</span></div>
             <TripFields trip={trip} updateTrip={updateTrip} />
-            <p className={`supabase-preview-policy ${quote?.valid ? 'valid' : 'invalid'}`}>{Number(policy.advance_notice_minutes || 0) === 0 ? 'Same-day pickup is available.' : `Pickup requires ${Number(policy.advance_notice_minutes)} minutes advance notice.`} Rentals require at least {Number(policy.minimum_rental_hours || 24)} hours.</p>
+            <p className={`supabase-preview-policy ${quote?.valid ? 'valid' : 'invalid'}`}>{Number(policy.advance_notice_minutes || 0) === 0 ? 'Same-day pickup is available.' : `Pickup requires ${Number(policy.advance_notice_minutes)} minutes advance notice.`} Rentals require at least {Number(policy.minimum_rental_days || 1)} rental day(s), ending at the same Eastern time.</p>
             <div className={`supabase-preview-availability ${available ? 'available' : 'unavailable'}`}><span>{checking ? 'Checking calendar…' : available ? 'Available for these dates' : selectedAvailability?.reason || 'Unavailable for these dates'}</span></div>
             <div className="supabase-preview-total"><span>{days || 0} rental days</span><strong>{money(Number(selectedVehicle.daily_rate || 0) * days)}</strong></div>
             <button type="button" onClick={startBooking} disabled={!quote?.valid || !available || checking || starting}>{starting ? 'Starting secure checkout…' : 'Book this vehicle'}<ChevronRight size={18}/></button>
@@ -338,7 +339,7 @@ export default function BookingPreviewFleet() {
     <PreviewHeader label="Rent Me CT Vehicles" />
     <main className="supabase-preview-fleet">
       <section className="supabase-preview-hero"><p className="eyebrow">Rent Me CT fleet</p><h1>Choose your rental</h1><p>Choose your dates, see available vehicles, and start your reservation.</p></section>
-      <section className="supabase-preview-date-panel"><h2>Choose rental dates</h2><TripFields trip={trip} updateTrip={updateTrip} /><p className={`supabase-preview-policy ${quote?.valid ? 'valid' : 'invalid'}`}>{Number(policy.advance_notice_minutes || 0) === 0 ? 'Same-day pickup is available.' : `Pickup requires ${Number(policy.advance_notice_minutes)} minutes advance notice.`} Every rental must be at least {Number(policy.minimum_rental_hours || 24)} hours.{quote?.error ? ` ${quote.error}` : ''}</p></section>
+      <section className="supabase-preview-date-panel"><h2>Choose rental dates</h2><TripFields trip={trip} updateTrip={updateTrip} /><p className={`supabase-preview-policy ${quote?.valid ? 'valid' : 'invalid'}`}>{Number(policy.advance_notice_minutes || 0) === 0 ? 'Same-day pickup is available.' : `Pickup requires ${Number(policy.advance_notice_minutes)} minutes advance notice.`} Every rental must be at least {Number(policy.minimum_rental_days || 1)} rental day(s), ending at the same Eastern time.{quote?.error ? ` ${quote.error}` : ''}</p></section>
       <section className="supabase-preview-filterbar">
         <div className="supabase-preview-search"><Search size={18}/><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search the fleet" /></div>
         <button type="button" className={availableOnly ? 'active' : ''} aria-pressed={availableOnly} onClick={() => setAvailableOnly((current) => !current)}>Available only</button>

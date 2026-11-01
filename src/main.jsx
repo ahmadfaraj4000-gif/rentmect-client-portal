@@ -1,3 +1,4 @@
+import { rentalCalendarMinutes, rentalDayShortcut } from './rentalBillingTime.js';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { extensionAgreementDetails, rentalPricingDetails } from './extensionAgreement.js';
@@ -1926,7 +1927,7 @@ async function verifyPhoneCode(options = {}) {
     }
 
     if (!estimate || estimate.invalid) {
-      notify(estimate?.error || `Rentals require at least ${Number(bookingPolicy.minimum_rental_hours || 24)} hours.`);
+      notify(estimate?.error || `Rentals require at least ${Number(bookingPolicy.minimum_rental_days || 1)} rental day(s), ending at the same Eastern time.`);
       return null;
     }
 
@@ -6497,8 +6498,8 @@ async function functionInvokeErrorMessage(error, fallback) {
 }
 
 function getRentalDays(start, end) {
-  const pickup = new Date(`${start}T00:00:00`);
-  const dropoff = new Date(`${end}T00:00:00`);
+  const pickup = new Date(`${start}T00:00:00Z`);
+  const dropoff = new Date(`${end}T00:00:00Z`);
   return Math.ceil((dropoff - pickup) / (1000 * 60 * 60 * 24));
 }
 
@@ -6517,13 +6518,15 @@ function getCustomerBookingWindow(reservation, policy = DEFAULT_BOOKING_POLICY) 
     return { valid: false, actualMinutes: 0, billableDays: 0, error: 'Choose valid pickup and return dates and times.' };
   }
   const actualMinutes = Math.floor((returnAt.getTime() - pickupAt.getTime()) / 60000);
-  const earliestReturn = new Date(pickupAt.getTime() + minimumMinutes * 60000);
-  if (actualMinutes < minimumMinutes) {
+  const minimumReturn = rentalDayShortcut(pickupAt, minimumMinutes / 1440);
+  const earliestReturn = parseEasternBookingDateTime(minimumReturn.returnDate, minimumReturn.returnTime);
+  const billingMinutes = rentalCalendarMinutes(pickupAt, returnAt);
+  if (billingMinutes < minimumMinutes) {
     return {
       valid: false,
       actualMinutes: Math.max(0, actualMinutes),
       billableDays: 0,
-      error: `Rentals require at least ${minimumMinutes / 60} hours. The earliest return is ${formatRentalDate(easternDateInput(earliestReturn), earliestReturn.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }))}.`,
+      error: `Rentals require at least ${minimumMinutes / 1440} rental day(s), ending at the same Eastern time. The earliest return is ${formatRentalDate(easternDateInput(earliestReturn), earliestReturn.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }))}.`,
     };
   }
   const earliestPickup = new Date(Date.now() + advanceMinutes * 60000);
@@ -6531,23 +6534,22 @@ function getCustomerBookingWindow(reservation, policy = DEFAULT_BOOKING_POLICY) 
     return {
       valid: false,
       actualMinutes,
-      billableDays: Math.ceil(actualMinutes / 1440),
+      billableDays: Math.ceil(billingMinutes / 1440),
       error: `The earliest available pickup is ${earliestPickup.toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}.`,
     };
   }
-  return { valid: true, actualMinutes, billableDays: Math.ceil(actualMinutes / 1440), error: '' };
+  return { valid: true, actualMinutes, billableDays: Math.ceil(billingMinutes / 1440), error: '' };
 }
 
 function ensureCustomerMinimumReturn(reservation, policy = DEFAULT_BOOKING_POLICY) {
   const pickupAt = parseEasternBookingDateTime(reservation?.pickupDate, reservation?.pickupTime);
   const returnAt = parseEasternBookingDateTime(reservation?.returnDate, reservation?.returnTime);
   const minimumMilliseconds = Math.max(1, Number(policy.minimum_rental_days || 1)) * 86400000;
-  if (!pickupAt || (returnAt && returnAt.getTime() - pickupAt.getTime() >= minimumMilliseconds)) return reservation;
-  const earliestReturn = new Date(pickupAt.getTime() + minimumMilliseconds);
+  if (!pickupAt || (returnAt && rentalCalendarMinutes(pickupAt, returnAt) * 60000 >= minimumMilliseconds)) return reservation;
+  const minimumReturn = rentalDayShortcut(pickupAt, minimumMilliseconds / 86400000);
   return {
     ...reservation,
-    returnDate: easternDateInput(earliestReturn),
-    returnTime: earliestReturn.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true }),
+    ...minimumReturn,
   };
 }
 
