@@ -4,7 +4,7 @@ const money=n=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).
 const one=x=>Array.isArray(x)?x[0]:x;
 export async function reservationPdf(r,fontBytes){
  const pdf=await PDFDocument.create();pdf.registerFontkit(fontkit);const font=await pdf.embedFont(fontBytes,{subset:true});
- let page=pdf.addPage([612,792]);let y=738;const ink=rgb(.06,.07,.1),red=rgb(.9,.035,.08);
+ let page=pdf.addPage([612,792]);let y=738;const ink=rgb(.06,.07,.1),red=rgb(.07,.24,.16);
  function draw(row,size,color){if(y<size+65){page=pdf.addPage([612,792]);y=738;}page.drawText(row,{x:54,y,size,font,color});y-=size+7;}
  function line(text,size=11,color=ink){let row='';for(const character of String(text).replace(/[\r\n]+/g,' ')){const next=row+character;if(font.widthOfTextAtSize(next,size)>504&&row){const space=row.lastIndexOf(' ');if(space>0){draw(row.slice(0,space),size,color);row=row.slice(space+1)+character;}else{draw(row,size,color);row=character;}}else row=next;}if(row)draw(row,size,color);}
  line('RENT ME CT',24,red);line('Merchant rental reservation',16);y-=12;
