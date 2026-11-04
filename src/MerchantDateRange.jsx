@@ -1,13 +1,14 @@
-import React,{useState,useCallback} from 'react';
+import React,{useState,useCallback,useId} from 'react';
 import {CalendarDays,ChevronLeft,ChevronRight} from 'lucide-react';
 import MerchantDialog from './MerchantDialog.jsx';
 import MerchantCalendar from './MerchantCalendar.jsx';
 import {easternToday,readableDate,moveMonth} from './merchantFormFields.js';
 export default function MerchantDateRange({schedule,onChange}){
  const [open,setOpen]=useState(false),[stage,setStage]=useState('pickup'),[start,setStart]=useState(''),[end,setEnd]=useState(''),[month,setMonth]=useState('');
+ const id=useId();
  const close=useCallback(()=>setOpen(false),[]);const today=easternToday();
  function show(which){setStart(schedule.pickupDate);setEnd(schedule.returnDate);setStage(which);setMonth((schedule.pickupDate||today).slice(0,7)+'-01');setOpen(true);}
  function choose(day){if(stage==='pickup'||!start||day<=start){setStart(day);setEnd('');setStage('return');}else{setEnd(day);setStage('done');}}
- return <><div className="merchant-date-range"><button type="button" aria-haspopup="dialog" aria-expanded={open} onClick={()=>show('pickup')}><span><small>Pickup date</small><strong>{readableDate(schedule.pickupDate)}</strong></span><CalendarDays size={18}/></button><button type="button" aria-haspopup="dialog" aria-expanded={open} onClick={()=>show('return')}><span><small>Drop-off date</small><strong>{readableDate(schedule.returnDate)}</strong></span><CalendarDays size={18}/></button></div>
+ return <><div className="merchant-date-range">{[['pickup','Pickup date',schedule.pickupDate],['return','Drop-off date',schedule.returnDate]].map(([which,label,value])=><div className="merchant-date-field" key={which}><label htmlFor={`${id}-${which}`}>{label}</label><button id={`${id}-${which}`} className="merchant-date-trigger" type="button" aria-haspopup="dialog" aria-expanded={open} onClick={()=>show(which)}><span>{readableDate(value)}</span><CalendarDays size={18}/></button></div>)}</div>
  {open&&<MerchantDialog title="Choose pickup and drop-off" className="merchant-range-dialog" onClose={close}><div className="booking-calendar-toolbar"><p className="booking-calendar-instruction" role="status">{stage==='pickup'?'Select your pickup date.':stage==='return'?'Now select your drop-off date.':'Your rental dates are ready.'}</p><div className="booking-calendar-nav"><button type="button" aria-label="Previous month" disabled={month.slice(0,7)<=today.slice(0,7)} onClick={()=>setMonth(moveMonth(month,-1))}><ChevronLeft size={18}/></button><button type="button" aria-label="Next month" onClick={()=>setMonth(moveMonth(month,1))}><ChevronRight size={18}/></button></div></div><div className="booking-calendar-months">{[0,1].map(offset=><MerchantCalendar key={offset} month={moveMonth(month,offset)} start={start} end={end} min={today} onChoose={choose} onNavigate={setMonth}/>)}</div><div className="booking-calendar-actions"><p className="booking-calendar-selection">{readableDate(start)} → {readableDate(end)}</p><button type="button" className="booking-calendar-apply" disabled={!start||!end||end<=start} onClick={()=>{onChange({pickupDate:start,returnDate:end});close();}}>Apply dates</button></div></MerchantDialog>}</>;
 }
