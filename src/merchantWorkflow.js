@@ -22,7 +22,7 @@ export function merchantSignInOptions(href, slug) {
   redirect.hash = '';
   redirect.search = '';
   redirect.searchParams.set('merchant', slug);
-  return { shouldCreateUser: true, emailRedirectTo: redirect.toString() };
+  return { shouldCreateUser: false, emailRedirectTo: redirect.toString() };
 }
 
 export function customerMerchantIdentity(currentRental, verification) {

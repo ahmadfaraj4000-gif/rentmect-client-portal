@@ -127,7 +127,7 @@ export default function MerchantPortal() {
     <main className="merchant-main">
       {authLoading ? <p role="status">Loading secure sign-in…</p> : !session ? <section className="merchant-login merchant-card">
         <div className="merchant-icon"><ShieldCheck size={25} /></div><p className="merchant-kicker">RENT ME CT · MERCHANT ACCESS</p><h1>One less thing<br />between them and the road.</h1>
-        <p>Enter your invited email address. We’ll send you a secure sign-in link, just like the customer portal.</p>
+        <p>Enter the email address approved for your merchant account. We’ll send you a secure sign-in link.</p>
         <form onSubmit={(event) => { event.preventDefault(); run(async () => {
           const normalized = merchantEmail(email);
           if (sent) {
@@ -144,7 +144,7 @@ export default function MerchantPortal() {
           {sent && <label>Email code (if included)<input autoComplete="one-time-code" inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value)} required /></label>}
           <button className="merchant-primary" disabled={busy}>{busy ? 'Please wait…' : sent ? 'Verify email code' : 'Email me a sign-in link'}<ArrowRight size={18} /></button>
           {sent && <button className="merchant-quiet" type="button" disabled={busy} onClick={() => { setSent(false); setCode(''); }}>Change email / send another link</button>}
-        </form><small>Access is limited to employees invited by Rent Me CT. Login does not grant admin access.</small>
+        </form><small>Merchant accounts are created only by direct arrangement with Rent Me CT’s owner. There is no self-signup.</small>
       </section> : context ? <>
         <div className="merchant-title"><div><p className="merchant-kicker">{context.name} × RENT ME CT</p><h1>Keep your customers moving.</h1><p>Reserve here. Your customer completes documents on their phone.</p></div>
           <button className="merchant-primary" disabled={busy || !context.bookings_enabled} onClick={newBooking}>New reservation <ArrowRight size={18} /></button></div>

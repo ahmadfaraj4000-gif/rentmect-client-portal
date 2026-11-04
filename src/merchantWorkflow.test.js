@@ -17,7 +17,7 @@ test('merchant email is normalized and invalid addresses are rejected',()=>{
   assert.equal(merchantEmail(' Test@Example.com '),'test@example.com');
   for(const value of ['123','name@','a b@example.com']) assert.throws(()=>merchantEmail(value),/valid email/);
 });
-test('magic links return to the merchant route without forwarding customer parameters or tokens',()=>{
+test('merchant sign-in cannot create accounts and preserves only the merchant redirect',()=>{
   const options=merchantSignInOptions('https://login.rentmect.com/?merchant=carcraft&adminRental=private#access_token=secret','carcraft');
-  assert.deepEqual(options,{shouldCreateUser:true,emailRedirectTo:'https://login.rentmect.com/?merchant=carcraft'});
+  assert.deepEqual(options,{shouldCreateUser:false,emailRedirectTo:'https://login.rentmect.com/?merchant=carcraft'});
 });
