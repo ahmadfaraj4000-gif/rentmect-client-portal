@@ -1,3 +1,4 @@
+import { customerIdentityKey, customerLookupReady, customerMatchFeedback } from './merchantCustomer.js';
 import React, { useCallback, useEffect, useRef, useState, lazy, Suspense } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { ArrowRight, CheckCircle2, LogOut, RefreshCw, Car, ExternalLink } from 'lucide-react';
@@ -27,11 +28,11 @@ const initialCoverage = { provider: '', policyNumber: '', namedInsured: '', star
 async function invoke(name, body) {
   const { data, error } = await client.functions.invoke(name, { body });
   if (error) {
-    let message = error.message;
-    try { message = (await error.context?.json())?.error || message; } catch { /* keep transport message */ }
-    throw new Error(message);
+    let detail;
+    try { detail = await error.context?.json(); } catch { /* keep transport message */ }
+    throw Object.assign(new Error(detail?.error || error.message), { customerMatch: detail?.customerMatch });
   }
-  if (data?.error) throw new Error(data.error);
+  if (data?.error) throw Object.assign(new Error(data.error), { customerMatch: data.customerMatch });
   return data;
 }
 async function rpc(name, args) {
@@ -61,6 +62,7 @@ export default function MerchantPortal() {
   },[]);
   function showFailure(error,target){
     const feedback=merchantFailure(error);
+    if(error.customerMatch)setCustomerCheck({key:customerIdentityKey(customer),match:error.customerMatch});
     failureTarget.current=target||document.querySelector(feedback.selector)||document.activeElement;
     setMessage(feedback.message);setFailure(feedback);
   }
@@ -76,6 +78,27 @@ export default function MerchantPortal() {
   const [vehicles, setVehicles] = useState(null);
   const [vehicleId, setVehicleId] = useState('');
   const [customer, setCustomer] = useState(initialCustomer);
+  const [customerCheck, setCustomerCheck] = useState(null);
+  const [customerChecking, setCustomerChecking] = useState(false);
+  const [customerCheckRetry, setCustomerCheckRetry] = useState(0);
+  const identityKey = customerIdentityKey(customer);
+  const currentCustomerMatch = customerCheck?.key === identityKey ? customerCheck.match : null;
+  const customerFeedback = currentCustomerMatch ? customerMatchFeedback(currentCustomerMatch) : null;
+  const conflictFields = currentCustomerMatch?.fields || [];
+  useEffect(() => {
+    const identity = JSON.parse(identityKey);
+    if(!session?.user?.id || !context?.bookings_enabled || view !== 'new' || !customerLookupReady(identity)) {setCustomerChecking(false);return;}
+    let active = true;
+    setCustomerChecking(true);
+    const timer = setTimeout(async () => {
+      try {
+        const { customerMatch } = await invoke('merchant-booking', { action: 'check_customer', slug, customer: identity });
+        if(active)setCustomerCheck({key:identityKey,match:customerMatch});
+      } catch { if(active)setCustomerCheck({key:identityKey,match:{status:'error'}}); }
+      finally { if(active)setCustomerChecking(false); }
+    }, 450);
+    return () => {active=false;clearTimeout(timer);};
+  }, [identityKey, customerCheckRetry, session?.user?.id, context?.bookings_enabled, view, slug]);
   const [coverage, setCoverage] = useState(initialCoverage);
   const [reference, setReference] = useState('');
   const [identityAttested, setIdentityAttested] = useState(false);
@@ -185,7 +208,7 @@ export default function MerchantPortal() {
     setSchedule({ ...schedule, [key]: value }); setVehicles(null); setVehicleId(''); setAvailabilityState('waiting');
   }
   function newBooking() {
-    setView('new'); setCreatedId(''); setPaymentLink(null); setMessage('');
+    setCustomerCheck(null); setView('new'); setCreatedId(''); setPaymentLink(null); setMessage('');
     setCustomer({ ...initialCustomer }); setCoverage({ ...initialCoverage }); setReference('');
     setAgeConfirmation(''); setIdentityAttested(false); setTermsAcknowledged(false); setVehicles(null); setVehicleId('');
     requestId.current = crypto.randomUUID();
@@ -264,10 +287,14 @@ export default function MerchantPortal() {
           </div><div className="merchant-row"><p role="status">{availabilityState==='live'?`Availability updated ${checkedAt?.toLocaleTimeString()}. Updates automatically.`:availabilityState==='checking'?'Checking current availability…':availabilityState==='error'?'Availability could not be verified. Reconnect or refresh before reserving.':'Choose pickup and drop-off dates to see availability.'}</p><button type="button" disabled={busy||availabilityState==='checking'||Object.values(schedule).some(v=>!v)} onClick={()=>void loadAvailability()}>Refresh availability</button></div>
           {vehicles&&<div className="merchant-vehicles">{!vehicles.length&&<p>No vehicles available for these dates. Try different pickup or drop-off dates.</p>}{vehicles.map(v=><article className={`merchant-vehicle ${vehicleId===v.id?'selected':''}`} key={v.id}><label><input type="radio" name="vehicle" checked={vehicleId===v.id} disabled={availabilityState!=='live'} onChange={()=>setVehicleId(v.id)}/><span><strong>{v.name}</strong><small className="merchant-available">Available for your dates</small><small>{v.quote.billable_days} rental days · {dollars(v.quote.security_deposit)} refundable deposit</small></span><strong>{dollars(v.quote.total_due_today)}</strong></label><button type="button" onClick={()=>setPhotoId(v.id)}>View car pictures</button></article>)}</div>}
           </section>
-          <section className="merchant-card" data-merchant-section="customer"><h2>Customer and driver’s license</h2><p>Check the original license in person. The customer must be 25 or older at pickup.</p><div className="merchant-fields">
-            {Object.entries({fullName:'Full legal name',email:'Customer email',address:'Renter address'}).map(([key,label])=><label key={key}>{label}<input name={key} type={key==='email'?'email':'text'} autoComplete="off" value={customer[key]} required maxLength={key==='address'?300:254} onChange={e=>setCustomer({...customer,[key]:e.target.value})}/></label>)}
-            <label>Customer phone<input type="tel" inputMode="tel" autoComplete="tel-national" placeholder="860-555-0123" required pattern="[0-9]{3}-[0-9]{3}-[0-9]{4}" maxLength={12} value={customer.phone} onChange={event=>setCustomer({...customer,phone:formatMerchantPhone(event.target.value)})} onPaste={event=>{event.preventDefault();setCustomer({...customer,phone:formatMerchantPhone(event.clipboardData.getData('text'))});}}/></label>
-            <MerchantDateField label="Date of birth" birthDate value={customer.dateOfBirth} onChange={value=>setCustomer({...customer,dateOfBirth:value})}/>
+          <section className="merchant-card" data-merchant-section="customer"><h2>Customer and driver’s license</h2><p>New and returning customers can reserve here. Enter the customer’s existing Rent Me CT email and phone if they have an account. Check the original license in person; the customer must be 25 or older at pickup.</p>
+          <div id="merchant-customer-feedback" className={`merchant-customer-match ${currentCustomerMatch?.status === 'existing' ? 'is-match' : ''}`} role="status" aria-live="polite">
+            {customerChecking ? <p>Checking for an existing customer…</p> : customerFeedback ? <><strong>{customerFeedback.title}</strong><p>{customerFeedback.message}</p></> : <p>Enter an email or complete phone number to check for an existing customer.</p>}
+            <button type="button" disabled={busy || customerChecking || !customerLookupReady(customer)} onClick={()=>setCustomerCheckRetry(value=>value+1)}>Check customer</button>
+          </div><div className="merchant-fields">
+            {Object.entries({fullName:'Full legal name',email:'Customer email',address:'Renter address'}).map(([key,label])=><label key={key}>{label}<input name={key} aria-invalid={conflictFields.includes(key) || undefined} aria-describedby={conflictFields.includes(key) ? "merchant-customer-feedback" : undefined} type={key==='email'?'email':'text'} autoComplete="off" value={customer[key]} required maxLength={key==='address'?300:254} onChange={e=>setCustomer({...customer,[key]:e.target.value})}/></label>)}
+            <label>Customer phone<input name="phone" aria-invalid={conflictFields.includes("phone") || undefined} aria-describedby={conflictFields.includes("phone") ? "merchant-customer-feedback" : undefined} type="tel" inputMode="tel" autoComplete="tel-national" placeholder="860-555-0123" required pattern="[0-9]{3}-[0-9]{3}-[0-9]{4}" maxLength={12} value={customer.phone} onChange={event=>setCustomer({...customer,phone:formatMerchantPhone(event.target.value)})} onPaste={event=>{event.preventDefault();setCustomer({...customer,phone:formatMerchantPhone(event.clipboardData.getData('text'))});}}/></label>
+            <MerchantDateField name="dateOfBirth" invalid={conflictFields.includes("dateOfBirth")} describedBy={conflictFields.includes("dateOfBirth") ? "merchant-customer-feedback" : undefined} label="Date of birth" birthDate value={customer.dateOfBirth} onChange={value=>setCustomer({...customer,dateOfBirth:value})}/>
             <MerchantDateField label="License expiration" min={schedule.returnDate||schedule.pickupDate} value={customer.licenseExpiresOn} onChange={value=>setCustomer({...customer,licenseExpiresOn:value})}/>
             <label>License issuing state<select value={customer.licenseState} onChange={e=>setCustomer({...customer,licenseState:e.target.value,licenseNumber:''})}>{LICENSE_STATES.map(state=><option key={state}>{state}</option>)}</select></label><label>Driver’s license number<input required autoComplete="off" value={customer.licenseNumber} maxLength={licenseRule(customer.licenseState).maxLength} pattern={licenseRule(customer.licenseState).pattern} title={licenseRule(customer.licenseState).hint} onPaste={event=>{event.preventDefault();const number=normalizeLicense(event.clipboardData.getData('text'));if(number.length>licenseRule(customer.licenseState).maxLength){showFailure(new Error('The pasted license number is too long for the selected state. Check the original license.'),event.currentTarget);return;}setCustomer({...customer,licenseNumber:number});}} onChange={e=>setCustomer({...customer,licenseNumber:normalizeLicense(e.target.value)})}/><small>{licenseRule(customer.licenseState).hint}. This checks format; inspect the original license.</small></label>
           </div><label>Is the customer 25 years or older at pickup?<select name="ageConfirmation" required value={ageConfirmation} onChange={event=>setAgeConfirmation(event.target.value)}><option value="">Select an answer</option><option value="yes">Yes — 25 or older</option><option value="no">No — under 25</option></select><small>Confirm the birth date on the original driver’s license.</small></label>{ageConfirmation==='no'&&<p className="merchant-notice" role="alert">Customers under 25 cannot be booked through the merchant portal. Contact Rent Me CT for assistance.</p>}<label className="merchant-check"><input type="checkbox" checked={identityAttested} required onChange={(e) => setIdentityAttested(e.target.checked)} /><span>I inspected the original license, matched its photo to the person present, and checked the legal name, birth date, number and expiration.</span></label></section>

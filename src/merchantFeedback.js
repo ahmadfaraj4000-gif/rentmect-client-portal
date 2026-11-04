@@ -1,13 +1,16 @@
+import { customerMatchFeedback } from './merchantCustomer.js';
 // Explain failures without exposing the existing customer's saved identity values.
 export function merchantFailure(error) {
+  if(error?.customerMatch)return customerMatchFeedback(error.customerMatch);
   const raw=error?.message||'Something went wrong. Please try again. If it continues, contact Rent Me CT.';
   if(raw.includes('Customer details require Rent Me CT review'))return {
-    title:'Check customer details',
+    title:raw.includes('Existing identity details were not changed')?'Existing customer found — check details':'Check customer account',
     message:raw.includes('Existing identity details were not changed')
       ?'The customer details entered do not match the existing Rent Me CT account. Check the customer’s legal name, email, phone number and date of birth. If they are correct, contact Rent Me CT to review the account before continuing. Existing identity details were not changed.'
       :'Rent Me CT needs to review this customer account before the reservation can continue. Check the customer details and contact Rent Me CT if they are correct.',
     selector:'[data-merchant-section="customer"] input',
   };
+  if(raw.includes('already has an open rental'))return customerMatchFeedback({status:'open_rental'});
   if(/failed to fetch|failed to send a request|networkerror|load failed/i.test(raw))return {title:'Connection problem',message:'Could not reach Rent Me CT. Check your internet connection, then try again.',selector:'[data-merchant-section="review"] button[type="submit"]'};
   let selector='[data-merchant-section="review"] button[type="submit"]';
   if(/availability|available vehicle|pickup and drop-off|quote/i.test(raw))selector='[data-merchant-section="vehicle"] button';
