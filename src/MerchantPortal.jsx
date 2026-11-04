@@ -54,6 +54,8 @@ export default function MerchantPortal() {
   const [coverage, setCoverage] = useState(initialCoverage);
   const [reference, setReference] = useState('');
   const [identityAttested, setIdentityAttested] = useState(false);
+  const [ageConfirmation, setAgeConfirmation] = useState('');
+  useEffect(() => { setAgeConfirmation(''); }, [customer.dateOfBirth, schedule.pickupDate]);
   const [termsAcknowledged, setTermsAcknowledged] = useState(false);
   const [createdId, setCreatedId] = useState('');
   const [paymentLink, setPaymentLink] = useState(null);
@@ -148,7 +150,7 @@ export default function MerchantPortal() {
   function newBooking() {
     setView('new'); setCreatedId(''); setPaymentLink(null); setMessage('');
     setCustomer({ ...initialCustomer }); setCoverage({ ...initialCoverage }); setReference('');
-    setIdentityAttested(false); setTermsAcknowledged(false); setVehicles(null); setVehicleId('');
+    setAgeConfirmation(''); setIdentityAttested(false); setTermsAcknowledged(false); setVehicles(null); setVehicleId('');
     requestId.current = crypto.randomUUID();
   }
   async function pay(id) {
@@ -161,10 +163,11 @@ export default function MerchantPortal() {
     event.preventDefault();
     await run(async () => {
       if(availabilityState!=='live'||!selected?.available)throw new Error('Wait for current availability before reserving.');
+      if(ageConfirmation!=='yes')throw new Error('Confirm that the customer is 25 years or older at pickup.');
       validateLicense(customer.licenseState,customer.licenseNumber);
       const { rental } = await invoke('merchant-booking', {
         action: 'create_booking', slug, ...schedule, vehicleId, customer, coverage,
-        identityAttested, termsAcknowledged, reference, requestId: requestId.current,
+        ageConfirmed: ageConfirmation === 'yes', identityAttested, termsAcknowledged, reference, requestId: requestId.current,
         expectedTotal: selected?.quote.total_due_today,
       });
       setCreatedId(rental.id); setView('bookings');
@@ -225,7 +228,7 @@ export default function MerchantPortal() {
           <section className="merchant-card"><p className="merchant-kicker">02 · CUSTOMER & LICENSE</p><h2>Check the original license in person.</h2><p>For this pilot, customers must be 25 or older at pickup. No document upload is needed at your desk.</p><div className="merchant-fields">
             {Object.entries({fullName:'Full legal name',email:'Customer email',phone:'Customer mobile',dateOfBirth:'Date of birth',address:'Renter address',licenseExpiresOn:'License expiration'}).map(([key,label])=><label key={key}>{label}<input type={key==='dateOfBirth'||key==='licenseExpiresOn'?'date':key==='email'?'email':key==='phone'?'tel':'text'} autoComplete="off" value={customer[key]} required maxLength={key==='address'?300:254} onChange={e=>setCustomer({...customer,[key]:e.target.value})}/></label>)}
             <label>License issuing state<select value={customer.licenseState} onChange={e=>setCustomer({...customer,licenseState:e.target.value,licenseNumber:''})}>{LICENSE_STATES.map(state=><option key={state}>{state}</option>)}</select></label><label>Driver’s license number<input required autoComplete="off" value={customer.licenseNumber} maxLength={licenseRule(customer.licenseState).maxLength} pattern={licenseRule(customer.licenseState).pattern} title={licenseRule(customer.licenseState).hint} onPaste={event=>{event.preventDefault();const number=normalizeLicense(event.clipboardData.getData('text'));if(number.length>licenseRule(customer.licenseState).maxLength){setMessage('The pasted license number is too long for the selected state. Check the original license.');return;}setCustomer({...customer,licenseNumber:number});}} onChange={e=>setCustomer({...customer,licenseNumber:normalizeLicense(e.target.value)})}/><small>{licenseRule(customer.licenseState).hint}. This checks format; inspect the original license.</small></label>
-          </div><label className="merchant-check"><input type="checkbox" checked={identityAttested} required onChange={(e) => setIdentityAttested(e.target.checked)} /><span>I inspected the original license, matched its photo to the person present, and checked the legal name, birth date, number and expiration.</span></label></section>
+          </div><label>Is the customer 25 years or older at pickup?<select required value={ageConfirmation} onChange={event=>setAgeConfirmation(event.target.value)}><option value="">Select an answer</option><option value="yes">Yes — 25 or older</option><option value="no">No — under 25</option></select><small>Confirm the birth date on the original driver’s license.</small></label>{ageConfirmation==='no'&&<p className="merchant-notice" role="alert">Customers under 25 cannot be booked through the merchant portal. Contact Rent Me CT for assistance.</p>}<label className="merchant-check"><input type="checkbox" checked={identityAttested} required onChange={(e) => setIdentityAttested(e.target.checked)} /><span>I inspected the original license, matched its photo to the person present, and checked the legal name, birth date, number and expiration.</span></label></section>
           <section className="merchant-card"><p className="merchant-kicker">03 · COVERAGE</p><h2>Record the customer’s insurance.</h2><div className="merchant-fields">
             {Object.entries({ provider: 'Insurance company', policyNumber: 'Policy number', namedInsured: 'Named insured', startsOn: 'Coverage effective date', endsOn: 'Coverage expiration' }).map(([key, label]) => <label key={key}>{label}<input type={key.endsWith('On') ? 'date' : 'text'} autoComplete="off" value={coverage[key]} required maxLength={120} onChange={(e) => setCoverage({ ...coverage, [key]: e.target.value })} /></label>)}
           </div>{Object.entries({ liability: 'Liability coverage confirmed', collision: 'Collision coverage confirmed', rentalCovered: 'Coverage applies to this rental and the full scheduled period' }).map(([key, label]) => <label className="merchant-check" key={key}><input type="checkbox" required checked={coverage[key]} onChange={(e) => setCoverage({ ...coverage, [key]: e.target.checked })} /><span>{label}</span></label>)}<small>If coverage is unknown or insufficient, contact Rent Me CT before taking payment.</small></section>
@@ -233,7 +236,7 @@ export default function MerchantPortal() {
             <label>CarCraft reference (optional)<input value={reference} maxLength={80} onChange={(e) => setReference(e.target.value)} /></label>
             <p>After payment, we email the customer their secure completion link. They must upload their driver’s license and insurance declaration page within 24 hours or before pickup, whichever is earlier. The customer reviews and signs the rental agreement next, before payment. Rent Me CT must approve documents before releasing the car.</p>
             <label className="merchant-check"><input type="checkbox" required checked={termsAcknowledged} onChange={(e) => setTermsAcknowledged(e.target.checked)} /><span>I explained the total, refundable deposit, document deadline and <a href="https://rentmect.com/rental-policies.html" target="_blank" rel="noopener noreferrer">rental and cancellation terms</a> to the customer. The customer agreed to proceed.</span></label>
-            <button className="merchant-primary" type="submit" disabled={busy || !selected?.available || availabilityState!=='live' || !context.bookings_enabled}>{busy ? 'Saving…' : 'Continue to rental agreement'}<ArrowRight size={18} /></button>
+            <button className="merchant-primary" type="submit" disabled={busy || ageConfirmation!=='yes' || !selected?.available || availabilityState!=='live' || !context.bookings_enabled}>{busy ? 'Saving…' : 'Continue to rental agreement'}<ArrowRight size={18} /></button>
           </section>
         </form>}
       </> : <section className="merchant-card"><h1>Checking merchant access</h1><p>If your email has not been approved, contact Rent Me CT. An existing customer account does not grant merchant access.</p></section>}
