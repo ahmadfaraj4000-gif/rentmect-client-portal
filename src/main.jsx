@@ -1,6 +1,7 @@
 import { rentalCalendarMinutes, rentalDayShortcut } from './rentalBillingTime.js';
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { customerMerchantIdentity } from './merchantWorkflow.js';
+const MerchantDocumentUpload = lazy(() => import('./MerchantDocumentUpload.jsx'));
 const MerchantPortal = lazy(() => import('./MerchantPortal.jsx'));
 import { createRoot } from 'react-dom/client';
 import { extensionAgreementDetails, rentalPricingDetails } from './extensionAgreement.js';
@@ -120,6 +121,7 @@ function App() {
   const previewRoute = initialUrlParams.get('preview') || '';
   const adminBookingToken = initialUrlParams.get('adminBooking') || '';
   const guidedAdminRentalId = initialUrlParams.get('adminRental') || '';
+  const merchantDocumentsRoute = initialUrlParams.get('merchantDocuments') === '1' && Boolean(guidedAdminRentalId);
   const guidedAdminCustomerPath = initialUrlParams.get('adminPath') === 'returning' ? 'returning' : 'new';
   const cars2BookingHandoff = initialUrlParams.get('source') === 'cars2';
   const [returningFromStripeIdentity] = useState(() => initialUrlParams.get('identity') === 'return');
@@ -209,7 +211,7 @@ function App() {
   const [pendingVehicleId, setPendingVehicleId] = useState('');
   const [pendingBookingId, setPendingBookingId] = useState('');
   const [checkoutExpiresAt, setCheckoutExpiresAt] = useState('');
-  const [checkoutIntent, setCheckoutIntent] = useState(Boolean(adminBookingToken || guidedAdminRentalId));
+  const [checkoutIntent, setCheckoutIntent] = useState(!merchantDocumentsRoute && Boolean(adminBookingToken || guidedAdminRentalId));
   const [checkoutWizardStarted, setCheckoutWizardStarted] = useState(false);
   const [previewPage, setPreviewPage] = useState(() => cars2BookingHandoff ? 'checkout' : 'details');
   const [previewCheckoutSection, setPreviewCheckoutSection] = useState('contact');
@@ -1345,6 +1347,7 @@ function getBookingIdFromUrl() {
   }
 
 function loadSavedBookingFromWebsite() {
+  if (merchantDocumentsRoute) return;
     try {
       const saved =
         localStorage.getItem('rentmect_pending_booking') ||
@@ -1604,7 +1607,7 @@ function loadSavedBookingFromWebsite() {
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        shouldCreateUser: !adminBookingToken,
+        shouldCreateUser: !adminBookingToken && !merchantDocumentsRoute,
         emailRedirectTo: redirectUrl.toString(),
         data: {
           pending_booking: JSON.parse(localStorage.getItem('rentmect_pending_booking') || '{}'),
@@ -1673,6 +1676,7 @@ function loadSavedBookingFromWebsite() {
   async function signOut() {
     await supabase.auth.signOut();
     setSession(null);
+    if (merchantDocumentsRoute) return;
     if (adminBookingRentalId && !adminBookingToken) {
       const url = new URL(window.location.href);
       url.searchParams.delete('adminRental');
@@ -3263,6 +3267,22 @@ async function verifyPhoneCode(options = {}) {
           checkoutExpired={checkoutExpired}
         />
     );
+  }
+
+  if (merchantDocumentsRoute) {
+    if (!portalDataReady) return <LoadingScreen />;
+    const documentRental = currentRental?.id === guidedAdminRentalId && currentRental?.merchant_id && currentRental?.payment_status === 'paid' && ['pending','documents_needed','document_review','approved','ready_for_pickup'].includes(currentRental.status) ? currentRental : null;
+    return <Suspense fallback={<LoadingScreen />}><MerchantDocumentUpload key={guidedAdminRentalId} rental={documentRental} logo={logoUrl} signOut={signOut}
+      licenseUploaded={licenseUploaded} insuranceUploaded={insuranceUploaded} busy={Boolean(documentUploadBusy.license||documentUploadBusy.insurance)} notice={notice?.text}
+      onSubmit={async()=>{
+        if(!documentRental||!licenseUploaded||!insuranceUploaded)throw new Error('Upload your driver’s license and insurance declaration page first.');
+        if(['approved','ready_for_pickup'].includes(documentRental.status))return;
+        const {error}=await supabase.rpc('sync_customer_rental_document_review_status',{p_rental_id:documentRental.id});
+        if(error)throw error;
+      }}>
+      {licenseUploaded?<section className="panel"><h3>Driver’s license uploaded</h3><p>Your license is on file.</p></section>:<UploadCard title="Driver’s license" text="Upload a clear image or PDF of your driver’s license." icon={Upload} onUpload={event=>uploadDocument(event,'license')} busy={Boolean(documentUploadBusy.license)}/>}
+      {insuranceUploaded?<section className="panel"><h3>Insurance uploaded</h3><p>Your declaration page is saved for this rental.</p></section>:<InsurancePacketUploader title="Insurance declaration page" busy={Boolean(documentUploadBusy.insurance)} onUpload={uploadInsurancePacket}/>}
+    </MerchantDocumentUpload></Suspense>;
   }
 
   if (bookingPreviewCheckoutMode && checkoutIntent && !previewPortalOpen) {

@@ -9,6 +9,7 @@ import {formatMerchantPhone,readableDate} from './merchantFormFields.js';
 import MerchantDialog from './MerchantDialog.jsx';
 import SignaturePad from './MerchantSignaturePad.jsx';
 import {LICENSE_STATES,licenseRule,normalizeLicense,validateLicense} from './merchantLicense.js';
+const DocumentEmail=lazy(()=>import('./MerchantDocumentEmail.jsx'));
 const VehiclePhotos=lazy(()=>import('./MerchantVehiclePhotos.jsx'));
 import logo from './assets/logo-sidebar.png';
 import './merchant.css';
@@ -65,6 +66,8 @@ export default function MerchantPortal() {
   const [availabilityState,setAvailabilityState]=useState('waiting');
   const [checkedAt,setCheckedAt]=useState(null);
   const [photoId,setPhotoId]=useState(null);
+  const [emailBooking,setEmailBooking]=useState(null);
+  const closeEmail=useCallback(()=>setEmailBooking(null),[]);
   const [agreement,setAgreement]=useState(null);
   const [signatureName,setSignatureName]=useState('');
   const [signatureImage,setSignatureImage]=useState('');
@@ -226,10 +229,9 @@ export default function MerchantPortal() {
           {!bookings.length && <div className="merchant-card merchant-empty"><Car size={36} /><h2>No reservations yet</h2><p>Select New reservation to book a vehicle.</p></div>}
           {bookings.map((booking) => <article className="merchant-card" key={booking.id}><div className="merchant-row"><div><p className="merchant-reference">{booking.merchant_reservation_number || booking.id.slice(0, 8).toUpperCase()} {booking.reference && `· ${booking.reference}`}</p><h2>{booking.customer_name}</h2><p>{booking.vehicle_name}</p></div><strong className="merchant-status">{merchantBookingStatus(booking)}</strong></div>
             <div className="merchant-facts"><div><small>Pickup · Eastern time</small><strong>{readableDate(booking.pickup_date)} · {booking.pickup_time}</strong></div><div><small>Return · Eastern time</small><strong>{readableDate(booking.return_date)} · {booking.return_time}</strong></div><div><small>Total including deposit</small><strong>{dollars(booking.total)}</strong></div></div>
-            {booking.payment_status === 'paid' ? <><p>License: {booking.license_approved ? 'Approved' : 'Pending'} · Insurance: {booking.insurance_approved ? 'Approved' : 'Pending'} · Agreement: {booking.agreement_signed ? 'Signed' : 'Pending'}</p><small>Documents due: {due(booking.merchant_documents_due_at)} · Email: {booking.delivery_status || 'Not queued'}</small>
-              {!['completed', 'cancelled', 'active', 'rented', 'overdue', 'return_initiated', 'ready_for_pickup'].includes(booking.status) && <div className="merchant-actions"><button disabled={busy} onClick={() => run(async () => { await rpc('merchant_resend_document_request', { p_rental_id: booking.id, p_slug: slug }); setMessage('Customer completion email queued.'); await refresh(); })}>Resend customer link</button><button disabled={busy} onClick={() => run(async () => { await navigator.clipboard.writeText(`${window.location.origin}/?adminRental=${booking.id}`); setMessage('Completion link copied. The customer must sign in with their booking email.'); })}>Copy completion link</button></div>}</>
+            {booking.payment_status === 'paid' ? <><p>License: {booking.license_approved ? 'Approved' : 'Pending'} · Insurance: {booking.insurance_approved ? 'Approved' : 'Pending'} · Agreement: {booking.agreement_signed ? 'Signed' : 'Pending'}</p><small>Documents due: {due(booking.merchant_documents_due_at)} · Email: {booking.delivery_status || 'Not queued'}</small></>
               : <><small>Payment deadline: {due(booking.payment_due_at || booking.checkout_expires_at)}</small>{merchantBookingStatus(booking) === 'Awaiting payment' && <div className="merchant-actions"><button disabled={busy || !context.bookings_enabled} onClick={() => run(() => booking.agreement_signed ? pay(booking.id) : reviewAgreement(booking.id))}>{booking.agreement_signed ? 'Collect payment' : 'Review & sign agreement'}</button></div>}</>}
-            <div className="merchant-actions"><button disabled={busy} onClick={()=>run(()=>downloadReservation(booking.id))}>Download reservation PDF</button><button disabled={busy} onClick={()=>run(async()=>{await navigator.clipboard.writeText(`${window.location.origin}/?adminRental=${booking.id}&merchantDocuments=1`);setMessage('Customer upload link copied. They must sign in with their booking email to upload their license and insurance declaration page.');})}>Copy document upload link</button>{booking.agreement_signed&&<button disabled={busy} onClick={()=>run(()=>reviewAgreement(booking.id))}>View signed agreement</button>}</div>
+            <div className="merchant-actions"><button disabled={busy} onClick={()=>run(()=>downloadReservation(booking.id))}>Download reservation PDF</button>{booking.payment_status==='paid'&&['pending','documents_needed','document_review','approved'].includes(booking.status)&&<button disabled={busy} onClick={()=>setEmailBooking(booking)}>Send email to client</button>}{booking.agreement_signed&&<button disabled={busy} onClick={()=>run(()=>reviewAgreement(booking.id))}>View signed agreement</button>}</div>
           </article>)}
         </section> : <form className="merchant-form" onSubmit={create}>
           <section className="merchant-card"><h2>Vehicle and dates</h2><p>All times are Eastern. Availability includes Rent Me CT’s three-hour turnaround.</p><div className="merchant-fields">
@@ -259,6 +261,7 @@ export default function MerchantPortal() {
         </form>}
       </> : <section className="merchant-card"><h1>Checking merchant access</h1><p>If your email has not been approved, contact Rent Me CT. An existing customer account does not grant merchant access.</p></section>}
       {message && <div className="merchant-message" role="alert">{message}</div>}
+      {emailBooking&&<Suspense fallback={<p role="status">Opening email form…</p>}><DocumentEmail booking={emailBooking} onClose={closeEmail} onSend={email=>rpc('merchant_send_document_email',{p_rental_id:emailBooking.id,p_email:email,p_slug:slug})}/></Suspense>}
       {photoId&&<Suspense fallback={<div className="merchant-message" role="status">Loading photo viewer…</div>}><VehiclePhotos vehicleId={photoId} load={loadPhotos} onClose={closePhotos}/></Suspense>}
       {agreement&&<MerchantDialog title={agreement.signed?'Signed rental agreement':'Customer review & signature'} onClose={closeAgreement}><p>The customer must read and sign their own agreement. Hand them the keyboard or mouse to complete this step.</p><pre className="merchant-agreement-text">{agreement.signed?(agreement.saved_snapshot||'').replace(/Drawn Signature Image: [^\n]+/,'[Signature attached to rental]'):agreement.snapshot}</pre>{message&&<div className="merchant-notice" role="alert">{message}</div>}{!agreement.signed&&<form onSubmit={event=>{event.preventDefault();run(async()=>{
         if(!signatureImage||!signatureConsent)throw new Error('The customer must add their signature and consent.');
