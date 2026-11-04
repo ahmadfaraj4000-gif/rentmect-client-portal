@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState, lazy, Suspense } from 
 import { createClient } from '@supabase/supabase-js';
 import { ArrowRight, CheckCircle2, LogOut, RefreshCw, Car, ExternalLink } from 'lucide-react';
 import { merchantBookingStatus, merchantEmail, merchantSignInOptions } from './merchantWorkflow.js';
+import {createMerchantRequestQueue} from './merchantRequestQueue.js';
 import MerchantDateRange from './MerchantDateRange.jsx';
 import MerchantDateField from './MerchantDateField.jsx';
 import {formatMerchantPhone,readableDate} from './merchantFormFields.js';
@@ -73,6 +74,7 @@ export default function MerchantPortal() {
   const loadPhotos=useCallback((vehicleId)=>invoke('merchant-booking',{action:'vehicle_photos',slug,vehicleId}),[slug]);
   const requestId = useRef(crypto.randomUUID());
   const quoteGeneration = useRef(0);
+  const availabilityQueue = useRef(createMerchantRequestQueue());
   const actionLock = useRef(false);
   const selected = vehicles?.find((v) => v.id === vehicleId);
 
@@ -96,40 +98,49 @@ export default function MerchantPortal() {
   useEffect(() => {
     setContext(null); setBookings([]);
     if (!session?.user?.id) return;
-    let active = true;
+    let active = true, loading = false;
     const load = async () => {
+      if(loading||document.hidden||!navigator.onLine)return;
+      loading=true;
       try {
         const [next, rows] = await Promise.all([rpc('get_merchant_context', { p_slug: slug }), rpc('get_merchant_bookings', { p_slug: slug })]);
         if (active) { setContext(next); setBookings(rows || []); }
       } catch (error) { if (active) { setContext(null); setBookings([]); setMessage(error.message); } }
+      finally { loading=false; }
     };
     void load();
     const timer = window.setInterval(load, 30_000);
     window.addEventListener('focus',load);
-    return () => { active = false; window.clearInterval(timer); window.removeEventListener('focus',load); };
+    window.addEventListener('online',load);
+    document.addEventListener('visibilitychange',load);
+    return () => { active = false; window.clearInterval(timer); window.removeEventListener('focus',load);window.removeEventListener('online',load);document.removeEventListener('visibilitychange',load); };
   }, [session?.user?.id, slug]);
 
   const loadAvailability=useCallback(async()=>{
+    if(document.hidden||!session?.user?.id||!context?.bookings_enabled||view!=='new'||Object.values(schedule).some(v=>!v))return;
     const generation=++quoteGeneration.current;
     if(!navigator.onLine){setAvailabilityState('error');return;}
     setAvailabilityState('checking');
     try{
-      const result=await invoke('merchant-booking',{action:'availability',slug,...schedule});
-      if(generation!==quoteGeneration.current)return;
-      setVehicles(result.vehicles||[]);setAvailabilityState('live');setCheckedAt(new Date());
-      setVehicleId(id=>result.vehicles?.some(v=>v.id===id&&v.available)?id:'');
-    }catch(error){if(generation===quoteGeneration.current){setAvailabilityState('error');setMessage(error.message);}}
-  },[slug,schedule]);
+      const result=await availabilityQueue.current(()=>generation===quoteGeneration.current&&!document.hidden&&navigator.onLine?invoke('merchant-booking',{action:'availability',slug,...schedule}):undefined);
+      if(!result||generation!==quoteGeneration.current)return;
+      const available=(result.vehicles||[]).filter(v=>v.available===true);
+      setVehicles(available);setAvailabilityState('live');setCheckedAt(new Date());
+      setVehicleId(id=>available.some(v=>v.id===id)?id:'');
+      setPhotoId(id=>available.some(v=>v.id===id)?id:null);
+    }catch(error){if(generation===quoteGeneration.current){setVehicles([]);setVehicleId('');setPhotoId(null);setAvailabilityState('error');setMessage(error.message);}}
+  },[slug,schedule,session?.user?.id,context?.bookings_enabled,view]);
   useEffect(()=>{
     if(!session?.user?.id||!context||view!=='new'||Object.values(schedule).some(v=>!v))return;
     let debounce;
-    const refreshSoon=()=>{clearTimeout(debounce);debounce=setTimeout(loadAvailability,250);};
+    const refreshSoon=()=>{clearTimeout(debounce);if(document.hidden){quoteGeneration.current++;setAvailabilityState('waiting');return;}setAvailabilityState('checking');debounce=setTimeout(loadAvailability,250);};
     const offline=()=>{quoteGeneration.current++;setAvailabilityState('error');};
-    void loadAvailability();
+    refreshSoon();
+    document.addEventListener('visibilitychange',refreshSoon);
     const channel=client.channel('merchant-fleet').on('broadcast',{event:'availability_changed'},refreshSoon).subscribe();
     const timer=setInterval(loadAvailability,15000);
     window.addEventListener('focus',refreshSoon);window.addEventListener('online',refreshSoon);window.addEventListener('offline',offline);
-    return()=>{quoteGeneration.current++;clearTimeout(debounce);clearInterval(timer);void client.removeChannel(channel);window.removeEventListener('focus',refreshSoon);window.removeEventListener('online',refreshSoon);window.removeEventListener('offline',offline);};
+    return()=>{quoteGeneration.current++;clearTimeout(debounce);clearInterval(timer);document.removeEventListener('visibilitychange',refreshSoon);void client.removeChannel(channel);window.removeEventListener('focus',refreshSoon);window.removeEventListener('online',refreshSoon);window.removeEventListener('offline',offline);};
   },[session?.user?.id,!!context,view,loadAvailability]);
   useEffect(()=>{if(paymentLink&&bookings.some(b=>b.id===paymentLink.id&&b.payment_status==='paid'))setPaymentLink(null);},[bookings,paymentLink]);
   async function reviewAgreement(id){
@@ -225,7 +236,7 @@ export default function MerchantPortal() {
             <MerchantDateRange schedule={schedule} onChange={dates=>{quoteGeneration.current++;setSchedule({...schedule,...dates});setVehicles(null);setVehicleId('');setAvailabilityState('waiting');}} />
             {Object.entries({pickupTime:'Pickup time',returnTime:'Drop-off time'}).map(([key,label])=><label key={key}>{label}<select value={schedule[key]} required onChange={e=>changeSchedule(key,e.target.value)}>{Array.from({length:96},(_,i)=>{const hour=Math.floor(i/4),minute=(i%4)*15,value=`${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}`;return <option key={value} value={value}>{hour%12||12}:{String(minute).padStart(2,'0')} {hour<12?'AM':'PM'}</option>;})}</select></label>)}
           </div><div className="merchant-row"><p role="status">{availabilityState==='live'?`Availability updated ${checkedAt?.toLocaleTimeString()}. Updates automatically.`:availabilityState==='checking'?'Checking current availability…':availabilityState==='error'?'Availability could not be verified. Reconnect or refresh before reserving.':'Choose pickup and drop-off dates to see availability.'}</p><button type="button" disabled={busy||availabilityState==='checking'||Object.values(schedule).some(v=>!v)} onClick={()=>void loadAvailability()}>Refresh availability</button></div>
-          {vehicles&&<div className="merchant-vehicles">{!vehicles.length&&<p>No vehicles are listed for this schedule.</p>}{vehicles.map(v=><article className={`merchant-vehicle ${vehicleId===v.id?'selected':''}`} key={v.id}><label><input type="radio" name="vehicle" checked={vehicleId===v.id} disabled={!v.available||availabilityState!=='live'} onChange={()=>setVehicleId(v.id)}/><span><strong>{v.name}</strong><small className={v.available?'merchant-available':'merchant-unavailable'}>{v.available?'Available for your dates':'Unavailable for your dates'}</small>{!v.available&&<small>{v.reason||'Choose another vehicle or schedule.'}</small>}<small>{v.quote.billable_days} rental days · {dollars(v.quote.security_deposit)} refundable deposit</small></span><strong>{dollars(v.quote.total_due_today)}</strong></label><button type="button" onClick={()=>setPhotoId(v.id)}>View car pictures</button></article>)}</div>}
+          {vehicles&&<div className="merchant-vehicles">{!vehicles.length&&<p>No vehicles available for these dates. Try different pickup or drop-off dates.</p>}{vehicles.map(v=><article className={`merchant-vehicle ${vehicleId===v.id?'selected':''}`} key={v.id}><label><input type="radio" name="vehicle" checked={vehicleId===v.id} disabled={availabilityState!=='live'} onChange={()=>setVehicleId(v.id)}/><span><strong>{v.name}</strong><small className="merchant-available">Available for your dates</small><small>{v.quote.billable_days} rental days · {dollars(v.quote.security_deposit)} refundable deposit</small></span><strong>{dollars(v.quote.total_due_today)}</strong></label><button type="button" onClick={()=>setPhotoId(v.id)}>View car pictures</button></article>)}</div>}
           </section>
           <section className="merchant-card"><h2>Customer and driver’s license</h2><p>Check the original license in person. The customer must be 25 or older at pickup.</p><div className="merchant-fields">
             {Object.entries({fullName:'Full legal name',email:'Customer email',address:'Renter address'}).map(([key,label])=><label key={key}>{label}<input type={key==='email'?'email':'text'} autoComplete="off" value={customer[key]} required maxLength={key==='address'?300:254} onChange={e=>setCustomer({...customer,[key]:e.target.value})}/></label>)}
