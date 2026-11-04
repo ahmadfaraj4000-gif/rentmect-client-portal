@@ -18,4 +18,9 @@ try {
   throw new Error('VITE_SUPABASE_URL is not a valid URL.');
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// Only the merchant client may consume a merchant magic-link callback. Keep the
+// existing customer session intact when a merchant signs in on this browser.
+const merchantRoute = new URLSearchParams(window.location.search).has('merchant');
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: { detectSessionInUrl: !merchantRoute },
+});

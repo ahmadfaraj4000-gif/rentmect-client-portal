@@ -1,5 +1,7 @@
 import { rentalCalendarMinutes, rentalDayShortcut } from './rentalBillingTime.js';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { customerMerchantIdentity } from './merchantWorkflow.js';
+const MerchantPortal = lazy(() => import('./MerchantPortal.jsx'));
 import { createRoot } from 'react-dom/client';
 import { extensionAgreementDetails, rentalPricingDetails } from './extensionAgreement.js';
 import {
@@ -172,6 +174,7 @@ function App() {
   const [profile, setProfile] = useState(null);
   const [vehicles, setVehicles] = useState([]);
   const [rentals, setRentals] = useState([]);
+  const [merchantVerification, setMerchantVerification] = useState(null);
   const [fleetRentals, setFleetRentals] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [messages, setMessages] = useState([]);
@@ -991,7 +994,17 @@ function App() {
   );
   const identityStatus = profile?.identity_verification_status || 'unverified';
   const identityErrorCode = profile?.identity_verification_error_code || '';
-  const identityVerified = identityStatus === 'verified';
+  const merchantIdentityVerified = customerMerchantIdentity(currentRental, merchantVerification);
+  const identityVerified = currentRental?.merchant_id ? merchantIdentityVerified : identityStatus === 'verified';
+  useEffect(() => {
+    let active = true;
+    setMerchantVerification(null);
+    if (!currentRental?.id || !currentRental?.merchant_id) return;
+    supabase.rpc('get_customer_merchant_verification', { p_rental_id: currentRental.id }).then(({ data, error }) => {
+      if (active && !error) setMerchantVerification(data);
+    });
+    return () => { active = false; };
+  }, [currentRental?.id, currentRental?.merchant_id, currentRental?.updated_at]);
   const returnCountdown = getReturnCountdown(currentRental?.return_date, currentRental?.return_time, now);
   const returnConfirmationSent = Boolean(
     currentRental?.status === 'return_initiated' ||
@@ -4292,7 +4305,7 @@ function WizardModal({
                 setProfileForm={setProfileForm}
                 identityVerified={identityVerified && !correctingIdentity}
               />}
-              {identityVerified && !correctingIdentity && <small className="identity-name-lock-note">Identity already verified. Your legal name and birthday stay locked and the approved check is reused for returning rentals.</small>}
+              {identityVerified && !correctingIdentity && <small className="identity-name-lock-note">Identity is verified for this reservation. Your legal name and birthday stay locked.</small>}
 
               {(!correctingIdentity || showCorrectionBirthday) && <BirthdayInput
                 idPrefix="wizard-birthday"
@@ -5676,7 +5689,7 @@ function PreviewCheckout({
                 setProfileForm={setProfileForm}
                 identityVerified={identityVerified && !correctingIdentity}
               />}
-              {identityVerified && !correctingIdentity && <small className="preview-full-field identity-name-lock-note">Identity already verified. Your legal name and birthday are locked and reused for future rentals.</small>}
+              {identityVerified && !correctingIdentity && <small className="preview-full-field identity-name-lock-note">Identity is verified for this reservation. Your legal name and birthday stay locked.</small>}
               {(!correctingIdentity || showCorrectionBirthday) && <BirthdayInput
                 idPrefix="preview-birthday"
                 value={profileForm.date_of_birth}
@@ -5703,7 +5716,7 @@ function PreviewCheckout({
             {(correctingIdentity || phoneVerified) && <button className="preview-primary-button" type="button" onClick={continueContact} disabled={reservationSaving || checkoutExpired}>{reservationSaving ? 'Continuing…' : correctingIdentity ? 'Save correction & return to Identity' : 'Continue'} <ChevronRight size={18} /></button>}
           </PreviewCheckoutSection>
 
-          <PreviewCheckoutSection sectionKey="identity" number="2" title="Identity verification" summary={identityVerified ? 'Verified once and saved for returning rentals' : identityStatus === 'processing' ? 'Verification processing' : 'Government ID and selfie'} completed={identityVerified} open={activeSection === 'identity'} onOpen={() => setActiveSection('identity')}>
+          <PreviewCheckoutSection sectionKey="identity" number="2" title="Identity verification" summary={identityVerified ? 'Verified for this reservation' : identityStatus === 'processing' ? 'Verification processing' : 'Government ID and selfie'} completed={identityVerified} open={activeSection === 'identity'} onOpen={() => setActiveSection('identity')}>
             <IdentityVerificationPanel
               status={identityStatus}
               errorCode={identityErrorCode}
@@ -6281,7 +6294,7 @@ function IdentityVerificationPanel({ status, verified, errorCode, saving, onStar
     <div>
       <strong className="identity-status-title">{verified ? 'Identity verified' : status === 'processing' ? 'Stripe is checking your submission' : correction?.title || 'Verify your government ID and selfie'}</strong>
       <span>{verified
-        ? 'Your legal name and date of birth both match the government ID. This check will be reused for future rentals.'
+        ? 'Identity verification is complete for this reservation. Required license and insurance documents must still be on file.'
         : configurationRequired
           ? 'This is a Rent Me CT secure-results configuration issue, not a failed customer verification. Do not upload your ID or selfie again. Your completed Stripe session is saved.'
         : status === 'processing'
@@ -7282,6 +7295,6 @@ const portalRoot = document.getElementById('root');
 portalRoot.tabIndex = -1;
 createRoot(portalRoot).render(<>
   <a className="portal-skip-link" href="#root">Skip to portal content</a>
-  <PortalErrorBoundary><App /></PortalErrorBoundary>
+  <PortalErrorBoundary><Suspense fallback={<LoadingScreen />}>{new URLSearchParams(window.location.search).has('merchant') ? <MerchantPortal /> : <App />}</Suspense></PortalErrorBoundary>
   <PortalComplianceLayer />
 </>);
