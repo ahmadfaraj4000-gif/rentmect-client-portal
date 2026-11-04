@@ -162,3 +162,5 @@
 
 
 .merchant-shell .booking-calendar-day{padding:5px;min-height:36px}.merchant-shell .booking-calendar-month h3{font-size:16px}.merchant-shell .booking-calendar-actions{margin-top:18px}@media(max-width:620px){.merchant-shell .booking-calendar-months{grid-template-columns:1fr}.merchant-shell .booking-calendar-actions{flex-wrap:wrap}.merchant-shell .booking-calendar-actions button{margin-left:auto}}
+
+.merchant-feedback-dialog{width:min(480px,100%)}.merchant-feedback-dialog p{line-height:1.6;margin:0 0 24px}.merchant-form :focus-visible{outline:2px solid var(--mp-accent);outline-offset:4px;scroll-margin:32px}
