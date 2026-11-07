@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
-    "audit": "eslint src/main.jsx src/BookingPreviewFleet.jsx src/supabaseClient.js src/extensionWorkflow.js src/*.test.js",
+    "audit": "eslint src/main.jsx src/BookingPreviewFleet.jsx src/supabaseClient.js src/extensionWorkflow.js src/bookingAvailability.js src/*.test.js",
     "test": "node --test src/*.test.js",
     "test:extension": "node --test src/extensionWorkflow.test.js",
     "build": "vite build",

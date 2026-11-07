@@ -1,3 +1,4 @@
+import { bookingAvailabilityKey, bookingAvailabilityDecision, fetchBookingAvailability } from './bookingAvailability.js';
 import { rentalCalendarMinutes, rentalDayShortcut } from './rentalBillingTime.js';
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { customerMerchantIdentity } from './merchantWorkflow.js';
@@ -110,11 +111,8 @@ const SMS_CONSENT_TEXT = 'I agree to receive automated transactional SMS message
 const SMS_TERMS_URL = 'https://rentmect.com/terms.html#sms-terms';
 const SMS_PRIVACY_URL = 'https://rentmect.com/privacy-policy.html#sms-privacy';
 const BLOCKING_RENTAL_STATUSES = ['pending', 'documents_needed', 'document_review', 'ready_for_pickup', 'approved', 'active', 'overdue', 'return_initiated', 'checkout_hold', 'calendar_block'];
-const AVAILABILITY_RENTAL_STATUSES = [...BLOCKING_RENTAL_STATUSES, 'completed'];
-const BLOCKING_VEHICLE_STATUSES = ['maintenance', 'unavailable', 'inactive'];
 const ACTIVE_POSSESSION_RENTAL_STATUSES = ['active', 'rented', 'overdue', 'return_initiated'];
 const SINGLE_RENTAL_BOOKING_MESSAGE = 'You already have an active rental. Rent Me CT allows one rental at a time. To keep your current vehicle longer, open Manage Rental in the client portal and request an extension.';
-const TURNAROUND_BUFFER_MINUTES = 180;
 
 function App() {
   const initialUrlParams = new URLSearchParams(window.location.search);
@@ -179,7 +177,8 @@ function App() {
   const [vehicles, setVehicles] = useState([]);
   const [rentals, setRentals] = useState([]);
   const [merchantVerification, setMerchantVerification] = useState(null);
-  const [fleetRentals, setFleetRentals] = useState([]);
+  const [bookingAvailability, setBookingAvailability] = useState({ key: '', status: 'idle', rows: [] });
+  const [availabilityAttempt, setAvailabilityAttempt] = useState(0);
   const [documents, setDocuments] = useState([]);
   const [messages, setMessages] = useState([]);
   const [reports, setReports] = useState([]);
@@ -646,8 +645,7 @@ function App() {
     if (!pendingVehicleName || vehicles.length === 0 || reservationForm.vehicleId) return;
 
     const matchedVehicle = vehicles.find((vehicle) =>
-      normalizeVehicleName(vehicle.name) === normalizeVehicleName(pendingVehicleName) &&
-      isVehicleAvailableForDates(vehicle, reservationForm, fleetRentals)
+      normalizeVehicleName(vehicle.name) === normalizeVehicleName(pendingVehicleName)
     );
 
     if (matchedVehicle) {
@@ -656,7 +654,7 @@ function App() {
         vehicleId: matchedVehicle.id,
       }));
     }
-  }, [pendingVehicleId, pendingVehicleName, vehicles, reservationForm, fleetRentals]);
+  }, [pendingVehicleId, pendingVehicleName, vehicles, reservationForm]);
 
   const currentRental = useMemo(() => {
     const blockingRentals = rentals.filter((r) => BLOCKING_RENTAL_STATUSES.includes(r.status));
@@ -810,9 +808,22 @@ function App() {
   const overviewReturnDate = currentRental?.return_date || reservationForm.returnDate;
   const overviewReturnTime = currentRental?.return_time || reservationForm.returnTime;
 
-  const availableVehicles = useMemo(() => {
-    return vehicles.filter((vehicle) => isVehicleAvailableForDates(vehicle, reservationForm, fleetRentals, currentRental?.id));
-  }, [vehicles, reservationForm, fleetRentals, currentRental?.id]);
+  const availabilityKey = bookingAvailabilityKey(reservationForm);
+  useEffect(() => {
+    if (!session?.user?.id || !wizardOpen || inventoryStatus !== 'ready') return undefined;
+    let active = true;
+    const trip = { ...reservationForm };
+    setBookingAvailability({ key: availabilityKey, status: 'loading', rows: [] });
+    const timer = window.setTimeout(async () => {
+      try {
+        const rows = await fetchBookingAvailability(supabase, trip, withReadRetry);
+        if (active) setBookingAvailability({ key: availabilityKey, status: 'ready', rows });
+      } catch (error) {
+        if (active) setBookingAvailability({ key: availabilityKey, status: 'error', rows: [], error: error.message });
+      }
+    }, 250);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [availabilityKey, availabilityAttempt, session?.user?.id, wizardOpen, inventoryStatus, vehicles]);
 
   const estimate = useMemo(() => {
     if (!selectedVehicle || !reservationForm.pickupDate || !reservationForm.returnDate) {
@@ -1178,7 +1189,6 @@ function App() {
         setRentals((current) => current.map((rental) =>
           rental.id === currentRental.id ? { ...rental, status: 'cancelled' } : rental
         ));
-        setFleetRentals((current) => current.filter((rental) => rental.id !== currentRental.id));
       }
       setCheckoutIntent(false);
       setCheckoutWizardStarted(false);
@@ -1452,16 +1462,12 @@ function loadSavedBookingFromWebsite() {
         vehiclesQuery = BOOKING_FLOW_TEST_ENABLED
           ? vehiclesQuery.or(`published.eq.true,id.eq.${BOOKING_FLOW_TEST_VEHICLE_ID}`)
           : vehiclesQuery.eq('published', true);
-        const [vehiclesResult, fleetRentalsResult] = await Promise.all([
-          withReadRetry(() => vehiclesQuery.order('created_at', { ascending: false }), 'Fleet'),
-          withReadRetry(() => supabase.rpc('get_vehicle_booking_blocks'), 'Availability'),
-        ]);
+        const vehiclesResult = await withReadRetry(() => vehiclesQuery.order('created_at', { ascending: false }), 'Fleet');
         if (vehiclesResult.data) {
           setVehicles(vehiclesResult.data);
           preloadVehicleImages(vehiclesResult.data);
         }
-        if (fleetRentalsResult.data) setFleetRentals(fleetRentalsResult.data);
-        results = [['Fleet', vehiclesResult], ['Availability', fleetRentalsResult]];
+        results = [['Fleet', vehiclesResult]];
       } else if (section === 'billing') {
         const [serviceFeesResult, under25PricingResult, bookingPolicyResult] = await Promise.all([
           withReadRetry(() => supabase.from('service_fees').select('*').eq('active', true).order('created_at', { ascending: false }), 'Fees'),
@@ -1940,11 +1946,22 @@ async function verifyPhoneCode(options = {}) {
     }
 
     const bookingId = pendingBookingId || getBookingIdFromUrl();
-    if (!bookingId && !isVehicleAvailableForDates(selectedVehicle, reservationForm, fleetRentals, currentRental?.id)) {
-      notify('This vehicle is not available for those dates. Please choose another vehicle or adjust your rental period.');
-      setReservationForm((prev) => ({ ...prev, vehicleId: '' }));
-      setWizardStep(1);
-      return null;
+    if (!bookingId && !bookingFlowTestMode) {
+      try {
+        const rows = await fetchBookingAvailability(supabase, reservationForm, withReadRetry);
+        const fresh = { key: bookingAvailabilityKey(reservationForm), status: 'ready', rows };
+        setBookingAvailability(fresh);
+        const decision = bookingAvailabilityDecision(fresh, reservationForm, selectedVehicle.id);
+        if (!decision.available) {
+          notify(decision.reason);
+          setWizardStep(1);
+          return null;
+        }
+      } catch (error) {
+        notify(error.message || 'Availability could not be checked. Please retry.');
+        setAvailabilityAttempt(value => value + 1);
+        return null;
+      }
     }
 
     if (!estimate || estimate.invalid) {
@@ -2012,15 +2029,7 @@ async function verifyPhoneCode(options = {}) {
     }
 
     setRentals([rentalData, ...rentals]);
-    setFleetRentals((prev) => [{
-      id: rentalData.id,
-      vehicle_id: rentalData.vehicle_id,
-      pickup_date: rentalData.pickup_date,
-      return_date: rentalData.return_date,
-      pickup_time: rentalData.pickup_time,
-      return_time: rentalData.return_time,
-      status: rentalData.status,
-    }, ...prev]);
+
 
     try {
       localStorage.removeItem('rentmect_pending_booking');
@@ -2342,7 +2351,6 @@ async function verifyPhoneCode(options = {}) {
     }
 
     setRentals((prev) => prev.map((item) => (item.id === data.id ? data : item)));
-    setFleetRentals((prev) => prev.map((item) => (item.id === data.id ? { ...item, status: data.status } : item)));
     notify('Documents uploaded. Your rental is now in document review.', 'success');
   }
 
@@ -2382,7 +2390,6 @@ async function verifyPhoneCode(options = {}) {
     }
 
     setRentals((prev) => prev.map((item) => (item.id === data.id ? data : item)));
-    setFleetRentals((prev) => prev.map((item) => (item.id === data.id ? { ...item, status: data.status } : item)));
     notify('All steps complete. Your rental is ready for pickup.', 'success');
   }
 
@@ -2574,7 +2581,6 @@ async function verifyPhoneCode(options = {}) {
 
     if (messageData) setMessages([...messages, messageData]);
     setRentals((prev) => prev.map((item) => (item.id === updatedRental.id ? updatedRental : item)));
-    setFleetRentals((prev) => prev.map((item) => (item.id === updatedRental.id ? { ...item, status: updatedRental.status } : item)));
     notify(messageError
       ? 'Return recorded. Rent Me CT was notified through the operations queue; the message thread could not refresh.'
       : 'Return reported. Rent Me CT will inspect the vehicle before closing the rental or releasing the deposit.', 'success');
@@ -4040,7 +4046,9 @@ async function verifyPhoneCode(options = {}) {
           insuranceCoverage={insuranceCoverage}
           setInsuranceCoverage={setInsuranceCoverage}
             currentRental={currentRental}
-            fleetRentals={fleetRentals}
+            bookingAvailability={bookingAvailability}
+            retryAvailability={() => setAvailabilityAttempt(value => value + 1)}
+            hasWebsiteHold={Boolean(pendingBookingId || getBookingIdFromUrl())}
           />
         </FlowStepErrorBoundary>
       )}
@@ -4254,7 +4262,9 @@ function WizardModal({
   insuranceCoverage,
   setInsuranceCoverage,
   currentRental,
-  fleetRentals,
+  bookingAvailability,
+  retryAvailability,
+  hasWebsiteHold,
 }) {
   const step = wizardSteps[wizardStep];
   const Icon = step.icon;
@@ -4267,7 +4277,9 @@ function WizardModal({
   const bookingWindowState = getCustomerBookingWindow(reservationForm, bookingPolicy);
   const waitingForVehicleSelection = wizardStep === 1 && !currentRental && !selectedVehicle;
   const vehicleInventoryUnavailable = wizardStep === 1 && !currentRental && inventoryStatus !== 'ready';
-  const wizardPrimaryDisabled = reservationSaving || waitingForVehicleSelection || vehicleInventoryUnavailable;
+  const selectedAvailability = bookingAvailabilityDecision(bookingAvailability, reservationForm, selectedVehicle?.id);
+  const vehicleAvailabilityUnconfirmed = wizardStep === 1 && !currentRental && !hasWebsiteHold && !bookingFlowTestMode && !selectedAvailability.available;
+  const wizardPrimaryDisabled = reservationSaving || waitingForVehicleSelection || vehicleInventoryUnavailable || vehicleAvailabilityUnconfirmed;
 
   useEffect(() => {
     wizardBodyRef.current?.scrollTo({ top: 0, behavior: 'auto' });
@@ -4474,11 +4486,19 @@ function WizardModal({
                 </div>
               )}
 
+              {inventoryStatus === 'ready' && bookingWindowState.valid && !bookingFlowTestMode && !currentRental && !hasWebsiteHold && !selectedAvailability.available && (
+                <div className="vehicle-picker-status" role="status">
+                  <span>{selectedAvailability.reason}</span>
+                  {selectedAvailability.status !== 'loading' && <button className="secondary-btn" type="button" onClick={retryAvailability}>Check availability again</button>}
+                </div>
+              )}
+
               {inventoryStatus === 'ready' && checkoutVehicleChoices.length > 0 && <div className="vehicle-picker-grid">
                 {checkoutVehicleChoices.map((vehicle) => {
                   const selected = reservationForm.vehicleId === vehicle.id;
-                  const bookable = bookingWindowState.valid && isVehicleAvailableForDates(vehicle, reservationForm, fleetRentals, currentRental?.id);
-                  const statusLabel = bookable ? 'Available' : vehicleAvailabilityLabel(vehicle, reservationForm, fleetRentals, currentRental?.id);
+                  const decision = bookingAvailabilityDecision(bookingAvailability, reservationForm, vehicle.id);
+                  const bookable = bookingWindowState.valid && (isBookingFlowTestVehicle(vehicle) || decision.available);
+                  const statusLabel = !bookingWindowState.valid ? bookingWindowState.error : isBookingFlowTestVehicle(vehicle) ? 'Available for testing' : decision.reason;
 
                   return (
                     <button
@@ -6966,43 +6986,6 @@ function timeOptions() {
 }
 
 
-function isVehicleBookable(vehicle) {
-  const status = String(vehicle?.status || 'available').toLowerCase();
-  return !BLOCKING_VEHICLE_STATUSES.includes(status);
-}
-
-function prettyVehicleStatus(status) {
-  const normalized = String(status || 'available').toLowerCase();
-  if (normalized === 'available') return 'Available';
-  if (normalized === 'reserved') return 'Reserved';
-  if (normalized === 'rented') return 'Rented';
-  if (normalized === 'maintenance') return 'Maintenance';
-  if (normalized === 'unavailable') return 'Unavailable';
-  return 'Unavailable';
-}
-
-function vehicleAvailabilityLabel(vehicle, reservation, rentals = [], currentRentalId = '') {
-  if (isBookingFlowTestVehicle(vehicle)) return 'Always available for testing';
-
-  const status = String(vehicle?.status || 'available').toLowerCase();
-  if (BLOCKING_VEHICLE_STATUSES.includes(status)) {
-    return prettyVehicleStatus(status);
-  }
-
-  if (!reservation?.pickupDate || !reservation?.returnDate) {
-    return 'Choose dates to confirm';
-  }
-
-  const conflictingRental = rentals.find((rental) =>
-    rental.id !== currentRentalId &&
-    rental.vehicle_id === vehicle?.id &&
-    AVAILABILITY_RENTAL_STATUSES.includes(String(rental.status || '').toLowerCase()) &&
-    rentalPeriodsOverlap(reservation, rental)
-  );
-
-  return conflictingRental ? 'Unavailable for dates' : 'Available';
-}
-
 function normalizeVehicleName(value) {
   return String(value || '')
     .toLowerCase()
@@ -7016,52 +6999,6 @@ async function sha256(value) {
   const bytes = new TextEncoder().encode(value);
   const buffer = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(buffer)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function isVehicleAvailableForDates(vehicle, reservation, rentals = [], currentRentalId = '') {
-  if (isBookingFlowTestVehicle(vehicle)) return true;
-
-  const status = String(vehicle?.status || 'available').toLowerCase();
-  if (BLOCKING_VEHICLE_STATUSES.includes(status)) return false;
-
-  if (!reservation?.pickupDate || !reservation?.returnDate) {
-    return true;
-  }
-
-  return !rentals.some((rental) =>
-	    rental.id !== currentRentalId &&
-	    rental.vehicle_id === vehicle?.id &&
-	    AVAILABILITY_RENTAL_STATUSES.includes(String(rental.status || '').toLowerCase()) &&
-	    rentalPeriodsOverlap(reservation, rental)
-	  );
-}
-
-function parseRentMeCtDateTime(dateValue, timeValue = '9:00 AM') {
-  if (!dateValue) return null;
-  const match = String(timeValue || '9:00 AM').trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-  if (!match) return new Date(`${dateValue}T09:00:00`);
-
-  let hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  const period = match[3].toUpperCase();
-  if (period === 'PM' && hours !== 12) hours += 12;
-  if (period === 'AM' && hours === 12) hours = 0;
-
-  return new Date(`${dateValue}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`);
-}
-
-function rentalPeriodsOverlap(reservation, rental) {
-  const requestedStart = parseRentMeCtDateTime(reservation?.pickupDate, reservation?.pickupTime);
-  const requestedEnd = parseRentMeCtDateTime(reservation?.returnDate, reservation?.returnTime);
-  const bookedStart = parseRentMeCtDateTime(rental?.pickup_date, rental?.pickup_time);
-  const bookedEnd = parseRentMeCtDateTime(rental?.return_date, rental?.return_time);
-
-  if (!requestedStart || !requestedEnd || !bookedStart || !bookedEnd) return false;
-
-  const bufferMinutes = rental?.status === 'calendar_block' ? 0 : TURNAROUND_BUFFER_MINUTES;
-  const blockedUntil = new Date(bookedEnd.getTime() + bufferMinutes * 60 * 1000);
-  const requestedBlockedUntil = new Date(requestedEnd.getTime() + bufferMinutes * 60 * 1000);
-  return requestedStart < blockedUntil && requestedBlockedUntil > bookedStart;
 }
 
 function buildAgreementWithDetails({ agreementText, profile, email, vehicle, reservation, rental, signatureName, signatureImageData, approvedExtension, extensionVehicle, pricingPeriods }) {
