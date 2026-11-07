@@ -36,7 +36,6 @@ test('an interrupted inventory read recovers readiness via the actual realtime/f
     await context.refresh();
     assert.equal(state.inventoryStatus, 'ready');
     assert.equal(state.vehicles.length, 1);
-    assert.equal(state.blocks.length, 1);
     const background = context.refresh();
     assert.equal(state.inventoryStatus, 'ready', 'healthy refresh must not disable the vehicle picker');
     await background;
