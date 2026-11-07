@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { createAuthFetch } from './authFetch.js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -22,5 +23,6 @@ try {
 // existing customer session intact when a merchant signs in on this browser.
 const merchantRoute = new URLSearchParams(window.location.search).has('merchant');
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  global: { fetch: createAuthFetch((...args) => fetch(...args)) },
   auth: { detectSessionInUrl: !merchantRoute },
 });

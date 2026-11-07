@@ -11,7 +11,8 @@ test('the portal exposes one clear create-or-resume reservation action', () => {
 });
 
 test('vehicle inventory loads explicitly and communicates its state', () => {
-  assert.match(source, /setInventoryStatus\('loading'\)/);
+  // Loading/error/ready transitions are exercised in recovery.test.js.
+  assert.match(source, /inventoryStatus === 'loading'/);
   assert.match(source, /setInventoryStatus\(errors\.length \? 'error' : 'ready'\)/);
   assert.match(source, /Loading available vehicles…/);
   assert.match(source, /Retry Vehicles/);

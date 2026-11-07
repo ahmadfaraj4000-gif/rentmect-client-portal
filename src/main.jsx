@@ -29,7 +29,7 @@ import {
   X,
 } from 'lucide-react';
 import { supabase } from './supabaseClient';
-import { withRequestDeadline } from './requestDeadline';
+import { withRequestDeadline, withReadRetry } from './requestDeadline';
 import BookingPreviewFleet from './BookingPreviewFleet';
 import BirthdayInput from './BirthdayInput';
 import FLEET_GALLERY_IMAGES from './fleetGalleryImages';
@@ -131,6 +131,8 @@ function App() {
   const bookingPreviewCheckoutMode = previewRoute === '1';
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [startupError, setStartupError] = useState('');
+  const [startupAttempt, setStartupAttempt] = useState(0);
   const [message, setMessage] = useState('');
   const [emailOtpSent, setEmailOtpSent] = useState(false);
   const [emailOtp, setEmailOtp] = useState('');
@@ -299,9 +301,18 @@ function App() {
 
   useEffect(() => {
     let mounted = true;
+    setLoading(true);
+    setStartupError('');
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (mounted) {
+        setSession(nextSession);
+        if (nextSession) setStartupError('');
+      }
+    });
 
     async function init() {
-      const { data } = await supabase.auth.getSession();
+      const { data, error } = await withRequestDeadline(supabase.auth.getSession(), 'Session verification', 35_000);
+      if (error) throw error;
       if (!mounted) return;
 
       let initialSession = data.session;
@@ -330,21 +341,18 @@ function App() {
         loadSavedBookingFromWebsite();
       }
 
-      const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-        setSession(nextSession);
-      });
-
-      setLoading(false);
-
-      return () => listener?.subscription?.unsubscribe?.();
+      if (mounted) setLoading(false);
     }
 
-    init();
+    void init().catch(error => {
+      if (mounted) { setStartupError(error.message || 'Your session could not load.'); setLoading(false); }
+    });
 
     return () => {
       mounted = false;
+      listener.subscription.unsubscribe();
     };
-  }, [adminBookingToken]);
+  }, [adminBookingToken, startupAttempt]);
 
   useEffect(() => {
     if (session?.user?.id) {
@@ -488,28 +496,14 @@ function App() {
     };
     const runRefresh = async (label, request, setter, fallback) => {
       if (document.visibilityState === 'hidden') return;
-      const { data, error } = await request();
+      const { data, error } = await withReadRetry(request, label);
       if (data) setter(data);
       updateRefreshHealth(label, error, fallback);
     };
-    const refreshFleetCalendar = () => runRefresh(
-      'Availability',
-      () => supabase.rpc('get_vehicle_booking_blocks'),
-      setFleetRentals,
-      'Live vehicle availability could not refresh.',
-    );
-    const refreshVehicles = () => runRefresh(
-      'Fleet',
-      () => {
-        let query = supabase.from('vehicles').select('*');
-        query = BOOKING_FLOW_TEST_ENABLED
-          ? query.or(`published.eq.true,id.eq.${BOOKING_FLOW_TEST_VEHICLE_ID}`)
-          : query.eq('published', true);
-        return query.order('created_at', { ascending: false });
-      },
-      setVehicles,
-      'The vehicle list could not refresh.',
-    );
+    const refreshInventory = () => {
+      if (document.visibilityState === 'hidden') return;
+      return loadPortalSection('inventory', session.user.id, { force: true });
+    };
     const refreshRentals = () => runRefresh(
       'Rentals',
       () => supabase.from('rentals').select('*, vehicles(*)').eq('user_id', session.user.id).order('created_at', { ascending: false }),
@@ -542,8 +536,7 @@ function App() {
       if (document.visibilityState === 'hidden' || Date.now() - lastRecoveryAt < 30_000) return;
       lastRecoveryAt = Date.now();
       void Promise.all([
-        refreshFleetCalendar(),
-        refreshVehicles(),
+        refreshInventory(),
         refreshRentals(),
         refreshDocuments(),
         refreshMessages(),
@@ -555,12 +548,11 @@ function App() {
     };
     const fleetChannel = supabase
       .channel('client-fleet-source-of-truth')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'rentals' }, () => scheduleRefresh('availability', refreshFleetCalendar))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'pending_bookings' }, () => scheduleRefresh('availability', refreshFleetCalendar))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_availability_blocks' }, () => scheduleRefresh('availability', refreshFleetCalendar))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rentals' }, () => scheduleRefresh('inventory', refreshInventory))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'pending_bookings' }, () => scheduleRefresh('inventory', refreshInventory))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicle_availability_blocks' }, () => scheduleRefresh('inventory', refreshInventory))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'vehicles' }, () => {
-        scheduleRefresh('vehicles', refreshVehicles);
-        scheduleRefresh('availability', refreshFleetCalendar);
+        scheduleRefresh('inventory', refreshInventory);
       })
       .subscribe();
     const portalChannel = supabase
@@ -575,11 +567,13 @@ function App() {
     // 15-second polling.
     recoveryPoll = window.setInterval(refreshRecoveryState, 5 * 60 * 1000);
     window.addEventListener('focus', refreshRecoveryState);
+    window.addEventListener('online', refreshRecoveryState);
     document.addEventListener('visibilitychange', refreshOnVisibility);
     return () => {
       refreshTimers.forEach((timer) => window.clearTimeout(timer));
       window.clearInterval(recoveryPoll);
       window.removeEventListener('focus', refreshRecoveryState);
+      window.removeEventListener('online', refreshRecoveryState);
       document.removeEventListener('visibilitychange', refreshOnVisibility);
       supabase.removeChannel(fleetChannel);
       supabase.removeChannel(portalChannel);
@@ -1434,11 +1428,21 @@ function loadSavedBookingFromWebsite() {
     setPhoneVerified(Boolean(nextProfile.phone_verified));
   }
 
+  useEffect(() => {
+    if (inventoryStatus !== 'error' || !session?.user?.id) return;
+    const timer = window.setTimeout(() => {
+      if (document.visibilityState !== 'hidden' && navigator.onLine !== false) {
+        void loadPortalSection('inventory', session.user.id, { force: true });
+      }
+    }, 15_000);
+    return () => window.clearTimeout(timer);
+  }, [inventoryStatus, session?.user?.id]);
+
   async function loadPortalSection(section, userId, { force = false } = {}) {
     if (!userId) return;
     if (!force && loadedPortalSectionsRef.current.has(section)) return;
     if (portalSectionLoadsRef.current.has(section)) return portalSectionLoadsRef.current.get(section);
-    if (section === 'inventory') setInventoryStatus('loading');
+    if (section === 'inventory') setInventoryStatus(current => current === 'ready' ? 'ready' : 'loading');
     setPortalHealth((current) => ({ ...current, refreshing: true }));
 
     const request = (async () => {
@@ -1449,8 +1453,8 @@ function loadSavedBookingFromWebsite() {
           ? vehiclesQuery.or(`published.eq.true,id.eq.${BOOKING_FLOW_TEST_VEHICLE_ID}`)
           : vehiclesQuery.eq('published', true);
         const [vehiclesResult, fleetRentalsResult] = await Promise.all([
-          withRequestDeadline(vehiclesQuery.order('created_at', { ascending: false }), 'Fleet'),
-          withRequestDeadline(supabase.rpc('get_vehicle_booking_blocks'), 'Availability'),
+          withReadRetry(() => vehiclesQuery.order('created_at', { ascending: false }), 'Fleet'),
+          withReadRetry(() => supabase.rpc('get_vehicle_booking_blocks'), 'Availability'),
         ]);
         if (vehiclesResult.data) {
           setVehicles(vehiclesResult.data);
@@ -1460,36 +1464,36 @@ function loadSavedBookingFromWebsite() {
         results = [['Fleet', vehiclesResult], ['Availability', fleetRentalsResult]];
       } else if (section === 'billing') {
         const [serviceFeesResult, under25PricingResult, bookingPolicyResult] = await Promise.all([
-          withRequestDeadline(supabase.from('service_fees').select('*').eq('active', true).order('created_at', { ascending: false }), 'Fees'),
-          withRequestDeadline(supabase.from('under_25_pricing_settings').select('*').eq('id', true).maybeSingle(), 'Age-based pricing'),
-          withRequestDeadline(supabase.rpc('get_public_booking_policy'), 'Booking rules'),
+          withReadRetry(() => supabase.from('service_fees').select('*').eq('active', true).order('created_at', { ascending: false }), 'Fees'),
+          withReadRetry(() => supabase.from('under_25_pricing_settings').select('*').eq('id', true).maybeSingle(), 'Age-based pricing'),
+          withReadRetry(() => supabase.rpc('get_public_booking_policy'), 'Booking rules'),
         ]);
         if (serviceFeesResult.data) setServiceFees(serviceFeesResult.data);
         if (under25PricingResult.data) setUnder25Pricing(under25PricingResult.data);
         if (bookingPolicyResult.data?.[0]) setBookingPolicy(bookingPolicyResult.data[0]);
         results = [['Fees', serviceFeesResult], ['Age-based pricing', under25PricingResult], ['Booking rules', bookingPolicyResult]];
       } else if (section === 'charges') {
-        const result = await withRequestDeadline(supabase.from('rental_charge_items').select('*').eq('user_id', userId).order('created_at', { ascending: false }), 'Additional charges');
+        const result = await withReadRetry(() => supabase.from('rental_charge_items').select('*').eq('user_id', userId).order('created_at', { ascending: false }), 'Additional charges');
         if (result.data) setRentalCharges(result.data);
         results = [['Additional charges', result]];
       } else if (section === 'messages') {
-        const result = await withRequestDeadline(supabase.from('rental_messages').select('*').eq('user_id', userId).order('created_at', { ascending: true }), 'Messages');
+        const result = await withReadRetry(() => supabase.from('rental_messages').select('*').eq('user_id', userId).order('created_at', { ascending: true }), 'Messages');
         if (result.data) setMessages(result.data);
         results = [['Messages', result]];
       } else if (section === 'documents') {
-        const result = await withRequestDeadline(supabase.from('rental_documents').select('*').eq('user_id', userId).order('created_at', { ascending: false }), 'Documents');
+        const result = await withReadRetry(() => supabase.from('rental_documents').select('*').eq('user_id', userId).order('created_at', { ascending: false }), 'Documents');
         if (result.data) setDocuments(result.data);
         results = [['Documents', result]];
       } else if (section === 'extensions') {
-        const result = await withRequestDeadline(supabase.from('rental_extension_requests').select('*').eq('user_id', userId).order('created_at', { ascending: false }), 'Extensions');
+        const result = await withReadRetry(() => supabase.from('rental_extension_requests').select('*').eq('user_id', userId).order('created_at', { ascending: false }), 'Extensions');
         if (result.data) setExtensionRequests(result.data);
         results = [['Extensions', result]];
       } else if (section === 'reports') {
-        const result = await withRequestDeadline(supabase.from('vehicle_reports').select('*, rentals(*, vehicles(*))').eq('user_id', userId).order('created_at', { ascending: false }), 'Reports');
+        const result = await withReadRetry(() => supabase.from('vehicle_reports').select('*, rentals(*, vehicles(*))').eq('user_id', userId).order('created_at', { ascending: false }), 'Reports');
         if (result.data) setReports(result.data);
         results = [['Reports', result]];
       } else if (section === 'exceptions') {
-        const result = await withRequestDeadline(supabase.rpc('get_my_rental_emergency_exceptions'), 'Rental exceptions');
+        const result = await withReadRetry(() => supabase.rpc('get_my_rental_emergency_exceptions'), 'Rental exceptions');
         if (result.data) setEmergencyExceptions(result.data);
         results = [['Rental exceptions', result]];
       }
@@ -1516,10 +1520,10 @@ function loadSavedBookingFromWebsite() {
     if (!silent) setLoading(true);
     setPortalHealth((current) => ({ ...current, refreshing: true }));
     const [profileResult, rentalsResult, documentsResult, extensionsResult] = await Promise.all([
-      withRequestDeadline(supabase.from('profiles').select('*').eq('id', userId).single(), 'Profile'),
-      withRequestDeadline(supabase.from('rentals').select('*, vehicles(*)').eq('user_id', userId).order('created_at', { ascending: false }), 'Rentals'),
-      withRequestDeadline(supabase.from('rental_documents').select('*').eq('user_id', userId).order('created_at', { ascending: false }), 'Documents'),
-      withRequestDeadline(supabase.from('rental_extension_requests').select('*').eq('user_id', userId).order('created_at', { ascending: false }), 'Extensions'),
+      withReadRetry(() => supabase.from('profiles').select('*').eq('id', userId).single(), 'Profile'),
+      withReadRetry(() => supabase.from('rentals').select('*, vehicles(*)').eq('user_id', userId).order('created_at', { ascending: false }), 'Rentals'),
+      withReadRetry(() => supabase.from('rental_documents').select('*').eq('user_id', userId).order('created_at', { ascending: false }), 'Documents'),
+      withReadRetry(() => supabase.from('rental_extension_requests').select('*').eq('user_id', userId).order('created_at', { ascending: false }), 'Extensions'),
     ]);
 
     applyCustomerProfile(profileResult.data);
@@ -1549,7 +1553,7 @@ function loadSavedBookingFromWebsite() {
 
   async function reconcilePaymentTarget(targetType, targetId, userId) {
     if (targetType === 'extension' && targetId) {
-      const extensionResult = await withRequestDeadline(
+      const extensionResult = await withReadRetry(() =>
         supabase.from('rental_extension_requests').select('*').eq('id', targetId).eq('user_id', userId).single(),
         'Extensions',
       );
@@ -1557,20 +1561,20 @@ function loadSavedBookingFromWebsite() {
         setExtensionRequests((current) => [extensionResult.data, ...current.filter((item) => item.id !== extensionResult.data.id)]);
       }
       const rentalResult = extensionResult.data?.rental_id
-        ? await withRequestDeadline(supabase.from('rentals').select('*, vehicles(*)').eq('id', extensionResult.data.rental_id).eq('user_id', userId).single(), 'Rentals')
+        ? await withReadRetry(() => supabase.from('rentals').select('*, vehicles(*)').eq('id', extensionResult.data.rental_id).eq('user_id', userId).single(), 'Rentals')
         : { data: null, error: null };
       if (rentalResult.data) setRentals((current) => [rentalResult.data, ...current.filter((item) => item.id !== rentalResult.data.id)]);
       recordPortalResults([['Extensions', extensionResult], ['Rentals', rentalResult]]);
       return;
     }
     if (targetType === 'charge' && targetId) {
-      const chargeResult = await withRequestDeadline(
+      const chargeResult = await withReadRetry(() =>
         supabase.from('rental_charge_items').select('*').eq('id', targetId).eq('user_id', userId).single(),
         'Additional charges',
       );
       if (chargeResult.data) setRentalCharges((current) => [chargeResult.data, ...current.filter((item) => item.id !== chargeResult.data.id)]);
       const rentalResult = chargeResult.data?.rental_id
-        ? await withRequestDeadline(
+        ? await withReadRetry(() =>
             supabase.from('rentals').select('*, vehicles(*)').eq('id', chargeResult.data.rental_id).eq('user_id', userId).single(),
             'Rentals',
           )
@@ -1579,7 +1583,7 @@ function loadSavedBookingFromWebsite() {
       recordPortalResults([['Additional charges', chargeResult], ['Rentals', rentalResult]]);
       return;
     }
-    const rentalResult = await withRequestDeadline(
+    const rentalResult = await withReadRetry(() =>
       targetId
         ? supabase.from('rentals').select('*, vehicles(*)').eq('id', targetId).eq('user_id', userId).single()
         : supabase.from('rentals').select('*, vehicles(*)').eq('user_id', userId).order('created_at', { ascending: false }),
@@ -3203,6 +3207,7 @@ async function verifyPhoneCode(options = {}) {
 
   if (bookingPreviewFleetMode) return <BookingPreviewFleet />;
 
+  if (startupError) return <div className="loading-screen"><div className="loading-card" role="alert"><h1>Connection interrupted</h1><p>{startupError}</p><button type="button" onClick={() => setStartupAttempt(value => value + 1)}>Retry connection</button></div></div>;
   if (loading) return <LoadingScreen stripeReturn={returningFromStripeIdentity || returningFromStripePayment} />;
 
   if (adminBookingToken && adminBookingError) {
