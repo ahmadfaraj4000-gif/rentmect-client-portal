@@ -1,3 +1,4 @@
+import { additionalChargeBalance } from './additionalChargeBalance.js';
 import { bookingAvailabilityKey, bookingAvailabilityDecision, fetchBookingAvailability } from './bookingAvailability.js';
 import { rentalCalendarMinutes, rentalDayShortcut } from './rentalBillingTime.js';
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
@@ -3868,7 +3869,7 @@ async function verifyPhoneCode(options = {}) {
                 <p className="muted">Tolls, add-ons, or other charges added by Rent Me CT appear here with their exact tax and payment status.</p>
                 {currentRentalAdditionalCharges.map((charge) => <div className="invoice-row" key={charge.id}>
                   <span>{charge.name}{charge.description ? ` — ${charge.description}` : ''}<small>Rental {String(charge.rental_id).slice(0, 8).toUpperCase()} • {prettyStatus(charge.status)}</small></span>
-                  <strong>{money(charge.total_amount)}</strong>
+                  <strong>{money(charge.allocation_managed && ['pending', 'failed', 'checkout_open'].includes(charge.status) ? additionalChargeBalance(charge) : charge.total_amount)}{charge.allocation_managed && <small>{money(charge.total_amount)} original · {money(additionalChargeBalance(charge))} remaining</small>}</strong>
                   {['pending', 'failed', 'checkout_open'].includes(charge.status) && <button className="secondary-btn" type="button" onClick={() => payAdditionalRentalCharge(charge)} disabled={paymentSaving}>{paymentSaving ? 'Opening…' : 'Pay charge'}</button>}
                 </div>)}
               </div>
