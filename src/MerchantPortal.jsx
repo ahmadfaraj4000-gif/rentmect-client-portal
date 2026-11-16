@@ -108,6 +108,7 @@ export default function MerchantPortal() {
   const [createdId, setCreatedId] = useState('');
   const [paymentLink, setPaymentLink] = useState(null);
   const [availabilityState,setAvailabilityState]=useState('waiting');
+  const [availabilityError,setAvailabilityError]=useState('');
   const [checkedAt,setCheckedAt]=useState(null);
   const [photoId,setPhotoId]=useState(null);
   const [emailBooking,setEmailBooking]=useState(null);
@@ -167,7 +168,7 @@ export default function MerchantPortal() {
     if(document.hidden||!session?.user?.id||!context?.bookings_enabled||view!=='new'||Object.values(schedule).some(v=>!v))return;
     const generation=++quoteGeneration.current;
     if(!navigator.onLine){setAvailabilityState('error');return;}
-    setAvailabilityState('checking');
+    setAvailabilityState('checking');setAvailabilityError('');
     try{
       const result=await availabilityQueue.current(()=>generation===quoteGeneration.current&&!document.hidden&&navigator.onLine?invoke('merchant-booking',{action:'availability',slug,...schedule}):undefined);
       if(!result||generation!==quoteGeneration.current)return;
@@ -175,7 +176,7 @@ export default function MerchantPortal() {
       setVehicles(available);setAvailabilityState('live');setCheckedAt(new Date());
       setVehicleId(id=>available.some(v=>v.id===id)?id:'');
       setPhotoId(id=>available.some(v=>v.id===id)?id:null);
-    }catch(error){if(generation===quoteGeneration.current){setVehicles([]);setVehicleId('');setPhotoId(null);setAvailabilityState('error');setMessage(error.message);}}
+    }catch(error){if(generation===quoteGeneration.current){setVehicles(null);setVehicleId('');setPhotoId(null);setAvailabilityState('error');setAvailabilityError(error.message);}}
   },[slug,schedule,session?.user?.id,context?.bookings_enabled,view]);
   useEffect(()=>{
     if(!session?.user?.id||!context||view!=='new'||Object.values(schedule).some(v=>!v))return;
@@ -285,7 +286,8 @@ export default function MerchantPortal() {
             <MerchantDateRange schedule={schedule} onChange={dates=>{quoteGeneration.current++;setSchedule({...schedule,...dates});setVehicles(null);setVehicleId('');setAvailabilityState('waiting');}} />
             {Object.entries({pickupTime:'Pickup time',returnTime:'Drop-off time'}).map(([key,label])=><label key={key}>{label}<select value={schedule[key]} required onChange={e=>changeSchedule(key,e.target.value)}>{Array.from({length:96},(_,i)=>{const hour=Math.floor(i/4),minute=(i%4)*15,value=`${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}`;return <option key={value} value={value}>{hour%12||12}:{String(minute).padStart(2,'0')} {hour<12?'AM':'PM'}</option>;})}</select></label>)}
           </div><div className="merchant-row"><p role="status">{availabilityState==='live'?`Availability updated ${checkedAt?.toLocaleTimeString()}. Updates automatically.`:availabilityState==='checking'?'Checking current availability…':availabilityState==='error'?'Availability could not be verified. Reconnect or refresh before reserving.':'Choose pickup and drop-off dates to see availability.'}</p><button type="button" disabled={busy||availabilityState==='checking'||Object.values(schedule).some(v=>!v)} onClick={()=>void loadAvailability()}>Refresh availability</button></div>
-          {vehicles&&<div className="merchant-vehicles">{!vehicles.length&&<p>No vehicles available for these dates. Try different pickup or drop-off dates.</p>}{vehicles.map(v=><article className={`merchant-vehicle ${vehicleId===v.id?'selected':''}`} key={v.id}><label><input type="radio" name="vehicle" checked={vehicleId===v.id} disabled={availabilityState!=='live'} onChange={()=>setVehicleId(v.id)}/><span><strong>{v.name}</strong><small className="merchant-available">Available for your dates</small><small>{v.quote.billable_days} rental days · {dollars(v.quote.security_deposit)} refundable deposit</small></span><strong>{dollars(v.quote.total_due_today)}</strong></label><button type="button" onClick={()=>setPhotoId(v.id)}>View car pictures</button></article>)}</div>}
+          {availabilityState==='error'&&availabilityError&&<p className="merchant-message" role="alert">{availabilityError}</p>}
+          {vehicles&&<div className="merchant-vehicles">{availabilityState==='live'&&!vehicles.length&&<p>No vehicles available for these dates. Try different pickup or drop-off dates.</p>}{vehicles.map(v=><article className={`merchant-vehicle ${vehicleId===v.id?'selected':''}`} key={v.id}><label><input type="radio" name="vehicle" checked={vehicleId===v.id} disabled={availabilityState!=='live'} onChange={()=>setVehicleId(v.id)}/><span><strong>{v.name}</strong><small className="merchant-available">Available for your dates</small><small>{v.quote.billable_days} rental days · {dollars(v.quote.security_deposit)} refundable deposit</small></span><strong>{dollars(v.quote.total_due_today)}</strong></label><button type="button" onClick={()=>setPhotoId(v.id)}>View car pictures</button></article>)}</div>}
           </section>
           <section className="merchant-card" data-merchant-section="customer"><h2>Customer and driver’s license</h2><p>New and returning customers can reserve here. Enter the customer’s existing Rent Me CT email and phone if they have an account. Check the original license in person; the customer must be 25 or older at pickup.</p>
           <div id="merchant-customer-feedback" className={`merchant-customer-match ${currentCustomerMatch?.status === 'existing' ? 'is-match' : ''}`} role="status" aria-live="polite">
