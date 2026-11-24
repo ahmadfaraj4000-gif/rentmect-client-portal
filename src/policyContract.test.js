@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { AGREEMENT_TEXT, AGREEMENT_VERSION } from './rentalAgreement.js';
 
 test('current agreement requires explicit approval instead of automatic late charges', () => {
-  assert.equal(AGREEMENT_VERSION, 'rentmect-master-v2026-11-23-speed-incidents');
+  assert.equal(AGREEMENT_VERSION, 'rentmect-master-v2026-11-24-citation-processing');
   assert.match(AGREEMENT_TEXT, /There is no automatic late-return fee or automatic additional rental-day charge/);
   assert.match(AGREEMENT_TEXT, /until Company confirms its physical return/);
   assert.match(AGREEMENT_TEXT, /manually assess a twenty-five dollar \(\$25\) late return fee/);
