@@ -1,3 +1,4 @@
+import { taxRateSuffix } from './agreementCopy.js';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 const currency = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
@@ -42,7 +43,7 @@ export default function BalanceStatement({ client, rentalId, rental, checkout, r
     {statement && <>
       <p><strong>{Number(statement.due) > 0 ? 'Balance due' : 'Paid in full'} · {currency.format(statement.due)}</strong></p>
       <details open={Number(statement.due) > 0}><summary>Itemized statement</summary>
-        <pre style={{whiteSpace:'pre-wrap', overflowWrap:'anywhere', fontFamily:'inherit'}}>{statement.statement}</pre>
+        <pre style={{whiteSpace:'pre-wrap', overflowWrap:'anywhere', fontFamily:'inherit'}}>{statement.statement.replace(/^Rental sales tax:/m, 'Rental sales tax'+taxRateSuffix(rental?.contract_sales_tax_rate)+':')}</pre>
       </details>
       {statement.targets.filter(target => Number(target.amount) >= 0.50).map(target => <button className="primary-btn" type="button" key={target.id} disabled={busy || confirming} onClick={() => review(target)}>Pay {target.label} · {currency.format(target.amount)} with Stripe</button>)}
       {statement.targets.some(target => Number(target.amount) > 0 && Number(target.amount) < 0.50) && <p>For an item under $0.50, contact Rent Me CT to settle it.</p>}

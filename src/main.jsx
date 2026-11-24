@@ -1,3 +1,4 @@
+import { agreementCopy, agreementMarkup, taxRateSuffix } from './agreementCopy.js';
 import { additionalChargeBalance } from './additionalChargeBalance.js';
 import { bookingAvailabilityKey, bookingAvailabilityDecision, fetchBookingAvailability } from './bookingAvailability.js';
 import { rentalCalendarMinutes, rentalDayShortcut } from './rentalBillingTime.js';
@@ -887,6 +888,7 @@ function App() {
       serviceFeeTotal,
       tourism,
       serviceFeeTaxAmount,
+      taxRate,
       taxAmount,
       baseSecurityDeposit,
       securityDeposit,
@@ -3903,7 +3905,7 @@ async function verifyPhoneCode(options = {}) {
               {Number(currentRental?.discount_amount || 0) > 0 && <div className="invoice-row discount-row"><span>Discount ({currentRental.discount_code})</span><strong>−{money(currentRental.discount_amount)}</strong></div>}
               {Number(currentRental?.manual_discount_amount || 0) > 0 && <div className="invoice-row discount-row"><span>Manual reservation discount ({manualDiscountDescriptor(currentRental)})</span><strong>−{money(currentRental.manual_discount_amount)}</strong></div>}
               <div className="invoice-row"><span>Rental Total</span><strong>{currentRental ? money(currentRental.rental_total) : estimate ? money(estimate.rentalTotal) : 'Pending'}</strong></div>
-              <div className="invoice-row"><span>CT Sales Tax</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
+              <div className="invoice-row"><span>CT Sales Tax{taxRateSuffix(currentRental ? currentRental.contract_sales_tax_rate : estimate?.taxRate)}</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Refundable Security Deposit{currentRental?.under_25_deposit_adjustment_type || estimate?.under25 ? ' (Age 21–24)' : ''}</span><strong>{currentRental?.discount_waives_security_deposit ? 'Waived' : currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
               <ServiceFeesSummary tourism={Number(currentRental?.tourism_surcharge ?? estimate?.tourism ?? 0)} serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
               <div className="invoice-row total-row"><span>{currentRental ? 'Current Invoice Total' : 'Total Due Today'}</span><strong>{currentRental ? money(currentRentalInvoiceTotal) : estimate && !estimate.invalid ? money(estimate.checkoutTotal + estimate.securityDeposit) : 'Pending'}</strong></div>
@@ -4665,7 +4667,7 @@ function WizardModal({
               {Number(currentRental?.discount_amount || 0) > 0 && <div className="invoice-row discount-row"><span>Discount ({currentRental.discount_code})</span><strong>−{money(currentRental.discount_amount)}</strong></div>}
               {Number(currentRental?.manual_discount_amount || 0) > 0 && <div className="invoice-row discount-row"><span>Manual reservation discount ({manualDiscountDescriptor(currentRental)})</span><strong>−{money(currentRental.manual_discount_amount)}</strong></div>}
               <div className="invoice-row"><span>Rental Total</span><strong>{currentRental ? money(currentRental.rental_total) : estimate ? money(estimate.rentalTotal) : 'Pending'}</strong></div>
-              <div className="invoice-row"><span>Taxes</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
+              <div className="invoice-row"><span>Taxes{taxRateSuffix(currentRental ? currentRental.contract_sales_tax_rate : estimate?.taxRate)}</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Refundable Security Deposit{currentRental?.under_25_deposit_adjustment_type || estimate?.under25 ? ' (Age 21–24)' : ''}</span><strong>{currentRental?.discount_waives_security_deposit ? 'Waived' : currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
               <ServiceFeesSummary tourism={Number(currentRental?.tourism_surcharge ?? estimate?.tourism ?? 0)} serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
               {paymentPartiallyPaid && <><div className="invoice-row discount-row"><span>Payments already received</span><strong>−{money(netRentalPaid)}</strong></div><div className="invoice-row total-row"><span>Remaining rental balance</span><strong>{money(remainingRentalBalance)}</strong></div></>}
@@ -4821,11 +4823,6 @@ function AgreementModal({
   // An old snapshot may remain after an amendment requires a new signature.
   const alreadySigned = Boolean(agreementSigned && currentRental?.agreement_snapshot);
   const displayedAgreement = alreadySigned ? currentRental.agreement_snapshot : agreementText;
-  const displayedSignatureImage = extractSignatureImage(displayedAgreement);
-  const printableAgreement = String(displayedAgreement || '').replace(
-    /Drawn Signature Image:\s*data:image\/png;base64,[^\s]+/,
-    'Electronic Signature Image: embedded below',
-  );
   const ready = agreementChecked && signatureName.trim() && signatureImageData;
 
   function jumpToSignature() {
@@ -4882,8 +4879,7 @@ function AgreementModal({
         <div className="agreement-quick-actions"><button className="secondary-btn agreement-jump-button" type="button" onClick={jumpToSignature}>Go to signing steps <ArrowDown size={17} /></button></div>
       </>}
       <div ref={scrollRef} className="agreement-scroll-box" tabIndex="0" aria-label="Complete rental agreement">
-        <pre>{printableAgreement}</pre>
-        {alreadySigned && displayedSignatureImage && <div className="agreement-stored-signature"><strong>Stored electronic signature</strong><img src={displayedSignatureImage} alt={`Electronic signature for ${currentRental.agreement_signature_name || 'renter'}`} width="900" height="220" /></div>}
+        <div dangerouslySetInnerHTML={{__html: agreementMarkup(displayedAgreement, alreadySigned ? currentRental?.agreement_signed_at : null)}}/>
       </div>
       {!alreadySigned && <div ref={signBoxRef} className="agreement-sign-box">
         <fieldset disabled={agreementSaving} className="agreement-sign-fields">
@@ -5531,7 +5527,7 @@ function PreviewGuestExperience({
             rentalTotal={rental}
             serviceFeeTotal={serviceFeeTotal}
             tourism={tourism}
-            taxAmount={tax}
+            taxRate={estimate?.taxRate ?? (days <= 30 ? CT_SHORT_RENTAL_TAX_RATE : null)} taxAmount={tax}
             securityDeposit={deposit}
             total={total}
             vehicle={displayVehicle}
@@ -5588,7 +5584,7 @@ function PreviewGuestExperience({
             <div className="preview-price-row"><span>{days} rental {days === 1 ? 'day' : 'days'}</span><strong>{money(rental)}</strong></div>
             {tourism > 0 && <div className="preview-price-row"><span>Connecticut tourism surcharge</span><strong>{money(tourism)}</strong></div>}
             {serviceFeeTotal > tourism && <div className="preview-price-row"><span>Booking fees</span><strong>{money(serviceFeeTotal-tourism)}</strong></div>}
-            <div className="preview-price-row"><span>Estimated tax</span><strong>{Number.isFinite(tax) ? money(tax) : 'Quote pending'}</strong></div>
+            <div className="preview-price-row"><span>Estimated tax{taxRateSuffix(estimate?.taxRate ?? (days <= 30 ? CT_SHORT_RENTAL_TAX_RATE : null))}</span><strong>{Number.isFinite(tax) ? money(tax) : 'Quote pending'}</strong></div>
             <div className="preview-price-row"><span>Refundable deposit</span><strong>{money(deposit)}</strong></div>
             <div className="preview-price-row preview-total-row"><span>Due today</span><strong>{Number.isFinite(total) ? money(total) : 'Quote pending'}</strong></div>
             <button className="preview-primary-button" type="button" onClick={() => setPage('checkout')} disabled={checkoutExpired}>
@@ -5899,7 +5895,7 @@ function PreviewCheckout({
             <div className="preview-payment-breakdown">
               {Number(currentRental?.manual_discount_amount || 0) > 0 && <><div><span>Rental before manual discount</span><strong>{money(currentRental.pre_manual_discount_rental_total)}</strong></div><div className="discount-row"><span>Manual reservation discount ({manualDiscountDescriptor(currentRental)})</span><strong>−{money(currentRental.manual_discount_amount)}</strong></div></>}
               <div><span>Rental</span><strong>{money(rentalTotal)}</strong></div>
-              <div><span>CT sales tax</span><strong>{money(taxAmount)}</strong></div>
+              <div><span>CT sales tax{taxRateSuffix(currentRental ? currentRental.contract_sales_tax_rate : estimate?.taxRate)}</span><strong>{money(taxAmount)}</strong></div>
               <div><span>Refundable security deposit{currentRental?.under_25_deposit_adjustment_type || estimate?.under25 ? ' (Age 21–24)' : ''}</span><strong>{depositWaived ? 'Waived' : money(securityDeposit)}</strong></div>
               <ServiceFeesSummary tourism={Number(currentRental?.tourism_surcharge ?? estimate?.tourism ?? 0)} serviceFees={serviceFees} total={serviceFeeTotal} />
               {paymentPartiallyPaid && <div className="discount-row"><span>Payments already received</span><strong>−{money(netRentalPaid)}</strong></div>}
@@ -5910,7 +5906,7 @@ function PreviewCheckout({
           </PreviewCheckoutSection>
         </section>
 
-        <PreviewTripSummary tourism={Number(currentRental?.tourism_surcharge ?? estimate?.tourism ?? 0)} reservationForm={reservationForm} rentalTotal={rentalTotal} serviceFeeTotal={serviceFeeTotal} taxAmount={taxAmount} securityDeposit={securityDeposit} depositWaived={depositWaived} total={total} secondsRemaining={checkoutSecondsRemaining} expired={checkoutExpired} vehicle={vehicle} under25={Boolean(currentRental?.under_25_deposit_adjustment_type || estimate?.under25)} />
+        <PreviewTripSummary taxRate={currentRental ? currentRental.contract_sales_tax_rate : estimate?.taxRate} tourism={Number(currentRental?.tourism_surcharge ?? estimate?.tourism ?? 0)} reservationForm={reservationForm} rentalTotal={rentalTotal} serviceFeeTotal={serviceFeeTotal} taxAmount={taxAmount} securityDeposit={securityDeposit} depositWaived={depositWaived} total={total} secondsRemaining={checkoutSecondsRemaining} expired={checkoutExpired} vehicle={vehicle} under25={Boolean(currentRental?.under_25_deposit_adjustment_type || estimate?.under25)} />
       </main>
     </div>
   );
@@ -5966,7 +5962,7 @@ function Under25PricingNotice({ rental, estimate, total }) {
   );
 }
 
-function PreviewTripSummary({ reservationForm, rentalTotal, serviceFeeTotal = 0, tourism = 0, taxAmount, securityDeposit, depositWaived = false, total, secondsRemaining, expired, vehicle, under25 = false }) {
+function PreviewTripSummary({ taxRate, reservationForm, rentalTotal, serviceFeeTotal = 0, tourism = 0, taxAmount, securityDeposit, depositWaived = false, total, secondsRemaining, expired, vehicle, under25 = false }) {
   const displayVehicle = vehicle || { name: 'Booking Flow Test Vehicle', id: BOOKING_FLOW_TEST_VEHICLE_ID };
   const features = getVehicleFeatures(displayVehicle);
   return (
@@ -5988,7 +5984,7 @@ function PreviewTripSummary({ reservationForm, rentalTotal, serviceFeeTotal = 0,
         <div><span>Rental</span><strong>{money(rentalTotal)}</strong></div>
         {tourism > 0 && <div><span>Connecticut tourism surcharge</span><strong>{money(tourism)}</strong></div>}
         {Number(serviceFeeTotal) > tourism && <div><span>Booking fees</span><strong>{money(serviceFeeTotal-tourism)}</strong></div>}
-        <div><span>Estimated tax</span><strong>{Number.isFinite(taxAmount) ? money(taxAmount) : 'Quote pending'}</strong></div>
+        <div><span>Estimated tax{taxRateSuffix(taxRate)}</span><strong>{Number.isFinite(taxAmount) ? money(taxAmount) : 'Quote pending'}</strong></div>
         <div><span>Refundable deposit{under25 ? ' (Age 21–24)' : ''}</span><strong>{depositWaived ? 'Waived' : money(securityDeposit)}</strong></div>
         <div className="preview-total-row"><span>Due today</span><strong>{Number.isFinite(total) ? money(total) : 'Quote pending'}</strong></div>
       </div>
@@ -7099,7 +7095,7 @@ Under-25 Rental Markup: ${Number(rental?.under_25_markup_amount || 0) > 0 ? `${m
 Promotion Discount: ${Number(rental?.discount_amount || 0) > 0 ? `${money(rental.discount_amount)} (${rental.discount_code || 'promotion'})` : 'Not applied'}
 Manual Reservation Discount: ${Number(rental?.manual_discount_amount || 0) > 0 ? `${manualDiscountDescriptor(rental)}; ${money(rental.manual_discount_amount)} rental-subtotal adjustment before recalculated tax` : 'Not applied'}
 Rental Total: ${rental?.rental_total ? money(rental.rental_total) : 'Pending'}
-Tax Amount: ${rental?.tax_amount ? money(rental.tax_amount) : 'Pending'}
+Tax Amount${taxRateSuffix(rental?.contract_sales_tax_rate)}: ${rental?.tax_amount != null ? money(rental.tax_amount) : 'Pending'}
 Security Deposit: ${rental?.discount_waives_security_deposit ? 'Waived by discount code' : rental ? money(rental.security_deposit) : vehicle?.security_deposit ? money(vehicle.security_deposit) : 'Pending'}
 Mileage Policy: ${MILEAGE_POLICY}
 Cancellation Terms: ${CANCELLATION_TERMS}
@@ -7117,51 +7113,18 @@ function extractSignatureImage(snapshot = '') {
   return match?.[1] || '';
 }
 
-function agreementHtml(snapshot, title = 'Rent Me CT Signed Agreement') {
-  const signatureImage = extractSignatureImage(snapshot);
-  const printableText = String(snapshot || '').replace(/Drawn Signature Image:\s*data:image\/png;base64,[^\s]+/, 'Drawn Signature Image: embedded below');
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>${escapeHtml(title)}</title>
-  <style>
-    body{font-family:Arial,sans-serif;color:#172033;line-height:1.5;padding:32px;max-width:900px;margin:auto}
-    pre{white-space:pre-wrap;font-family:inherit}
-    .signature{margin-top:24px;border:1px solid #d6dee8;border-radius:10px;padding:16px}
-    .signature img{max-width:420px;width:100%;height:auto;display:block}
-  </style>
-</head>
-<body>
-  <pre>${escapeHtml(printableText)}</pre>
-  ${signatureImage ? `<div class="signature"><strong>Drawn Signature</strong><img src="${signatureImage}" alt="Drawn renter signature" width="900" height="300"></div>` : ''}
-</body>
-</html>`;
-}
-
 function downloadAgreement(rental) {
-  const snapshot = rental?.agreement_snapshot;
-  if (!snapshot) return;
-  const html = agreementHtml(snapshot, `Rent Me CT Agreement ${rental.id || ''}`);
+  if (!rental?.agreement_snapshot) return;
+  const { html, filename } = agreementCopy(rental);
   const blob = new Blob([html], { type: 'text/html' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `rent-me-ct-agreement-${rental.id || 'signed'}.html`;
+  link.download = filename;
   document.body.appendChild(link);
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
-}
-
-function escapeHtml(value) {
-  return String(value || '').replace(/[&<>"']/g, (char) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#039;',
-  })[char]);
 }
 
 const PORTAL_CONSENT_KEY = 'rentmect_privacy_choices_v1';
