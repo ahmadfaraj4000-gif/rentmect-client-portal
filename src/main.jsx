@@ -35,6 +35,7 @@ import { withRequestDeadline, withReadRetry } from './requestDeadline';
 import BookingPreviewFleet from './BookingPreviewFleet';
 import BirthdayInput from './BirthdayInput';
 import FLEET_GALLERY_IMAGES from './fleetGalleryImages';
+import { accountStatementIds, isTripInProgress } from './accountBilling.js';
 import BalanceStatement from './BalanceStatement.jsx';
 import { AGREEMENT_TEXT, AGREEMENT_VERSION } from './rentalAgreement';
 import {
@@ -194,6 +195,10 @@ function App() {
   const [activeTab, setActiveTab] = useState('overview');
   const statementParams = new URLSearchParams(window.location.search);
   const statementRentalId = statementParams.get('statement') || statementParams.get('amp;statement');
+  const linkedChargeId = statementParams.get('charge');
+  const billingLink = statementParams.get('billing') === '1' || Boolean(statementRentalId || linkedChargeId);
+  const [statementRevision, setStatementRevision] = useState(0);
+  const [balanceConfirmationFailed, setBalanceConfirmationFailed] = useState(false);
   const [isMobileClientNav, setIsMobileClientNav] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches);
   const [navCollapsed, setNavCollapsed] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches);
   const [agreementModalOpen, setAgreementModalOpen] = useState(false);
@@ -430,14 +435,15 @@ function App() {
       if (!stripeCheckoutSessionId) {
         const returnUrl = new URL(window.location.href);
         const chargeId = returnUrl.searchParams.get('charge') || '';
-        const extensionId = returnUrl.searchParams.get('extension') || extensionRequests.find((request) =>
+        const extensionId = returnUrl.searchParams.get('extension') || (!billingLink && extensionRequests.find((request) =>
           request.status === 'approved_pending_payment' && request.payment_status === 'pending'
-        )?.id || '';
+        )?.id) || '';
         await reconcilePaymentTarget(
           chargeId ? 'charge' : extensionId ? 'extension' : 'rental',
-          chargeId || extensionId,
+          chargeId || extensionId || statementRentalId || '',
           session.user.id,
         );
+        setStatementRevision(value => value + 1);
         clearStripeReturnParams();
         notify('Stripe returned successfully. Payment confirmation is refreshing; do not submit another payment.');
         return;
@@ -458,6 +464,7 @@ function App() {
 
         if (!response.ok || data?.error) {
           stripeReturnHandledRef.current = false;
+          if (billingLink) setBalanceConfirmationFailed(true);
           notify(data?.error || 'Stripe received the payment, but the booking could not be confirmed yet. Do not pay again; contact Rent Me CT.', 'error');
           return;
         }
@@ -465,15 +472,17 @@ function App() {
         await reconcilePaymentTarget(data?.targetType, data?.targetId, session.user.id);
         setCheckoutExpiresAt(null);
         setCheckoutIntent(false);
-        const extensionPaymentConfirmed = data?.targetType === 'extension' || confirmingExtensionPayment;
+        const extensionPaymentConfirmed = data?.targetType === 'extension' || (!billingLink && confirmingExtensionPayment);
+        setStatementRevision(value => value + 1);
         setActiveTab(extensionPaymentConfirmed ? 'overview' : 'payment');
         if (extensionPaymentConfirmed) setTripManagerOpen(true);
         clearStripeReturnParams();
         notify(extensionPaymentConfirmed
           ? 'Extension payment confirmed. Stripe and the admin portal are updating the active return date now.'
-          : 'Payment confirmed. Your rental is recorded and ready for Rent Me CT review.', 'success');
+          : billingLink ? 'Payment confirmed. Your balance has been updated.' : 'Payment confirmed. Your rental is recorded and ready for Rent Me CT review.', 'success');
       } catch (error) {
         stripeReturnHandledRef.current = false;
+        if (billingLink) setBalanceConfirmationFailed(true);
         notify('Stripe received the payment, but the booking confirmation could not reconnect. Do not pay again; refresh or contact Rent Me CT.', 'error');
       } finally {
         setPaymentSaving(false);
@@ -626,8 +635,7 @@ function App() {
 
   useEffect(() => {
     if (!session?.user?.id || !portalDataReady) return;
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('billing') === '1' || params.get('charge')) setActiveTab('payment');
+    if (billingLink) setActiveTab('payment');
   }, [session?.user?.id, portalDataReady]);
 
   useEffect(() => {
@@ -781,7 +789,7 @@ function App() {
   );
 
   useEffect(() => {
-    if (!session?.user?.id || !portalDataReady || !checkoutIntent || checkoutWizardStarted || bookingFlowTestMode || bookingPreviewCheckoutMode) return;
+    if (billingLink || !session?.user?.id || !portalDataReady || !checkoutIntent || checkoutWizardStarted || bookingFlowTestMode || bookingPreviewCheckoutMode) return;
     if (pendingVehicleName && vehicles.length === 0) return;
     if (currentRental) {
       setCheckoutWizardStarted(true);
@@ -1108,7 +1116,7 @@ function App() {
     const url = new URL(window.location.href);
     const paymentReturn = url.searchParams.get('payment');
     const extensionPaymentReturnId = url.searchParams.get('extension');
-    if (!paymentReturn) return undefined;
+    if (!paymentReturn || billingLink) return undefined;
 
     paymentReturnHandledRef.current = true;
     url.searchParams.delete('payment');
@@ -3193,6 +3201,34 @@ async function verifyPhoneCode(options = {}) {
     signatureImageData,
   });
 
+  // Billing includes returned rentals even when there is no current booking.
+  const explicitStatement = statementRentalId || rentalCharges.find(c => c.id === linkedChargeId)?.rental_id;
+  const tripStatement = isTripInProgress(currentRental);
+  const billingStatements = explicitStatement ? [explicitStatement] : accountStatementIds(rentals, rentalCharges);
+  const showBookingBill = !explicitStatement && !tripStatement && Boolean(currentRental || (checkoutIntent && estimate && !estimate.invalid));
+  const bookingAmountDue = currentRental ? currentRentalBalanceDue : estimate && !estimate.invalid ? estimate.checkoutTotal + estimate.securityDeposit : null;
+  async function openStatementCheckout(target, rentalId) {
+    const returnUrl = new URL(window.location.href);
+    returnUrl.search = '';
+    returnUrl.hash = '';
+    returnUrl.searchParams.set('billing','1');
+    returnUrl.searchParams.set('statement', rentalId);
+    if (target.type === 'charge') returnUrl.searchParams.set('charge',target.id);
+    returnUrl.searchParams.set('payment','stripe_success');
+    const cancelUrl = new URL(returnUrl);
+    cancelUrl.searchParams.set('payment','stripe_cancelled');
+    const { data, error } = await supabase.functions.invoke('stripe-web-hook', { body: {
+      action: 'create_checkout', targetType: target.type, ...(target.type === 'charge' ? { chargeId:target.id } : { rentalId:target.id }),
+      successUrl:returnUrl.toString(), cancelUrl:cancelUrl.toString(),
+    }});
+    if (error || !data?.url) {
+      let detail = data?.error;
+      try { detail ||= (await error?.context?.clone().json())?.error; } catch {}
+      throw Error(detail || error?.message || 'Checkout could not be opened. Please try again.');
+    }
+    window.location.assign(data.url);
+  }
+
   const tabs = paymentPaid
     ? [
         { key: 'overview', label: 'Overview', icon: CalendarDays },
@@ -3204,6 +3240,7 @@ async function verifyPhoneCode(options = {}) {
     : [
         { key: 'overview', label: 'Overview', icon: CalendarDays },
         { key: 'guided', label: 'Reservation', icon: CheckCircle2 },
+        { key: 'payment', label: 'Billing', icon: CreditCard },
         { key: 'messages', label: 'Messages', icon: MessageCircle },
       ];
 
@@ -3317,7 +3354,7 @@ async function verifyPhoneCode(options = {}) {
     </MerchantDocumentUpload></Suspense>;
   }
 
-  if (bookingPreviewCheckoutMode && checkoutIntent && !previewPortalOpen) {
+  if (!billingLink && bookingPreviewCheckoutMode && checkoutIntent && !previewPortalOpen) {
     return (
       <>
         {notice && !activeRentalConflict && (
@@ -3845,20 +3882,13 @@ async function verifyPhoneCode(options = {}) {
           </>
         )}
 
-        {activeTab === 'payment' && statementRentalId && <BalanceStatement key={statementRentalId} client={supabase} rentalId={statementRentalId} checkout={async target => {
-          const returnUrl = new URL(window.location.href);
-          returnUrl.searchParams.delete('session_id');
-          returnUrl.searchParams.set('payment','stripe_success');
-          const cancelUrl = new URL(returnUrl);
-          cancelUrl.searchParams.set('payment','stripe_cancelled');
-          const { data, error } = await supabase.functions.invoke('stripe-web-hook', { body: {
-            action: 'create_checkout', targetType: target.type, ...(target.type === 'charge' ? { chargeId:target.id } : { rentalId:target.id }),
-            successUrl:returnUrl.toString(), cancelUrl:cancelUrl.toString(),
-          }});
-          if (error || !data?.url) throw Error(error?.message || data?.error || 'Checkout could not be opened.');
-          window.location.assign(data.url);
-        }} />}
-        {activeTab === 'payment' && !statementRentalId && (
+        {activeTab === 'payment' && <>
+          {balanceConfirmationFailed && <p className="panel" role="alert">Payment confirmation is unavailable. Refresh the page to check Stripe before paying again. <button type="button" className="secondary-btn" onClick={() => window.location.reload()}>Check payment status</button></p>}
+          {billingStatements.map(id => <BalanceStatement key={id} revision={statementRevision} client={supabase} rentalId={id} rental={rentals.find(r => r.id === id)} checkout={openStatementCheckout} confirming={paymentSaving || balanceConfirmationFailed}/>)}
+          {!billingStatements.length && !showBookingBill && <section className="panel"><h3>Billing</h3><p>{!portalDataReady || portalHealth.refreshing ? 'Loading your rentals…' : portalHealth.errors.some(e => e.label === 'Rentals') ? 'Your rentals could not be loaded.' : 'There are no rental invoices to display.'}</p><button type="button" className="secondary-btn" onClick={() => loadPortalData(session.user.id, {silent:true})}>Refresh rentals</button></section>}
+          {tripStatement && !explicitStatement && approvedUnpaidExtension && <button className="secondary-btn" type="button" onClick={() => { setActiveTab('overview'); setTripManagerOpen(true); }}>Open Approved Extension</button>}
+        </>}
+        {activeTab === 'payment' && showBookingBill && (
           <section className="panel payment-panel-clean" id="payment">
             <p className="eyebrow">Billing</p>
             <h3>Deposit & Rental Payment</h3>
@@ -3931,7 +3961,7 @@ async function verifyPhoneCode(options = {}) {
               </div>
             )}
             {!approvedUnpaidExtension && <button className="primary-btn big-action" onClick={startStripeCheckout} disabled={paymentSaving || checkoutExpired || paymentPaid}>
-              <CreditCard size={18} /> {paymentPaid ? 'Payment Complete' : paymentSaving ? 'Opening Stripe...' : `Pay ${money(currentRental ? currentRentalBalanceDue : currentRentalInvoiceTotal)} With Stripe`}
+              <CreditCard size={18} /> {paymentPaid ? 'Payment Complete' : paymentSaving ? 'Opening Stripe...' : bookingAmountDue > 0 ? `Pay ${money(bookingAmountDue)} With Stripe` : 'Complete booking'}
             </button>}
           </section>
         )}

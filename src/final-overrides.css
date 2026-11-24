@@ -2481,3 +2481,8 @@ summary:focus-visible {
 .agreement-sign-fields .checkbox-row { align-items: flex-start; cursor: pointer; padding: 8px 0; }
 .agreement-sign-fields .checkbox-row input { flex: 0 0 22px; width: 22px; height: 22px; margin-top: 2px; accent-color: #17633e; }
 .agreement-sign-fields .signature-input { font-size: 16px; }
+
+.customer-balance { display: grid; gap: 12px; min-width: 0; }
+.customer-balance > p, .customer-balance > h3 { margin: 0; }
+.customer-balance summary { cursor: pointer; }
+.customer-balance button { white-space: normal; }
