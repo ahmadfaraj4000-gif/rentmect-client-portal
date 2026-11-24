@@ -35,6 +35,7 @@ import { withRequestDeadline, withReadRetry } from './requestDeadline';
 import BookingPreviewFleet from './BookingPreviewFleet';
 import BirthdayInput from './BirthdayInput';
 import FLEET_GALLERY_IMAGES from './fleetGalleryImages';
+import BalanceStatement from './BalanceStatement.jsx';
 import { AGREEMENT_TEXT, AGREEMENT_VERSION } from './rentalAgreement';
 import {
   formatRentMeCtDateTime,
@@ -87,7 +88,7 @@ const TEST_VEHICLE_FEATURES = [
   'USB charger', 'GPS', 'Keyless entry', 'Automatic transmission',
 ];
 
-const CT_TAX_RATE = 0.0635;
+const CT_SHORT_RENTAL_TAX_RATE = 0.0935;
 const DEFAULT_UNDER_25_PRICING = {
   deposit_adjustment_enabled: true,
   deposit_adjustment_type: 'fixed',
@@ -191,6 +192,8 @@ function App() {
   const [bookingPolicy, setBookingPolicy] = useState(DEFAULT_BOOKING_POLICY);
   const [supportText, setSupportText] = useState('');
   const [activeTab, setActiveTab] = useState('overview');
+  const statementParams = new URLSearchParams(window.location.search);
+  const statementRentalId = statementParams.get('statement') || statementParams.get('amp;statement');
   const [isMobileClientNav, setIsMobileClientNav] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches);
   const [navCollapsed, setNavCollapsed] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches);
   const [agreementModalOpen, setAgreementModalOpen] = useState(false);
@@ -809,6 +812,19 @@ function App() {
   const overviewReturnDate = currentRental?.return_date || reservationForm.returnDate;
   const overviewReturnTime = currentRental?.return_time || reservationForm.returnTime;
 
+  const [longQuote, setLongQuote] = useState(null);
+  const longQuoteKey = JSON.stringify([selectedVehicle?.id, reservationForm.pickupDate, reservationForm.pickupTime, reservationForm.returnDate, reservationForm.returnTime]);
+  useEffect(() => {
+    const [id, pickup, pickupTime, end, endTime] = JSON.parse(longQuoteKey);
+    if (!id || !pickup || !end || getCustomerBookingWindow(reservationForm, bookingPolicy).billableDays <= 30) return;
+    let active = true;
+    supabase.rpc('get_booking_quote', { p_vehicle_id: id, p_pickup_date: pickup, p_pickup_time: pickupTime, p_return_date: end, p_return_time: endTime })
+      .then(({ data, error }) => {
+        if (active) setLongQuote({ key: longQuoteKey, rate: data?.valid ? data.tax_rate : null, error: error?.message || data?.error });
+      });
+    return () => { active = false; };
+  }, [longQuoteKey, bookingPolicy]);
+
   const availabilityKey = bookingAvailabilityKey(reservationForm);
   useEffect(() => {
     if (!session?.user?.id || !wizardOpen || inventoryStatus !== 'ready') return undefined;
@@ -840,10 +856,13 @@ function App() {
     const markupPercentage = under25 ? Number(under25Pricing.rental_markup_percentage || 0) : 0;
     const markupAmount = baseRentalTotal * markupPercentage / 100;
     const rentalTotal = baseRentalTotal + markupAmount;
-    const serviceFeeTotal = serviceFees.reduce((sum, fee) => sum + Number(fee.amount || 0), 0);
+    const taxRate = days <= 30 ? CT_SHORT_RENTAL_TAX_RATE : longQuote?.key === longQuoteKey ? longQuote.rate : null;
+    if (!taxRate) return { invalid: true, days, error: longQuote?.key === longQuoteKey ? longQuote.error || 'Contact us for long-term pricing.' : 'Retrieving your long-term quote…' };
+    const tourism = days <= 30 ? days : 0;
+    const serviceFeeTotal = tourism + serviceFees.reduce((sum, fee) => sum + Number(fee.amount || 0), 0);
     const taxableServiceFeeTotal = serviceFees.filter((fee) => fee.taxable).reduce((sum, fee) => sum + Number(fee.amount || 0), 0);
-    const serviceFeeTaxAmount = taxableServiceFeeTotal * CT_TAX_RATE;
-    const taxAmount = (rentalTotal + taxableServiceFeeTotal) * CT_TAX_RATE;
+    const serviceFeeTaxAmount = Math.round(taxableServiceFeeTotal * taxRate * 100) / 100;
+    const taxAmount = Math.round((rentalTotal + taxableServiceFeeTotal) * taxRate * 100) / 100;
     const baseSecurityDeposit = Number(selectedVehicle.security_deposit || 0);
     const securityDeposit = under25
       ? calculateUnder25Deposit(baseSecurityDeposit, under25Pricing)
@@ -858,13 +877,14 @@ function App() {
       markupAmount,
       rentalTotal,
       serviceFeeTotal,
+      tourism,
       serviceFeeTaxAmount,
       taxAmount,
       baseSecurityDeposit,
       securityDeposit,
       checkoutTotal: rentalTotal + serviceFeeTotal + taxAmount,
     };
-  }, [selectedVehicle, reservationForm, profileForm.date_of_birth, under25Pricing, serviceFees, bookingPolicy]);
+  }, [selectedVehicle, reservationForm, profileForm.date_of_birth, under25Pricing, serviceFees, bookingPolicy, longQuote, longQuoteKey]);
 
   const userEmail = session?.user?.email || '';
   const userName =
@@ -3825,7 +3845,20 @@ async function verifyPhoneCode(options = {}) {
           </>
         )}
 
-        {activeTab === 'payment' && (
+        {activeTab === 'payment' && statementRentalId && <BalanceStatement key={statementRentalId} client={supabase} rentalId={statementRentalId} checkout={async target => {
+          const returnUrl = new URL(window.location.href);
+          returnUrl.searchParams.delete('session_id');
+          returnUrl.searchParams.set('payment','stripe_success');
+          const cancelUrl = new URL(returnUrl);
+          cancelUrl.searchParams.set('payment','stripe_cancelled');
+          const { data, error } = await supabase.functions.invoke('stripe-web-hook', { body: {
+            action: 'create_checkout', targetType: target.type, ...(target.type === 'charge' ? { chargeId:target.id } : { rentalId:target.id }),
+            successUrl:returnUrl.toString(), cancelUrl:cancelUrl.toString(),
+          }});
+          if (error || !data?.url) throw Error(error?.message || data?.error || 'Checkout could not be opened.');
+          window.location.assign(data.url);
+        }} />}
+        {activeTab === 'payment' && !statementRentalId && (
           <section className="panel payment-panel-clean" id="payment">
             <p className="eyebrow">Billing</p>
             <h3>Deposit & Rental Payment</h3>
@@ -3842,7 +3875,7 @@ async function verifyPhoneCode(options = {}) {
               <div className="invoice-row"><span>Rental Total</span><strong>{currentRental ? money(currentRental.rental_total) : estimate ? money(estimate.rentalTotal) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>CT Sales Tax</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Refundable Security Deposit{currentRental?.under_25_deposit_adjustment_type || estimate?.under25 ? ' (Age 21–24)' : ''}</span><strong>{currentRental?.discount_waives_security_deposit ? 'Waived' : currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
-              <ServiceFeesSummary serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
+              <ServiceFeesSummary tourism={Number(currentRental?.tourism_surcharge ?? estimate?.tourism ?? 0)} serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
               <div className="invoice-row total-row"><span>{currentRental ? 'Current Invoice Total' : 'Total Due Today'}</span><strong>{currentRental ? money(currentRentalInvoiceTotal) : estimate && !estimate.invalid ? money(estimate.checkoutTotal + estimate.securityDeposit) : 'Pending'}</strong></div>
               {currentRental && <>
                 {currentAccount?.pricing_periods?.map((period) => <div className="invoice-row" key={period.id}><span>{new Date(period.starts_at).toLocaleDateString('en-US', { timeZone: 'America/New_York' })} – {new Date(period.ends_at).toLocaleDateString('en-US', { timeZone: 'America/New_York' })} · {money(period.daily_rate)}/day (included above)</span><strong>{money(period.rental_amount)}</strong></div>)}
@@ -4571,7 +4604,7 @@ function WizardModal({
 
               {estimate && (
                 <div className="invoice-row">
-                  <span>{estimate.invalid ? 'Return date must be after pickup' : `${estimate.days} rental days`}</span>
+                  <span>{estimate.invalid ? estimate.error || 'Quote unavailable' : `${estimate.days} rental days`}</span>
                   <strong>{estimate.invalid ? 'Invalid' : `${money(estimate.checkoutTotal)} + deposit ${money(estimate.securityDeposit)}`}</strong>
                   {!estimate.invalid && profileForm.date_of_birth && <small>{isCustomerUnder25(profileForm.date_of_birth) ? 'Under-25 deposit applied' : 'Standard deposit applied'}</small>}
                 </div>
@@ -4604,7 +4637,7 @@ function WizardModal({
               <div className="invoice-row"><span>Rental Total</span><strong>{currentRental ? money(currentRental.rental_total) : estimate ? money(estimate.rentalTotal) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Taxes</span><strong>{currentRental ? money(currentRental.tax_amount) : estimate ? money(estimate.taxAmount) : 'Pending'}</strong></div>
               <div className="invoice-row"><span>Refundable Security Deposit{currentRental?.under_25_deposit_adjustment_type || estimate?.under25 ? ' (Age 21–24)' : ''}</span><strong>{currentRental?.discount_waives_security_deposit ? 'Waived' : currentRental ? money(currentRental.security_deposit) : estimate ? money(estimate.securityDeposit) : 'Pending'}</strong></div>
-              <ServiceFeesSummary serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
+              <ServiceFeesSummary tourism={Number(currentRental?.tourism_surcharge ?? estimate?.tourism ?? 0)} serviceFees={serviceFees} total={currentRental?.service_fee_total ?? estimate?.serviceFeeTotal} />
               {paymentPartiallyPaid && <><div className="invoice-row discount-row"><span>Payments already received</span><strong>−{money(netRentalPaid)}</strong></div><div className="invoice-row total-row"><span>Remaining rental balance</span><strong>{money(remainingRentalBalance)}</strong></div></>}
               <div className="invoice-row"><span>Mileage</span><strong>{MILEAGE_POLICY}</strong></div>
               <div className="invoice-row"><span>Pickup</span><strong>{paymentPaid ? RENTMECT_ADDRESS : 'Farmington, CT — address provided after checkout'}</strong></div>
@@ -4974,16 +5007,16 @@ function InsurancePacketUploader({ title = 'Insurance packet', busy = false, com
   </div>;
 }
 
-function ServiceFeesSummary({ serviceFees, total }) {
+function ServiceFeesSummary({ serviceFees, total, tourism = 0 }) {
   const feeTotal = Number(total ?? serviceFees.reduce((sum, fee) => sum + Number(fee.amount || 0), 0));
   if (!serviceFees.length && feeTotal <= 0) return null;
 
-  return <div className="invoice-row fee-summary-row">
+  return <><div className="invoice-row"><span>Connecticut tourism surcharge</span><strong>{money(tourism)}</strong></div>{feeTotal > tourism && <div className="invoice-row fee-summary-row">
     <span>Booking Fees</span>
     <strong>
-      {serviceFees.length ? `${serviceFees.map((fee) => `${fee.name}: ${money(fee.amount)}`).join(' | ')} — ${money(feeTotal)} total` : money(feeTotal)}
+      {serviceFees.length ? `${serviceFees.map((fee) => `${fee.name}: ${money(fee.amount)}`).join(' | ')} — ${money(feeTotal-tourism)} total` : money(feeTotal-tourism)}
     </strong>
-  </div>;
+  </div>}</>;
 }
 
 function LoadingScreen({ stripeReturn = false }) {
@@ -5354,8 +5387,9 @@ function PreviewGuestExperience({
   const displayVehicle = vehicle || { id: BOOKING_FLOW_TEST_VEHICLE_ID, name: 'Booking Flow Test Vehicle', brand: 'Rent Me CT', model: 'Checkout Preview', vehicle_type: 'Internal Test', daily_rate: 1, security_deposit: 300, description: 'Internal test vehicle for the booking flow.', features: TEST_VEHICLE_FEATURES };
   const features = getVehicleFeatures(displayVehicle);
   const rental = Number(estimate?.rentalTotal ?? Number(displayVehicle.daily_rate || 0) * days);
-  const serviceFeeTotal = Number(estimate?.serviceFeeTotal || 0);
-  const tax = Number(estimate?.taxAmount ?? rental * CT_TAX_RATE);
+  const tourism = estimate?.tourism ?? (days <= 30 ? days : 0);
+  const serviceFeeTotal = Number(estimate?.serviceFeeTotal ?? tourism);
+  const tax = Number(estimate?.taxAmount ?? (days <= 30 ? Math.round(rental * CT_SHORT_RENTAL_TAX_RATE * 100) / 100 : NaN));
   const deposit = Number(estimate?.securityDeposit ?? displayVehicle.security_deposit ?? 300);
   const total = rental + serviceFeeTotal + tax + deposit;
   const update = (key, value) => setAuthForm({ ...authForm, [key]: value });
@@ -5466,6 +5500,7 @@ function PreviewGuestExperience({
             reservationForm={reservationForm}
             rentalTotal={rental}
             serviceFeeTotal={serviceFeeTotal}
+            tourism={tourism}
             taxAmount={tax}
             securityDeposit={deposit}
             total={total}
@@ -5521,10 +5556,11 @@ function PreviewGuestExperience({
               <div><span>Trip end</span><strong>{formatRentalDate(reservationForm.returnDate, reservationForm.returnTime)}</strong></div>
             </div>
             <div className="preview-price-row"><span>{days} rental {days === 1 ? 'day' : 'days'}</span><strong>{money(rental)}</strong></div>
-            {serviceFeeTotal > 0 && <div className="preview-price-row"><span>Booking fees</span><strong>{money(serviceFeeTotal)}</strong></div>}
-            <div className="preview-price-row"><span>Estimated tax</span><strong>{money(tax)}</strong></div>
+            {tourism > 0 && <div className="preview-price-row"><span>Connecticut tourism surcharge</span><strong>{money(tourism)}</strong></div>}
+            {serviceFeeTotal > tourism && <div className="preview-price-row"><span>Booking fees</span><strong>{money(serviceFeeTotal-tourism)}</strong></div>}
+            <div className="preview-price-row"><span>Estimated tax</span><strong>{Number.isFinite(tax) ? money(tax) : 'Quote pending'}</strong></div>
             <div className="preview-price-row"><span>Refundable deposit</span><strong>{money(deposit)}</strong></div>
-            <div className="preview-price-row preview-total-row"><span>Due today</span><strong>{money(total)}</strong></div>
+            <div className="preview-price-row preview-total-row"><span>Due today</span><strong>{Number.isFinite(total) ? money(total) : 'Quote pending'}</strong></div>
             <button className="preview-primary-button" type="button" onClick={() => setPage('checkout')} disabled={checkoutExpired}>
               Continue to checkout <ChevronRight size={18} />
             </button>
@@ -5835,7 +5871,7 @@ function PreviewCheckout({
               <div><span>Rental</span><strong>{money(rentalTotal)}</strong></div>
               <div><span>CT sales tax</span><strong>{money(taxAmount)}</strong></div>
               <div><span>Refundable security deposit{currentRental?.under_25_deposit_adjustment_type || estimate?.under25 ? ' (Age 21–24)' : ''}</span><strong>{depositWaived ? 'Waived' : money(securityDeposit)}</strong></div>
-              <ServiceFeesSummary serviceFees={serviceFees} total={serviceFeeTotal} />
+              <ServiceFeesSummary tourism={Number(currentRental?.tourism_surcharge ?? estimate?.tourism ?? 0)} serviceFees={serviceFees} total={serviceFeeTotal} />
               {paymentPartiallyPaid && <div className="discount-row"><span>Payments already received</span><strong>−{money(netRentalPaid)}</strong></div>}
               <div className="preview-payment-total"><span>{paymentPartiallyPaid ? 'Remaining rental balance' : 'Total due today'}</span><strong>{money(amountDue)}</strong></div>
             </div>
@@ -5844,7 +5880,7 @@ function PreviewCheckout({
           </PreviewCheckoutSection>
         </section>
 
-        <PreviewTripSummary reservationForm={reservationForm} rentalTotal={rentalTotal} serviceFeeTotal={serviceFeeTotal} taxAmount={taxAmount} securityDeposit={securityDeposit} depositWaived={depositWaived} total={total} secondsRemaining={checkoutSecondsRemaining} expired={checkoutExpired} vehicle={vehicle} under25={Boolean(currentRental?.under_25_deposit_adjustment_type || estimate?.under25)} />
+        <PreviewTripSummary tourism={Number(currentRental?.tourism_surcharge ?? estimate?.tourism ?? 0)} reservationForm={reservationForm} rentalTotal={rentalTotal} serviceFeeTotal={serviceFeeTotal} taxAmount={taxAmount} securityDeposit={securityDeposit} depositWaived={depositWaived} total={total} secondsRemaining={checkoutSecondsRemaining} expired={checkoutExpired} vehicle={vehicle} under25={Boolean(currentRental?.under_25_deposit_adjustment_type || estimate?.under25)} />
       </main>
     </div>
   );
@@ -5900,7 +5936,7 @@ function Under25PricingNotice({ rental, estimate, total }) {
   );
 }
 
-function PreviewTripSummary({ reservationForm, rentalTotal, serviceFeeTotal = 0, taxAmount, securityDeposit, depositWaived = false, total, secondsRemaining, expired, vehicle, under25 = false }) {
+function PreviewTripSummary({ reservationForm, rentalTotal, serviceFeeTotal = 0, tourism = 0, taxAmount, securityDeposit, depositWaived = false, total, secondsRemaining, expired, vehicle, under25 = false }) {
   const displayVehicle = vehicle || { name: 'Booking Flow Test Vehicle', id: BOOKING_FLOW_TEST_VEHICLE_ID };
   const features = getVehicleFeatures(displayVehicle);
   return (
@@ -5920,10 +5956,11 @@ function PreviewTripSummary({ reservationForm, rentalTotal, serviceFeeTotal = 0,
       {secondsRemaining !== null && <CheckoutHoldTimer secondsRemaining={secondsRemaining} expired={expired} />}
       <div className="preview-trip-prices">
         <div><span>Rental</span><strong>{money(rentalTotal)}</strong></div>
-        {Number(serviceFeeTotal) > 0 && <div><span>Booking fees</span><strong>{money(serviceFeeTotal)}</strong></div>}
-        <div><span>Estimated tax</span><strong>{money(taxAmount)}</strong></div>
+        {tourism > 0 && <div><span>Connecticut tourism surcharge</span><strong>{money(tourism)}</strong></div>}
+        {Number(serviceFeeTotal) > tourism && <div><span>Booking fees</span><strong>{money(serviceFeeTotal-tourism)}</strong></div>}
+        <div><span>Estimated tax</span><strong>{Number.isFinite(taxAmount) ? money(taxAmount) : 'Quote pending'}</strong></div>
         <div><span>Refundable deposit{under25 ? ' (Age 21–24)' : ''}</span><strong>{depositWaived ? 'Waived' : money(securityDeposit)}</strong></div>
-        <div className="preview-total-row"><span>Due today</span><strong>{money(total)}</strong></div>
+        <div className="preview-total-row"><span>Due today</span><strong>{Number.isFinite(total) ? money(total) : 'Quote pending'}</strong></div>
       </div>
       <p><ShieldCheck size={15} /> Secure checkout • Your progress is saved</p>
     </aside>
@@ -7009,7 +7046,9 @@ AUTO-FILLED RENTAL DETAILS
 Agreement Version: ${AGREEMENT_VERSION}
 Signed Snapshot Generated: ${new Date().toISOString()}
 
-Renter Name: ${profile?.full_name || 'Pending'}
+Renter Name: ${profile?.full_name || rental?.customer_name_snapshot || signatureName || 'Pending'}
+Pickup Date/Time: ${formatRentalDate(rental?.pickup_date || reservation?.pickupDate, rental?.pickup_time || reservation?.pickupTime)}
+Return Date/Time: ${formatRentalDate(rental?.return_date || reservation?.returnDate, rental?.return_time || reservation?.returnTime)}
 Intended Vehicle Use: ${profile?.intended_vehicle_use || 'Pending'}
 Phone: ${profile?.phone || 'Pending'}
 Email: ${email || 'Pending'}
@@ -7021,8 +7060,6 @@ Year: ${vehicle?.year || 'Pending'}
 VIN: ${vehicle?.vin || 'Pending'}
 License Plate: ${vehicle?.plate_number || vehicle?.license_plate || 'Pending'}
 
-Pickup Date/Time: ${formatRentalDate(rental?.pickup_date || reservation?.pickupDate, rental?.pickup_time || reservation?.pickupTime)}
-Return Date/Time: ${formatRentalDate(rental?.return_date || reservation?.returnDate, rental?.return_time || reservation?.returnTime)}
 Return Location: Farmington, CT. The exact pickup and return address is provided after checkout and in your booking confirmation email.
 
 ${rentalPricingDetails(pricingPeriods, money)}
