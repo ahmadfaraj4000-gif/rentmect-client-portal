@@ -7053,7 +7053,8 @@ Intended Vehicle Use: ${profile?.intended_vehicle_use || 'Pending'}
 Phone: ${profile?.phone || 'Pending'}
 Email: ${email || 'Pending'}
 
-Vehicle: ${vehicle?.name || 'Pending'}
+Vehicle: ${vehicle?.name || 'Pending'}${rental?.contract_agreed_vehicle_value ? `\nAgreed Vehicle Value at Contract Inception: ${money(rental.contract_agreed_vehicle_value)}` : ''}
+Connecticut Tourism Surcharge: ${money(rental?.tourism_surcharge || 0)}
 Make: ${vehicle?.brand || vehicle?.make || 'Pending'}
 Model: ${vehicle?.model || 'Pending'}
 Year: ${vehicle?.year || 'Pending'}
